@@ -66,7 +66,14 @@ function safeJsonParse(str: string): any {
 }
 
 async function aiCall(messages: any[], jsonMode = false) {
-  const opts: any = { model: "gpt-4o-mini", messages, max_completion_tokens: 8192 };
+  const msgs = jsonMode
+    ? messages.map((m: any, i: number) =>
+        i === 0 && m.role === "system"
+          ? { ...m, content: m.content + "\nRespond in JSON format." }
+          : m
+      )
+    : messages;
+  const opts: any = { model: "gpt-4o-mini", messages: msgs, max_completion_tokens: 8192 };
   if (jsonMode) opts.response_format = { type: "json_object" };
   const startTime = Date.now();
   const response = await openai.chat.completions.create(opts);
