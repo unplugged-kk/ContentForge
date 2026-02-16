@@ -14,6 +14,9 @@ import IdeasPage from "@/pages/ideas";
 import TemplatesPage from "@/pages/templates";
 import AnalyticsPage from "@/pages/analytics";
 import SettingsPage from "@/pages/settings";
+import ArticlesPage from "@/pages/articles";
+import ReferencesPage from "@/pages/references";
+import DiscoverPage from "@/pages/discover";
 
 function Router() {
   return (
@@ -24,6 +27,9 @@ function Router() {
       <Route path="/templates" component={TemplatesPage} />
       <Route path="/analytics" component={AnalyticsPage} />
       <Route path="/settings" component={SettingsPage} />
+      <Route path="/articles" component={ArticlesPage} />
+      <Route path="/references" component={ReferencesPage} />
+      <Route path="/discover" component={DiscoverPage} />
       <Route component={NotFound} />
     </Switch>
   );

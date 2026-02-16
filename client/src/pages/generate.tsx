@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS, POST_TYPES, TONES, PLATFORMS, CHAR_LIMITS } from "@/lib/constants";
-import { Sparkles, Copy, Save, RefreshCw, Check, AlertTriangle } from "lucide-react";
+import { Sparkles, Copy, Save, RefreshCw, Check, AlertTriangle, Zap, Loader2, TrendingUp, ArrowUp } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import type { Post, Tweet } from "@shared/schema";
 
@@ -51,6 +51,7 @@ export default function GeneratePage() {
   const [context, setContext] = useState("");
   const [selectedVariation, setSelectedVariation] = useState(0);
   const [editedContent, setEditedContent] = useState<string[][] | null>(null);
+  const [viralScore, setViralScore] = useState<any>(null);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -99,6 +100,51 @@ export default function GeneratePage() {
     },
     onError: (err) => {
       toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const viralScoreMutation = useMutation({
+    mutationFn: async () => {
+      if (!editedContent) return;
+      const contentText = editedContent[selectedVariation].join("\n\n");
+      const res = await apiRequest("POST", "/api/viral/score", {
+        content: contentText,
+        platform: platform === "both" ? "x" : platform,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setViralScore(data);
+    },
+    onError: (err) => {
+      toast({ title: "Scoring failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const optimizeMutation = useMutation({
+    mutationFn: async () => {
+      if (!editedContent || !viralScore) return;
+      const contentText = editedContent[selectedVariation].join("\n\n");
+      const improvements = viralScore.parsed?.improvements || viralScore.improvements || [];
+      const res = await apiRequest("POST", "/api/viral/optimize", {
+        content: contentText,
+        improvements,
+        platform: platform === "both" ? "x" : platform,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.tweets) {
+        const tweets = data.tweets.map((t: any) => t.content);
+        const updated = [...(editedContent || [])];
+        updated[selectedVariation] = tweets;
+        setEditedContent(updated);
+        setViralScore(null);
+        toast({ title: "Content optimized. Score again to see improvement." });
+      }
+    },
+    onError: (err) => {
+      toast({ title: "Optimization failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -308,6 +354,14 @@ export default function GeneratePage() {
                   </Button>
                   <Button
                     variant="outline"
+                    onClick={() => viralScoreMutation.mutate()}
+                    disabled={viralScoreMutation.isPending}
+                    data-testid="button-viral-score"
+                  >
+                    {viralScoreMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    variant="outline"
                     onClick={() => generateMutation.mutate()}
                     disabled={generateMutation.isPending}
                     data-testid="button-regenerate"
@@ -315,6 +369,63 @@ export default function GeneratePage() {
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 </div>
+
+                {viralScore && (
+                  <Card className="p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">Viral Score</span>
+                      </div>
+                      <span className={`text-2xl font-bold tabular-nums ${Number(viralScore.overallScore || viralScore.parsed?.overall_score || 0) >= 8 ? "text-green-400" : Number(viralScore.overallScore || viralScore.parsed?.overall_score || 0) >= 6 ? "text-yellow-400" : "text-red-400"}`}>{Number(viralScore.overallScore || viralScore.parsed?.overall_score || 0).toFixed(1)}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { key: "hook_power", label: "Hook Power" },
+                        { key: "value_density", label: "Value Density" },
+                        { key: "emotional_trigger", label: "Emotional Trigger" },
+                        { key: "shareability", label: "Shareability" },
+                        { key: "uniqueness", label: "Uniqueness" },
+                        { key: "readability", label: "Readability" },
+                        { key: "cta_strength", label: "CTA Strength" },
+                        { key: "timeliness", label: "Timeliness" },
+                      ].map(({ key, label }) => {
+                        const dims = viralScore.parsed?.dimensions || viralScore.dimensionScores || {};
+                        const dim = dims[key];
+                        const val = Number(dim?.score || dim || 0);
+                        return (
+                          <div key={key} className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-muted-foreground">{label}</span>
+                            <div className="flex items-center gap-1">
+                              <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div className="h-full rounded-full" style={{ width: `${val * 10}%`, backgroundColor: val >= 8 ? "#22c55e" : val >= 6 ? "#eab308" : "#ef4444" }} />
+                              </div>
+                              <span className="tabular-nums w-6 text-right">{val.toFixed(1)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {(viralScore.parsed?.improvements || viralScore.improvements || []).length > 0 && (
+                      <div className="space-y-1.5 pt-2 border-t">
+                        <p className="text-xs font-medium text-muted-foreground">Improvement Suggestions</p>
+                        {(viralScore.parsed?.improvements || viralScore.improvements || []).slice(0, 3).map((s: any, i: number) => (
+                          <div key={i} className="flex items-start gap-2 text-xs">
+                            <ArrowUp className="h-3 w-3 text-primary shrink-0 mt-0.5" />
+                            <span>{typeof s === "string" ? s : s.suggestion || s.text || JSON.stringify(s)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => optimizeMutation.mutate()} disabled={optimizeMutation.isPending} data-testid="button-optimize">
+                      {optimizeMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <TrendingUp className="h-3 w-3 mr-1" />}
+                      Auto-Optimize Content
+                    </Button>
+                  </Card>
+                )}
               </div>
             )}
 

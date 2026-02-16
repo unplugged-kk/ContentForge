@@ -1,8 +1,31 @@
 import { db } from "./db";
-import { pillars, templates, posts, tweets, ideas, analytics } from "@shared/schema";
+import { pillars, templates, posts, tweets, ideas, analytics, rssSources, monitoredAccounts } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 export async function seedDatabase() {
+  const existingRss = await db.select().from(rssSources);
+  if (existingRss.length === 0) {
+    console.log("Seeding RSS sources and monitored accounts...");
+    await db.insert(rssSources).values([
+      { name: "TLDR AI", feedUrl: "https://tldr.tech/ai/rss", category: "ai" },
+      { name: "TLDR DevOps", feedUrl: "https://tldr.tech/devops/rss", category: "devops" },
+      { name: "Hacker News Best (AI/K8s/DevOps)", feedUrl: "https://hnrss.org/best?q=AI+OR+kubernetes+OR+devops+OR+mlops", category: "tech" },
+      { name: "The Pragmatic Engineer", feedUrl: "https://newsletter.pragmaticengineer.com/feed", category: "leadership" },
+      { name: "ByteByteGo", feedUrl: "https://blog.bytebytego.com/feed", category: "system_design" },
+      { name: "Last Week in AI", feedUrl: "https://lastweekin.ai/feed", category: "ai" },
+    ]);
+    const existingAccounts = await db.select().from(monitoredAccounts);
+    if (existingAccounts.length === 0) {
+      await db.insert(monitoredAccounts).values([
+        { platform: "x", username: "kelseyhightower", displayName: "Kelsey Hightower", category: "devops" },
+        { platform: "x", username: "chiphuyen", displayName: "Chip Huyen", category: "mlops" },
+        { platform: "x", username: "GergelyOrosz", displayName: "Gergely Orosz", category: "leadership" },
+        { platform: "x", username: "AndrewYNg", displayName: "Andrew Ng", category: "ai_research" },
+        { platform: "x", username: "karpathy", displayName: "Andrej Karpathy", category: "ai_research" },
+      ]);
+    }
+  }
+
   const existingPillars = await db.select().from(pillars);
   if (existingPillars.length > 0) return;
 
