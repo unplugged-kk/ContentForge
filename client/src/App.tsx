@@ -17,6 +17,8 @@ import SettingsPage from "@/pages/settings";
 import ArticlesPage from "@/pages/articles";
 import ReferencesPage from "@/pages/references";
 import DiscoverPage from "@/pages/discover";
+import IngestPage from "@/pages/ingest";
+import { QuickCapture } from "@/components/quick-capture";
 
 function Router() {
   return (
@@ -30,6 +32,7 @@ function Router() {
       <Route path="/articles" component={ArticlesPage} />
       <Route path="/references" component={ReferencesPage} />
       <Route path="/discover" component={DiscoverPage} />
+      <Route path="/ingest" component={IngestPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -56,6 +59,7 @@ function App() {
                 <main className="flex-1 overflow-hidden">
                   <Router />
                 </main>
+                <QuickCapture />
               </div>
             </div>
           </SidebarProvider>

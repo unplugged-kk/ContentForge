@@ -577,108 +577,703 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/references/analyze", async (req, res) => {
+  // ==================== URL DETECTION & EXTRACTION HELPERS ====================
+
+  function detectSourceType(url: string): { sourceType: string; sourcePlatform: string } {
+    const u = url.toLowerCase();
+    if (u.includes("x.com/") || u.includes("twitter.com/")) {
+      if (/\/status\/\d+/.test(u)) return { sourceType: "x_tweet", sourcePlatform: "x" };
+      return { sourceType: "x_account", sourcePlatform: "x" };
+    }
+    if (u.includes("reddit.com/r/") && u.includes("/comments/")) return { sourceType: "reddit_thread", sourcePlatform: "reddit" };
+    if (u.includes("reddit.com/r/")) return { sourceType: "reddit_subreddit", sourcePlatform: "reddit" };
+    if (u.includes("github.com/") && (u.includes("/issues/") || u.includes("/discussions/"))) return { sourceType: "github_discussion", sourcePlatform: "github" };
+    if (u.includes("github.com/") && u.split("/").filter(Boolean).length >= 4) return { sourceType: "github_repo", sourcePlatform: "github" };
+    if (u.includes("arxiv.org/abs/") || u.includes("arxiv.org/pdf/")) return { sourceType: "arxiv_paper", sourcePlatform: "arxiv" };
+    if (u.includes("youtube.com/watch") || u.includes("youtu.be/")) return { sourceType: "youtube_video", sourcePlatform: "youtube" };
+    if (u.includes("linkedin.com/posts/") || u.includes("linkedin.com/feed/")) return { sourceType: "linkedin_post", sourcePlatform: "linkedin" };
+    if (u.includes("linkedin.com/pulse/")) return { sourceType: "linkedin_article", sourcePlatform: "linkedin" };
+    if (u.includes("substack.com")) return { sourceType: "blog_article", sourcePlatform: "substack" };
+    if (u.includes("medium.com") || u.includes("dev.to") || u.includes("hashnode.dev")) return { sourceType: "blog_article", sourcePlatform: "blog" };
+    return { sourceType: "generic_webpage", sourcePlatform: "web" };
+  }
+
+  async function extractRedditThread(url: string) {
+    let cleanUrl = url.replace(/\?.*$/, "").replace(/\/$/, "");
+    if (!cleanUrl.endsWith(".json")) cleanUrl += ".json";
+    const response = await fetch(cleanUrl, {
+      headers: { "User-Agent": "ContentForge/1.0 (content analysis tool)", "Accept": "application/json" },
+      signal: AbortSignal.timeout(10000),
+      redirect: "follow",
+    });
+    if (!response.ok) throw new Error(`Reddit returned ${response.status}`);
+    const text = await response.text();
+    let data: any[];
+    try { data = JSON.parse(text); } catch { throw new Error("Reddit did not return JSON. The URL may be invalid."); }
+    if (!Array.isArray(data) || data.length < 1) throw new Error("Invalid Reddit response");
+
+    const post = data[0]?.data?.children?.[0]?.data;
+    if (!post) throw new Error("Could not parse Reddit post");
+
+    const comments = (data[1]?.data?.children || [])
+      .filter((c: any) => c.kind === "t1")
+      .slice(0, 30)
+      .map((c: any) => ({
+        author: c.data.author,
+        body: (c.data.body || "").substring(0, 500),
+        score: c.data.score,
+      }));
+
+    return {
+      title: post.title,
+      selftext: (post.selftext || "").substring(0, 3000),
+      author: post.author,
+      subreddit: post.subreddit,
+      score: post.score,
+      numComments: post.num_comments,
+      url: `https://reddit.com${post.permalink}`,
+      comments,
+    };
+  }
+
+  async function extractGitHubRepo(url: string) {
+    const match = url.match(/github\.com\/([^\/]+)\/([^\/\?#]+)/);
+    if (!match) throw new Error("Invalid GitHub URL");
+    const [, owner, repo] = match;
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}`;
+    const response = await fetch(apiUrl, {
+      headers: { "User-Agent": "ContentForge/1.0", "Accept": "application/vnd.github.v3+json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    const repoData = await response.json() as any;
+    let readme = "";
     try {
-      const { url, text: pastedText } = req.body;
-      let extractedContent = "";
-      let sourceType = "manual_paste";
+      const readmeRes = await fetch(`${apiUrl}/readme`, {
+        headers: { "User-Agent": "ContentForge/1.0", "Accept": "application/vnd.github.v3.raw" },
+        signal: AbortSignal.timeout(10000),
+      });
+      readme = (await readmeRes.text()).substring(0, 3000);
+    } catch (e) { /* no readme */ }
+
+    return {
+      name: repoData.full_name,
+      description: repoData.description,
+      stars: repoData.stargazers_count,
+      forks: repoData.forks_count,
+      language: repoData.language,
+      topics: repoData.topics || [],
+      openIssues: repoData.open_issues_count,
+      readme,
+    };
+  }
+
+  async function extractArxivPaper(url: string) {
+    const idMatch = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)/);
+    if (!idMatch) throw new Error("Invalid ArXiv URL");
+    const arxivId = idMatch[1];
+    const apiUrl = `http://export.arxiv.org/api/query?id_list=${arxivId}`;
+    const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
+    const xml = await response.text();
+    const $ = cheerio.load(xml, { xml: true });
+    const entry = $("entry").first();
+    return {
+      title: entry.find("title").text().trim(),
+      abstract: entry.find("summary").text().trim().substring(0, 3000),
+      authors: entry.find("author name").map((_: any, el: any) => $(el).text()).get(),
+      published: entry.find("published").text(),
+      categories: entry.find("category").map((_: any, el: any) => $(el).attr("term")).get(),
+      pdfUrl: `https://arxiv.org/pdf/${arxivId}`,
+    };
+  }
+
+  async function extractGenericWebpage(url: string) {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; ContentForge/1.0)" },
+      signal: AbortSignal.timeout(10000),
+    });
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    $("script, style, nav, footer, header, aside, .sidebar, .ad, .advertisement, .cookie-banner").remove();
+
+    const title = $('meta[property="og:title"]').attr("content") || $("title").text().trim() || $("h1").first().text().trim() || url;
+    const author = $('meta[name="author"]').attr("content") || $('meta[property="article:author"]').attr("content") || "";
+    const description = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
+    const mainContent = $("article, main, .content, .post-content, .entry-content, [role='main']").text().trim();
+    const bodyText = mainContent || $("body").text().trim();
+    const cleanedContent = bodyText.replace(/\s+/g, " ").substring(0, 5000);
+
+    return { title, author, description, content: cleanedContent, html };
+  }
+
+  // ==================== UNIVERSAL INGEST ENDPOINT ====================
+
+  app.post("/api/ingest", async (req, res) => {
+    try {
+      const { url, text: pastedText, xUsername } = req.body;
+
+      if (xUsername) {
+        const username = xUsername.replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//, "").replace(/\/.*$/, "");
+        const { content, usage, latency } = await aiCall([
+          { role: "system", content: "You are a content strategy analyst specializing in X/Twitter accounts. Analyze writing styles and strategies deeply." },
+          { role: "user", content: `Analyze the X account @${username}. Based on your knowledge of this account's public presence and content strategy, provide a detailed analysis.
+
+Return JSON:
+{
+  "account_summary": {
+    "niche": "What topics they cover",
+    "positioning": "How they position themselves",
+    "audience": "Who follows them and why",
+    "posting_frequency": "How often they post",
+    "engagement_rate": "Estimated engagement level"
+  },
+  "content_strategy": {
+    "content_mix": {"threads": "30%", "single_tweets": "50%", "replies": "15%", "polls": "5%"},
+    "top_topics": ["topic1", "topic2", "topic3"],
+    "thread_frequency": "How often they post threads"
+  },
+  "writing_style": {
+    "tone": "casual/technical/provocative/educational/humorous/inspirational",
+    "voice_characteristics": ["direct", "uses metaphors", "data-heavy"],
+    "sentence_length": "short/medium/long/mixed",
+    "vocabulary_level": "simple/intermediate/advanced",
+    "emoji_usage": "none/minimal/moderate/heavy",
+    "hashtag_strategy": "none/minimal/heavy",
+    "hook_patterns": ["Types of hooks they use"],
+    "cta_patterns": ["How they end posts"],
+    "formatting_style": "How they use line breaks, capitalization"
+  },
+  "viral_patterns": {
+    "common_viral_triggers": ["What triggers their best content uses"],
+    "format_patterns": ["What formats perform best"],
+    "topic_performance": {"topic1": "high", "topic2": "medium"}
+  },
+  "lessons_for_kishore": {
+    "techniques_to_adopt": ["Specific techniques Kishore can borrow"],
+    "techniques_to_skip": ["Things that wouldn't work for Kishore's niche"],
+    "content_gaps": ["Topics Kishore could cover with a DevOps/Infra angle"],
+    "style_elements_to_borrow": ["Specific style elements worth adopting"]
+  }
+}` },
+        ], true);
+
+        await logAiUsage(usage, latency, "analyze_x_account");
+        const analysis = safeJsonParse(content);
+        if (!analysis) return res.status(500).json({ message: "AI analysis failed." });
+
+        const stylePrompt = analysis.writing_style ? `STYLE REFERENCE: Mimic the following writing style characteristics while keeping Kishore's voice and expertise:
+- Tone: ${analysis.writing_style.tone}
+- Sentence structure: ${analysis.writing_style.sentence_length}
+- Hook technique: ${(analysis.writing_style.hook_patterns || []).join(", ")}
+- Formatting: ${analysis.writing_style.formatting_style}
+- Emoji usage: ${analysis.writing_style.emoji_usage}
+- Vocabulary level: ${analysis.writing_style.vocabulary_level}
+IMPORTANT: Do NOT copy any specific content. Only mirror the structural and stylistic patterns.
+Kishore's unique expertise (DevOps, multi-cloud, Kubernetes, platform engineering) must remain central.` : "";
+
+        const ref = await storage.createReference({
+          sourceUrl: `https://x.com/${username}`,
+          sourceType: "x_account",
+          sourcePlatform: "x",
+          sourceAuthorUsername: username,
+          sourceAuthorDisplayName: username,
+          rawContent: `X account analysis: @${username}`,
+          analysisJson: analysis,
+          styleAnalysisJson: analysis.writing_style || {},
+          title: `@${username} — X Account Analysis`,
+          tags: analysis.content_strategy?.top_topics || [],
+        });
+
+        return res.json(ref);
+      }
+
+      if (!url && !pastedText) return res.status(400).json({ message: "Provide a URL, text, or X username." });
+
+      let extractedData: any = {};
+      let { sourceType, sourcePlatform } = url ? detectSourceType(url) : { sourceType: "pasted_text", sourcePlatform: "manual" };
+      let rawContent = "";
       let title = "";
+      let author = "";
+      let engagementMetrics: any = null;
+      let analysisPrompt = "";
 
       if (url) {
         try {
-          const response = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (compatible; ContentForge/1.0)" },
-            signal: AbortSignal.timeout(10000),
-          });
-          const html = await response.text();
-          const $ = cheerio.load(html);
+          switch (sourceType) {
+            case "reddit_thread": {
+              const reddit = await extractRedditThread(url);
+              rawContent = `POST: ${reddit.title}\n\n${reddit.selftext}\n\nTOP COMMENTS:\n${reddit.comments.map((c: any) => `[${c.score}pts] ${c.author}: ${c.body}`).join("\n\n")}`;
+              title = reddit.title;
+              author = reddit.author;
+              engagementMetrics = { score: reddit.score, numComments: reddit.numComments };
+              analysisPrompt = `Analyze this Reddit discussion for content creation opportunities:
 
-          $("script, style, nav, footer, header, aside, .sidebar, .ad, .advertisement").remove();
-          title = $("title").text().trim() || $("h1").first().text().trim() || url;
-          const mainContent = $("article, main, .content, .post-content, .entry-content, [role='main']").text().trim();
-          extractedContent = mainContent || $("body").text().trim();
-          extractedContent = extractedContent.replace(/\s+/g, " ").substring(0, 5000);
+SUBREDDIT: r/${reddit.subreddit}
+POST TITLE: ${reddit.title}
+POST BODY: ${reddit.selftext}
+POST SCORE: ${reddit.score} upvotes, ${reddit.numComments} comments
 
-          if (url.includes("twitter.com") || url.includes("x.com")) sourceType = "x_thread";
-          else if (url.includes("linkedin.com")) sourceType = "linkedin_post";
-          else if (url.includes("youtube.com") || url.includes("youtu.be")) sourceType = "youtube";
-          else if (url.includes("github.com")) sourceType = "github";
-          else if (url.includes("arxiv.org")) sourceType = "arxiv";
-          else sourceType = "blog";
-        } catch (fetchErr) {
-          if (!pastedText) return res.status(400).json({ message: "Could not fetch URL. Try pasting the content instead." });
-        }
-      }
+TOP COMMENTS (sorted by score):
+${JSON.stringify(reddit.comments)}
 
-      if (pastedText) {
-        extractedContent = pastedText.substring(0, 5000);
-        title = pastedText.substring(0, 100);
-      }
+Return JSON:
+{
+  "discussion_summary": "What's being discussed and why it's generating engagement",
+  "key_opinions": [{"opinion": "Main stance", "support_level": "How many agree", "counter_arguments": ["pushback"]}],
+  "insights_worth_sharing": ["Genuine insights Kishore's audience would find valuable"],
+  "common_pain_points": ["Frustrations people express — content goldmines"],
+  "controversial_takes": ["Divisive opinions that make great hot takes"],
+  "questions_asked": ["Questions Kishore could answer authoritatively"],
+  "content_ideas": [{"idea": "Content idea", "format": "thread/tweet/article/hot_take", "hook": "Opening line", "angle": "Kishore's unique angle"}],
+  "notable_quotes": ["Memorable paraphrased comments"],
+  "topic_tags": ["relevant tags"]
+}`;
+              break;
+            }
+            case "github_repo":
+            case "github_discussion": {
+              const gh = await extractGitHubRepo(url);
+              rawContent = `${gh.name}: ${gh.description}\nStars: ${gh.stars} | Forks: ${gh.forks} | Language: ${gh.language}\nTopics: ${gh.topics.join(", ")}\n\nREADME:\n${gh.readme}`;
+              title = gh.name;
+              engagementMetrics = { stars: gh.stars, forks: gh.forks, openIssues: gh.openIssues };
+              analysisPrompt = `Analyze this GitHub repository for content creation opportunities:
 
-      if (!extractedContent) return res.status(400).json({ message: "No content to analyze. Provide a URL or paste text." });
+REPO: ${gh.name}
+DESCRIPTION: ${gh.description}
+STARS: ${gh.stars} | FORKS: ${gh.forks} | LANGUAGE: ${gh.language}
+TOPICS: ${gh.topics.join(", ")}
+README (excerpt): ${gh.readme}
 
-      const analysisPrompt = `Analyze the following content thoroughly and return a structured JSON response:
+Return JSON:
+{
+  "summary": "What this project does and why it matters",
+  "key_features": ["Notable features or innovations"],
+  "tech_stack_analysis": "Analysis of the technology choices",
+  "community_signals": "What the stars/forks/issues say about adoption",
+  "content_ideas": [{"idea": "Content idea", "format": "thread/tweet/article", "hook": "Opening line", "angle": "Kishore's DevOps/Infra perspective"}],
+  "comparison_opportunities": ["Tools/projects to compare against"],
+  "tutorial_potential": "Could this make a good tutorial or deep dive?",
+  "gaps_and_angles": ["Where Kishore's expertise adds unique value"],
+  "topic_tags": ["relevant tags"]
+}`;
+              break;
+            }
+            case "arxiv_paper": {
+              const paper = await extractArxivPaper(url);
+              rawContent = `${paper.title}\nAuthors: ${paper.authors.join(", ")}\nCategories: ${paper.categories.join(", ")}\n\nAbstract: ${paper.abstract}`;
+              title = paper.title;
+              author = paper.authors.join(", ");
+              analysisPrompt = `Analyze this research paper for content creation opportunities:
 
+TITLE: ${paper.title}
+AUTHORS: ${paper.authors.join(", ")}
+CATEGORIES: ${paper.categories.join(", ")}
+ABSTRACT: ${paper.abstract}
+
+Return JSON:
+{
+  "summary": "Plain-English summary of the paper's contributions",
+  "key_findings": ["Main findings and results"],
+  "practical_implications": ["What this means for practitioners"],
+  "content_ideas": [{"idea": "Content idea", "format": "thread/tweet/article", "hook": "Opening line", "angle": "Kishore's infrastructure perspective"}],
+  "eli5_explanation": "Explain the paper's core idea simply",
+  "industry_relevance": "How this applies to real-world infrastructure/AI",
+  "gaps_and_angles": ["Where Kishore can add practitioner perspective"],
+  "topic_tags": ["relevant tags"]
+}`;
+              break;
+            }
+            default: {
+              const webpage = await extractGenericWebpage(url);
+              rawContent = webpage.content;
+              title = webpage.title;
+              author = webpage.author;
+              analysisPrompt = `Analyze the following content thoroughly:
+
+TITLE: ${webpage.title}
+AUTHOR: ${webpage.author}
+DESCRIPTION: ${webpage.description}
+
+CONTENT:
+${webpage.content}
+
+Return JSON:
 {
   "summary": "2-3 sentence summary of the core message",
-  "key_points": ["list of 5-10 main arguments or insights"],
+  "key_points": ["5-10 main arguments or insights"],
   "writing_style": {
     "tone": "technical/casual/provocative/storytelling/academic/humorous",
     "sentence_structure": "short_punchy/long_flowing/mixed",
     "vocabulary_level": "beginner/intermediate/advanced/expert",
-    "personality_traits": ["confident", "data-driven", etc.],
     "hook_technique": "question/bold_claim/statistic/story/controversy",
     "cta_technique": "question/call_to_action/summary/open_ended"
   },
   "engagement_signals": {
-    "why_it_works": "analysis of why this content resonates",
+    "why_it_works": "why this content resonates",
     "emotional_triggers": ["curiosity", "contrarian", etc.],
     "structural_patterns": ["numbered list", "problem/solution", etc.]
   },
-  "topic_tags": ["relevant topics"],
-  "content_type": "thread/article/tweet/post/video_transcript",
+  "content_ideas": [{"idea": "Content idea", "format": "thread/tweet/article/hot_take", "hook": "Opening line", "angle": "Kishore's DevOps/Infra perspective"}],
   "data_points": ["statistics or numbers mentioned"],
   "quotes_worth_referencing": ["notable quotes"],
-  "gaps_and_angles": ["things the source missed or where Kishore could add unique value from DevOps/Infrastructure expertise"]
-}
+  "gaps_and_angles": ["things the source missed or where Kishore could add unique value"],
+  "topic_tags": ["relevant topics"]
+}`;
+              break;
+            }
+          }
+        } catch (fetchErr: any) {
+          if (!pastedText) return res.status(400).json({ message: `Could not fetch URL: ${fetchErr.message}. Try pasting the content instead.` });
+        }
+      }
 
-CONTENT TO ANALYZE:
-${extractedContent}`;
+      if (pastedText && !rawContent) {
+        rawContent = pastedText.substring(0, 5000);
+        title = pastedText.substring(0, 100);
+        sourceType = "pasted_text";
+        sourcePlatform = "manual";
+        analysisPrompt = `Analyze this pasted content thoroughly:
+
+CONTENT:
+${rawContent}
+
+Return JSON:
+{
+  "summary": "2-3 sentence summary",
+  "key_points": ["main arguments or insights"],
+  "writing_style": {
+    "tone": "technical/casual/provocative/storytelling",
+    "sentence_structure": "short_punchy/long_flowing/mixed",
+    "vocabulary_level": "beginner/intermediate/advanced/expert",
+    "hook_technique": "question/bold_claim/statistic/story",
+    "cta_technique": "question/call_to_action/summary"
+  },
+  "engagement_signals": {
+    "why_it_works": "analysis of resonance",
+    "emotional_triggers": ["triggers"],
+    "structural_patterns": ["patterns"]
+  },
+  "content_ideas": [{"idea": "Content idea", "format": "thread/tweet/article/hot_take", "hook": "Opening line", "angle": "Kishore's unique angle"}],
+  "gaps_and_angles": ["Where Kishore could add unique value"],
+  "topic_tags": ["relevant topics"]
+}`;
+      }
+
+      if (!rawContent) return res.status(400).json({ message: "No content extracted." });
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: "You are a content analysis expert. Analyze content deeply for style, structure, and engagement patterns." },
+        { role: "system", content: "You are a content analysis expert for social media strategy. Analyze content deeply for style, structure, engagement patterns, and content creation opportunities." },
         { role: "user", content: analysisPrompt },
       ], true);
 
-      await logAiUsage(usage, latency, "analyze_reference");
+      await logAiUsage(usage, latency, `ingest_${sourceType}`);
       const analysis = safeJsonParse(content);
       if (!analysis) return res.status(500).json({ message: "AI analysis failed. Please try again." });
 
       const ref = await storage.createReference({
         sourceUrl: url || null,
         sourceType,
-        rawContent: extractedContent,
+        sourcePlatform,
+        sourceAuthorUsername: author || null,
+        rawContent,
         analysisJson: analysis,
-        title,
+        styleAnalysisJson: analysis.writing_style || null,
+        title: title.substring(0, 500),
+        author: author || null,
+        sourceEngagementMetrics: engagementMetrics,
         tags: analysis.topic_tags || [],
+        wordCount: rawContent.split(/\s+/).length,
       });
 
       res.json(ref);
     } catch (err: any) {
-      console.error("Analyze reference error:", err);
+      console.error("Ingest error:", err);
       res.status(500).json({ message: "Failed to analyze content." });
     }
   });
+
+  // Keep legacy endpoint as alias
+  app.post("/api/references/analyze", async (req, res) => {
+    req.url = "/api/ingest";
+    app.handle(req, res);
+  });
+
+  // ==================== BATCH INGEST ====================
+
+  app.post("/api/ingest/batch", async (req, res) => {
+    try {
+      const { sources } = req.body;
+      if (!Array.isArray(sources) || sources.length === 0) return res.status(400).json({ message: "Provide an array of sources." });
+      if (sources.length > 10) return res.status(400).json({ message: "Maximum 10 sources per batch." });
+
+      const batchId = `batch_${Date.now()}`;
+      const results: any[] = [];
+      const analysisTexts: string[] = [];
+
+      for (const src of sources) {
+        try {
+          const fakeRes: any = {
+            json: (data: any) => { results.push(data); analysisTexts.push(JSON.stringify(data.analysisJson || {})); },
+            status: (code: number) => ({ json: (data: any) => { results.push({ error: data.message, source: src }); }, send: () => {} }),
+          };
+          const fakeReq: any = { body: src, url: "/api/ingest" };
+          await new Promise<void>((resolve) => {
+            const origJson = fakeRes.json;
+            fakeRes.json = (data: any) => { origJson(data); resolve(); };
+            const origStatus = fakeRes.status;
+            fakeRes.status = (code: number) => {
+              const s = origStatus(code);
+              const origSJson = s.json;
+              s.json = (data: any) => { origSJson(data); resolve(); };
+              return s;
+            };
+            app.handle(fakeReq, fakeRes);
+          });
+        } catch (e) {
+          results.push({ error: "Failed to process source", source: src });
+        }
+      }
+
+      const successRefs = results.filter((r) => r.id);
+      for (const ref of successRefs) {
+        await storage.updateReference(ref.id, { batchId });
+      }
+
+      if (successRefs.length >= 2) {
+        try {
+          const { content, usage, latency } = await aiCall([
+            { role: "system", content: "You are a content synthesis expert. Analyze multiple sources together to find patterns and unique content angles." },
+            { role: "user", content: `I have collected ${successRefs.length} sources on related topics. Synthesize:
+
+${analysisTexts.map((a, i) => `SOURCE ${i + 1}: ${a.substring(0, 1500)}`).join("\n\n")}
+
+Return JSON:
+{
+  "unified_topic": "Common topic across sources",
+  "consensus_points": ["What most sources agree on"],
+  "disagreement_points": ["Where sources contradict — GOLD for content"],
+  "unique_per_source": [{"source": 1, "unique_insight": "What only this source mentions"}],
+  "missing_perspectives": ["What NONE cover — especially from DevOps/Infra angle"],
+  "synthesis_content_ideas": [{"idea": "Content synthesizing multiple perspectives", "format": "thread/article/tweet", "angle": "Kishore's unique take", "hook": "Opening line"}],
+  "debate_content_ideas": [{"idea": "Content highlighting disagreements", "format": "thread/hot_take", "kishore_stance": "Where Kishore stands", "supporting_evidence": "From which sources"}]
+}` },
+          ], true);
+
+          await logAiUsage(usage, latency, "batch_synthesis");
+          const synthesis = safeJsonParse(content);
+          if (synthesis) {
+            for (const ref of successRefs) {
+              await storage.updateReference(ref.id, { batchSynthesisJson: synthesis });
+            }
+          }
+        } catch (e) {
+          console.error("Batch synthesis error:", e);
+        }
+      }
+
+      res.json({ batchId, references: successRefs, errors: results.filter((r) => r.error), totalProcessed: sources.length });
+    } catch (err: any) {
+      console.error("Batch ingest error:", err);
+      res.status(500).json({ message: "Batch processing failed." });
+    }
+  });
+
+  // ==================== SCREENSHOT INGEST ====================
+
+  app.post("/api/ingest/screenshot", upload.array("screenshots", 10), async (req: any, res) => {
+    try {
+      const files = req.files as Express.Multer.File[];
+      if (!files || files.length === 0) return res.status(400).json({ message: "Upload at least one screenshot." });
+
+      const imageContents = await Promise.all(files.map(async (f) => {
+        const imageData = fs.readFileSync(f.path);
+        const base64 = imageData.toString("base64");
+        const mimeType = f.mimetype || "image/png";
+        return { type: "image_url" as const, image_url: { url: `data:${mimeType};base64,${base64}` } };
+      }));
+
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are an expert at extracting and analyzing content from screenshots. Extract ALL text and context." },
+        { role: "user", content: [
+          { type: "text" as const, text: `Analyze ${files.length > 1 ? "these screenshots" : "this screenshot"}. Extract ALL text and provide structured analysis.
+
+Return JSON:
+{
+  "extracted_text": "Full text visible in the screenshot, preserving structure",
+  "source_type": "tweet|thread|linkedin_post|article|slack_message|code|slide|chart|infographic|other",
+  "source_platform": "x|linkedin|reddit|slack|discord|medium|other",
+  "author": "Username or name if visible",
+  "engagement_metrics": {"likes": null, "retweets": null, "comments": null, "views": null},
+  "content_summary": "2-3 sentence summary",
+  "content_quality_signals": "Why this content might be noteworthy",
+  "content_ideas": [{"idea": "Content idea from this", "format": "thread/tweet/article", "hook": "Opening line", "angle": "Kishore's unique angle"}],
+  "topic_tags": ["relevant tags"]
+}` },
+          ...imageContents,
+        ] as any },
+      ], true);
+
+      await logAiUsage(usage, latency, "screenshot_analysis");
+      const analysis = safeJsonParse(content);
+      if (!analysis) return res.status(500).json({ message: "Screenshot analysis failed." });
+
+      const ref = await storage.createReference({
+        sourceType: analysis.source_type || "screenshot",
+        sourcePlatform: analysis.source_platform || "manual",
+        sourceAuthorUsername: analysis.author || null,
+        rawContent: analysis.extracted_text || "",
+        screenshotUrls: files.map((f) => f.filename),
+        analysisJson: analysis,
+        title: analysis.content_summary?.substring(0, 200) || "Screenshot Analysis",
+        sourceEngagementMetrics: analysis.engagement_metrics,
+        tags: analysis.topic_tags || [],
+        wordCount: (analysis.extracted_text || "").split(/\s+/).length,
+      });
+
+      res.json(ref);
+    } catch (err: any) {
+      console.error("Screenshot ingest error:", err);
+      res.status(500).json({ message: "Screenshot analysis failed." });
+    }
+  });
+
+  // ==================== CONTENT ACTIONS ====================
+
+  app.post("/api/content-actions/:action", async (req, res) => {
+    try {
+      const { action } = req.params;
+      const { referenceId, contentType, topic } = req.body;
+      const ref = await storage.getReference(parseInt(referenceId));
+      if (!ref) return res.status(404).json({ message: "Reference not found" });
+
+      const analysis = ref.analysisJson as any;
+      const charLimit = contentType === "thread" ? 280 : contentType === "article" ? 25000 : 280;
+
+      const actionPrompts: Record<string, string> = {
+        "my-take": `Based on this source analysis, create Kishore's ORIGINAL take on the topic. Share his perspective from years of infrastructure engineering. ${contentType === "thread" ? "Create a compelling thread." : contentType === "article" ? "Write a full article." : "Write a punchy tweet."}`,
+        "remix": `Take the STRUCTURE and FORMAT of this content but apply it to a different topic from Kishore's expertise: ${topic || "DevOps/Infrastructure/Platform Engineering"}. Same structural pattern, completely different content.`,
+        "one-up": `This content is good, but Kishore can create a SUPERIOR version. Identify what they missed, got wrong, or could have gone deeper on. Create a more comprehensive, more technically credible version.`,
+        "bridge": `Bridge this topic to DevOps/AI/Infrastructure. Start with: "This topic about [X] has huge implications for infrastructure engineers. Here's why:" — Connect the dots between the source topic and Kishore's expertise.`,
+        "opposite": `Create a respectful CONTRARIAN take. If the source says X is good, explore why X has challenges. If they're bearish, show the bull case. Contrarian content drives engagement when backed by real experience.`,
+        "summarize": `Create a single tweet that summarizes the key insight from this source + adds Kishore's hot take reaction. Format: "[Key insight from source] — My take: [Kishore's reaction]. [Engagement hook]"`,
+        "debate": `Create content that respectfully challenges the main thesis. Present Kishore's counter-argument backed by his infrastructure engineering experience. Be specific and constructive, not dismissive.`,
+        "quote-tweet": `Generate 5 different quote tweet reactions to this content. Range from: 1) Strongly agree + add nuance, 2) Interesting counterpoint, 3) "Here's what they missed", 4) Personal experience that confirms/denies, 5) Bold prediction building on this.`,
+      };
+
+      const promptBase = actionPrompts[action];
+      if (!promptBase) return res.status(400).json({ message: `Unknown action: ${action}` });
+
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `${promptBase}
+
+SOURCE ANALYSIS:
+${JSON.stringify(analysis).substring(0, 3000)}
+
+SOURCE TITLE: ${ref.title}
+SOURCE URL: ${ref.sourceUrl || "N/A"}
+
+INSTRUCTIONS:
+- Create ORIGINAL content — NEVER copy
+- Add Kishore's unique angle: infrastructure engineering, multi-cloud, Kubernetes, platform engineering
+- Generate 3 variations with different angles/hooks
+${contentType === "thread" ? "- Each tweet under 280 characters" : contentType === "article" ? "- Full article up to 25000 characters" : "- Single tweet under 280 characters"}
+
+Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}` },
+      ], true);
+
+      await logAiUsage(usage, latency, `content_action_${action}`);
+      const parsed = safeJsonParse(content);
+      if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
+
+      const variations = parsed.variations.map((v: any) => ({
+        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
+      }));
+
+      await storage.createReferenceContent({
+        referenceId: ref.id,
+        creationAction: action,
+      });
+
+      res.json({ variations, model: "gpt-4o-mini", action });
+    } catch (err: any) {
+      console.error("Content action error:", err);
+      res.status(500).json({ message: "Failed to generate content." });
+    }
+  });
+
+  // ==================== STYLE PROFILES ====================
+
+  app.get("/api/styles", async (req, res) => {
+    try { res.json(await storage.getStyleProfiles()); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/styles", async (req, res) => {
+    try {
+      const { name, sourceReferenceId, styleJson, stylePromptSnippet } = req.body;
+      if (!name || !stylePromptSnippet) return res.status(400).json({ message: "Name and style prompt snippet are required." });
+      const profile = await storage.createStyleProfile({ name, sourceReferenceId, styleJson: styleJson || {}, stylePromptSnippet });
+      if (sourceReferenceId) {
+        await storage.updateReference(sourceReferenceId, { isStyleSaved: true });
+      }
+      res.json(profile);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/styles/:id", async (req, res) => {
+    try { await storage.deleteStyleProfile(parseInt(req.params.id)); res.status(204).send(); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/styles/:id/apply", async (req, res) => {
+    try {
+      const profile = await storage.getStyleProfile(parseInt(req.params.id));
+      if (!profile) return res.status(404).json({ message: "Style profile not found" });
+      const { topic, contentType, pillarId } = req.body;
+
+      await storage.incrementStyleUsage(profile.id);
+
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: `${SYSTEM_PROMPT}\n\n${profile.stylePromptSnippet}` },
+        { role: "user", content: `Generate a ${contentType || "thread"} about: ${topic || "a trending DevOps/AI topic"}
+
+${pillarId ? `Content pillar context: #${pillarId}` : ""}
+
+Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}
+${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet under 280 characters."}` },
+      ], true);
+
+      await logAiUsage(usage, latency, "style_apply");
+      const parsed = safeJsonParse(content);
+      if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
+
+      const variations = parsed.variations.map((v: any) => ({
+        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
+      }));
+      res.json({ variations, model: "gpt-4o-mini", styleName: profile.name });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ==================== ENHANCED REFERENCES ENDPOINTS ====================
 
   app.post("/api/references/:id/generate", async (req, res) => {
     try {
       const ref = await storage.getReference(parseInt(req.params.id));
       if (!ref) return res.status(404).json({ message: "Reference not found" });
-      const { contentType, tone } = req.body;
+      const { contentType, tone, styleProfileId } = req.body;
+
+      let styleSnippet = "";
+      if (styleProfileId) {
+        const profile = await storage.getStyleProfile(parseInt(styleProfileId));
+        if (profile) {
+          styleSnippet = `\n\n${profile.stylePromptSnippet}`;
+          await storage.incrementStyleUsage(profile.id);
+        }
+      }
 
       const charLimit = contentType === "thread" ? 280 : contentType === "article" ? 25000 : 280;
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: `${SYSTEM_PROMPT}${styleSnippet}` },
         { role: "user", content: `Based on the following source analysis, create a ${contentType || "thread"} for Kishore's X/Threads account.
 
 SOURCE ANALYSIS:
@@ -688,7 +1283,6 @@ INSTRUCTIONS:
 - Create ORIGINAL content inspired by the source — NEVER copy
 - Add Kishore's unique angle: infrastructure engineering, multi-cloud, Kubernetes
 - Mirror the effective style elements but make it authentically Kishore's voice
-- Include specific technical details, tool names, and real-world scenarios
 - Generate 3 variations with different angles/hooks
 ${tone ? `- Tone: ${tone}` : ""}
 
@@ -722,6 +1316,28 @@ Each tweet under ${charLimit} characters.` },
       const result = await storage.updateReference(parseInt(req.params.id), { isBookmarked: !ref.isBookmarked });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/references/:id/note", async (req, res) => {
+    try {
+      const { notes } = req.body;
+      const result = await storage.updateReference(parseInt(req.params.id), { notes });
+      if (!result) return res.status(404).json({ message: "Reference not found" });
+      res.json(result);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.get("/api/references/batch/:batchId", async (req, res) => {
+    try {
+      const refs = await storage.getReferencesByBatch(req.params.batchId);
+      res.json(refs);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.get("/api/bookmarklet", (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const bookmarklet = `javascript:void(fetch('${baseUrl}/api/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:window.location.href})}).then(r=>r.json()).then(d=>alert('ContentForge: Saved! '+d.title)).catch(e=>alert('ContentForge: Error - '+e.message)))`;
+    res.json({ bookmarklet, instructions: "Drag this to your bookmarks bar to capture any page into ContentForge." });
   });
 
   // ==================== IDEA DISCOVERY ====================

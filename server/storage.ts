@@ -8,13 +8,16 @@ import {
   type AiUsageLog, type InsertAiUsageLog,
   type Article, type InsertArticle,
   type Reference, type InsertReference,
+  type StyleProfile, type InsertStyleProfile,
+  type ReferenceContent, type InsertReferenceContent,
   type DiscoveredIdea, type InsertDiscoveredIdea,
   type ViralScore, type InsertViralScore,
   type MonitoredAccount, type InsertMonitoredAccount,
   type RssSource, type InsertRssSource,
   type DiscoverySettings,
   pillars, posts, tweets, ideas, templates, analytics, aiUsageLog,
-  articles, references, referencePosts, discoveredIdeas, discoverySettings,
+  articles, references, referencePosts, referenceContent, styleProfiles,
+  discoveredIdeas, discoverySettings,
   viralScores, monitoredAccounts, rssSources,
 } from "@shared/schema";
 import { db } from "./db";
@@ -56,6 +59,16 @@ export interface IStorage {
   createReference(ref: InsertReference): Promise<Reference>;
   updateReference(id: number, ref: Partial<InsertReference>): Promise<Reference | undefined>;
   deleteReference(id: number): Promise<void>;
+  getReferencesByBatch(batchId: string): Promise<Reference[]>;
+
+  getStyleProfiles(): Promise<StyleProfile[]>;
+  getStyleProfile(id: number): Promise<StyleProfile | undefined>;
+  createStyleProfile(profile: InsertStyleProfile): Promise<StyleProfile>;
+  updateStyleProfile(id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined>;
+  deleteStyleProfile(id: number): Promise<void>;
+  incrementStyleUsage(id: number): Promise<void>;
+
+  createReferenceContent(rc: InsertReferenceContent): Promise<ReferenceContent>;
 
   getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]>;
   createDiscoveredIdeas(ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
@@ -280,7 +293,44 @@ export class DatabaseStorage implements IStorage {
 
   async deleteReference(id: number): Promise<void> {
     await db.delete(referencePosts).where(eq(referencePosts.referenceId, id));
+    await db.delete(referenceContent).where(eq(referenceContent.referenceId, id));
     await db.delete(references).where(eq(references.id, id));
+  }
+
+  async getReferencesByBatch(batchId: string): Promise<Reference[]> {
+    return db.select().from(references).where(eq(references.batchId, batchId)).orderBy(desc(references.createdAt));
+  }
+
+  async getStyleProfiles(): Promise<StyleProfile[]> {
+    return db.select().from(styleProfiles).orderBy(desc(styleProfiles.createdAt));
+  }
+
+  async getStyleProfile(id: number): Promise<StyleProfile | undefined> {
+    const [result] = await db.select().from(styleProfiles).where(eq(styleProfiles.id, id));
+    return result;
+  }
+
+  async createStyleProfile(profile: InsertStyleProfile): Promise<StyleProfile> {
+    const [result] = await db.insert(styleProfiles).values(profile).returning();
+    return result;
+  }
+
+  async updateStyleProfile(id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined> {
+    const [result] = await db.update(styleProfiles).set(profile).where(eq(styleProfiles.id, id)).returning();
+    return result;
+  }
+
+  async deleteStyleProfile(id: number): Promise<void> {
+    await db.delete(styleProfiles).where(eq(styleProfiles.id, id));
+  }
+
+  async incrementStyleUsage(id: number): Promise<void> {
+    await db.update(styleProfiles).set({ usageCount: sql`${styleProfiles.usageCount} + 1` }).where(eq(styleProfiles.id, id));
+  }
+
+  async createReferenceContent(rc: InsertReferenceContent): Promise<ReferenceContent> {
+    const [result] = await db.insert(referenceContent).values(rc).returning();
+    return result;
   }
 
   async getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]> {

@@ -1,4 +1,4 @@
-import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Zap } from "lucide-react";
+import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Zap, Globe } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -20,6 +20,7 @@ const createItems = [
 ];
 
 const discoverItems = [
+  { title: "Ingest", url: "/ingest", icon: Globe },
   { title: "Discover", url: "/discover", icon: Compass },
   { title: "References", url: "/references", icon: Search },
   { title: "Ideas", url: "/ideas", icon: Lightbulb },

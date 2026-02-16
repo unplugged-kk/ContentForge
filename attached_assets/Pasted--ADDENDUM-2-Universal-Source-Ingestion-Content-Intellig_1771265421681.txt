@@ -1,0 +1,740 @@
+## ADDENDUM #2 — Universal Source Ingestion & Content Intelligence
+
+This replaces "Feature B: Source Analysis" from Addendum #1 with a comprehensive content intelligence system. ContentForge should be able to ingest content from literally ANY source on the internet and turn it into high-quality, original posts.
+
+---
+
+### Universal Content Ingestion Hub
+
+Build a central "Ingest" system accessible from multiple entry points in the UI. The philosophy: **if you can see it, ContentForge can analyze it and create content from it.**
+
+**Entry Points (all lead to the same analysis pipeline):**
+1. **"Create from Source" button** on the Generate page
+2. **"Analyze" button** on the Discover Ideas page (next to any discovered idea)
+3. **Quick-capture floating button** (bottom-right corner, always visible) — paste a URL or drop a screenshot anytime
+4. **Browser bookmarklet** (generate a `javascript:` bookmarklet the user can drag to their browser toolbar — clicking it sends the current page URL to ContentForge's API)
+5. **Keyboard shortcut** — Cmd+Shift+I opens the quick ingest modal from anywhere in the app
+
+---
+
+### Source Type: ANY X (Twitter) Account
+
+**Not just monitored accounts — the user can input ANY X username or profile URL and the app pulls their content for analysis.**
+
+**User Flow:**
+1. User types an X username (e.g., `@levelsio`, `@swyx`, `@kelseyhightower`) or pastes a profile URL
+2. App fetches the account's recent content via X API v2
+
+**What Gets Fetched (X API v2):**
+GET /2/users/by/username/:username
+→ Get user ID, name, bio, follower count, following count, verified status
+GET /2/users/:id/tweets?max_results=100&tweet.fields=public_metrics,created_at,conversation_id,referenced_tweets&exclude=retweets
+→ Get last 100 original tweets (excluding retweets)
+→ Include engagement metrics per tweet
+GET /2/users/:id/tweets?max_results=50&tweet.fields=public_metrics,created_at&sort_order=relevancy
+→ Get top-performing tweets by relevancy
+
+**Account Analysis (AI Call):**
+Send the fetched data to the active LLM provider:
+
+"""
+Analyze this X account's content strategy and style comprehensively:
+
+ACCOUNT: @{username}
+BIO: {bio}
+FOLLOWERS: {follower_count}
+FOLLOWING: {following_count}
+
+RECENT TWEETS (with engagement metrics):
+{tweets_json}
+
+Return a detailed JSON analysis:
+
+{
+  "account_summary": {
+    "niche": "What topics they cover",
+    "positioning": "How they position themselves",
+    "audience": "Who follows them and why",
+    "posting_frequency": "How often they post",
+    "engagement_rate": "Average engagement relative to followers"
+  },
+  "content_strategy": {
+    "content_mix": {"threads": "30%", "single_tweets": "50%", "replies": "15%", "polls": "5%"},
+    "top_topics": ["topic1", "topic2", "topic3"],
+    "posting_times": ["Most common posting hours"],
+    "thread_frequency": "How often they post threads"
+  },
+  "writing_style": {
+    "tone": "casual/technical/provocative/educational/humorous/inspirational",
+    "voice_characteristics": ["direct", "uses metaphors", "data-heavy", "storytelling", etc.],
+    "sentence_length": "short/medium/long/mixed",
+    "vocabulary_level": "simple/intermediate/advanced",
+    "emoji_usage": "none/minimal/moderate/heavy",
+    "hashtag_strategy": "none/minimal/heavy",
+    "hook_patterns": ["Types of hooks they use with examples"],
+    "cta_patterns": ["How they end posts"],
+    "formatting_style": "How they use line breaks, capitalization, punctuation"
+  },
+  "viral_patterns": {
+    "top_10_tweets": [
+      {
+        "content": "tweet text",
+        "likes": 5000,
+        "retweets": 800,
+        "why_it_worked": "Analysis of why this specific tweet performed well"
+      }
+    ],
+    "common_viral_triggers": ["What emotional/intellectual triggers their best content uses"],
+    "format_patterns": ["What formats (lists, before/after, story, question) perform best"],
+    "topic_performance": {"topic1": "avg_engagement", "topic2": "avg_engagement"}
+  },
+  "lessons_for_kishore": {
+    "techniques_to_adopt": ["Specific techniques Kishore can use from this account"],
+    "techniques_to_skip": ["Things that wouldn't work for Kishore's niche/audience"],
+    "content_gaps": ["Topics this account covers that Kishore could cover with a DevOps/Infra angle"],
+    "style_elements_to_borrow": ["Specific style elements worth adopting"]
+  }
+}
+"""
+
+**Account Analysis UI:**
+- **Account Profile Card**: Shows username, bio, avatar, follower count, engagement rate
+- **Style Fingerprint**: Visual radar chart showing tone, vocabulary, emoji usage, hook strength, CTA strength
+- **Top Performing Content**: Scrollable list of their best tweets/threads with engagement metrics
+- **"Lessons for You" Section**: What to adopt vs skip, tailored to Kishore's niche
+- **Action Buttons:**
+  - "Write in This Style" → Opens generation form with this account's style pre-loaded as a style reference
+  - "Create My Version of Their Top Tweet" → Pick any of their top tweets → AI creates Kishore's original version with his DevOps/AI angle
+  - "Monitor This Account" → Adds to monitored accounts for ongoing idea discovery
+  - "Compare My Style vs Theirs" → Side-by-side style comparison
+
+**"Write in This Style" — Style Cloning:**
+When the user selects "Write in This Style", the generation engine adds this to the system prompt:
+
+"""
+STYLE REFERENCE: Mimic the following writing style characteristics while keeping Kishore's voice and expertise:
+- Tone: {analyzed_tone}
+- Sentence structure: {analyzed_structure}  
+- Hook technique: {analyzed_hook_pattern}
+- Formatting: {analyzed_formatting}
+- Emoji usage: {analyzed_emoji_pattern}
+- Vocabulary level: {analyzed_vocab_level}
+
+IMPORTANT: Do NOT copy any specific content. Only mirror the structural and stylistic patterns.
+Kishore's unique expertise (DevOps, multi-cloud, Kubernetes, platform engineering) must remain central.
+"""
+
+---
+
+### Source Type: ANY X Thread (by anyone)
+
+**User can paste any X thread URL and the app analyzes the full thread, its performance, and generates content inspired by it.**
+
+**User Flow:**
+1. User pastes a thread URL (e.g., `https://x.com/username/status/123456789`)
+2. App detects it's a thread (via conversation_id)
+
+**Thread Extraction (X API v2):**
+Step 1: Get the root tweet
+GET /2/tweets/:id?tweet.fields=public_metrics,created_at,conversation_id,author_id
+→ Get root tweet, its conversation_id
+Step 2: Get all tweets in the thread by the same author
+GET /2/tweets/search/recent?query=conversation_id:{conv_id} from:{author_id}&tweet.fields=public_metrics,created_at&max_results=100
+→ Get all tweets in the thread, ordered by created_at
+→ OR use the conversation lookup endpoint
+Step 3: Get author info
+GET /2/users/:author_id?user.fields=public_metrics,description
+
+**Thread Analysis (AI Call):**
+"""
+Analyze this X thread in detail:
+
+AUTHOR: @{username} ({follower_count} followers)
+THREAD ({tweet_count} tweets):
+{thread_tweets_with_metrics}
+
+Return:
+{
+  "thread_summary": "What the thread is about in 2-3 sentences",
+  "thread_structure": {
+    "hook_type": "How they opened — question/bold_claim/story/stat",
+    "hook_text": "The actual first tweet",
+    "body_pattern": "How they structured the middle — numbered_list/narrative/problem_solution/case_study",
+    "closer_type": "How they ended — cta/question/summary/prediction",
+    "pacing": "How information density varies across tweets",
+    "tweet_count": 12,
+    "total_characters": 3200
+  },
+  "engagement_analysis": {
+    "total_likes": 5000,
+    "total_retweets": 800,
+    "engagement_curve": "Which tweets got most engagement and why",
+    "drop_off_points": "Where engagement drops — indicates pacing issues",
+    "best_performing_tweet": {"position": 3, "text": "...", "why": "..."}
+  },
+  "content_analysis": {
+    "key_insights": ["Main takeaways from the thread"],
+    "data_points": ["Any stats, metrics, or numbers used"],
+    "tools_mentioned": ["Any tools, frameworks, or products mentioned"],
+    "claims_made": ["Bold claims or opinions stated"]
+  },
+  "style_analysis": {
+    "tone": "...",
+    "formatting_techniques": ["Line breaks, emojis, capitalization patterns"],
+    "transition_techniques": ["How they connect tweets — numbering, arrows, continuation"]
+  },
+  "kishores_opportunity": {
+    "agree_angle": "How Kishore could create a 'Yes, and...' response thread",
+    "disagree_angle": "How Kishore could create a contrarian response thread",
+    "expand_angle": "What the thread missed that Kishore's infra expertise could add",
+    "remix_angle": "How to take the same structure but apply it to a DevOps/AI topic"
+  }
+}
+"""
+
+**Thread Analysis UI:**
+- **Thread Viewer**: Display the full thread in a tweet-like card format with engagement per tweet
+- **Engagement Curve Chart**: Visual chart showing likes/retweets per tweet position (shows where engagement peaks and drops)
+- **Structure Breakdown**: Visual representation of hook → body → closer pattern
+- **"Your Opportunity" Cards**: 4 cards showing different angles Kishore can take
+- **Action Buttons:**
+  - "Create My Response Thread" → Agree, disagree, or add nuance
+  - "Remix This Structure" → Same thread format, different topic from Kishore's expertise
+  - "Quote Tweet This" → Generate a killer quote tweet reaction
+  - "Write a Better Version" → AI creates a superior thread on the same topic using Kishore's expertise
+  - "Expand into Article" → Convert thread insights into a full X Article
+
+---
+
+### Source Type: ANY Reddit Thread
+
+**User can paste any Reddit URL — a post, a comment thread, or an entire discussion — and the app extracts and analyzes it.**
+
+**User Flow:**
+1. User pastes a Reddit URL (e.g., `https://www.reddit.com/r/devops/comments/abc123/...`)
+2. App fetches the full thread
+
+**Reddit Extraction (Reddit JSON API — no auth needed):**
+Append .json to any Reddit URL
+GET https://www.reddit.com/r/{subreddit}/comments/{post_id}/{slug}.json?sort=best&limit=200
+Returns:
+
+Post: title, selftext, author, score, num_comments, created_utc, url
+Comments: nested tree of comments with body, author, score, replies
+
+
+**Reddit Thread Analysis (AI Call):**
+"""
+Analyze this Reddit discussion for content creation opportunities:
+
+SUBREDDIT: r/{subreddit}
+POST TITLE: {title}
+POST BODY: {selftext}
+POST SCORE: {score} upvotes, {num_comments} comments
+POST URL: {url}
+
+TOP COMMENTS (sorted by score):
+{comments_json}
+
+Return:
+{
+  "discussion_summary": "What's being discussed and why it's generating engagement",
+  "key_opinions": [
+    {
+      "opinion": "The main opinion/stance",
+      "support_level": "How many upvotes/agreement",
+      "counter_arguments": ["What others pushed back with"]
+    }
+  ],
+  "insights_worth_sharing": [
+    "Genuine insights from the discussion that Kishore's audience would find valuable"
+  ],
+  "common_pain_points": [
+    "Frustrations or challenges people are expressing — these are content goldmines"
+  ],
+  "controversial_takes": [
+    "Divisive opinions that would make great hot takes"
+  ],
+  "questions_asked": [
+    "Questions in the thread that Kishore could answer authoritatively"
+  ],
+  "content_ideas": [
+    {
+      "idea": "Content idea derived from this discussion",
+      "format": "thread/tweet/article/hot_take",
+      "hook": "Suggested opening line",
+      "angle": "How Kishore's experience makes this unique"
+    }
+  ],
+  "notable_quotes": [
+    "Memorable comments that could inspire content (paraphrased, never copied)"
+  ]
+}
+"""
+
+**Reddit Analysis UI:**
+- **Discussion Overview**: Post title, subreddit, score, top-level summary
+- **Opinion Map**: Visual breakdown of different stances in the discussion
+- **Pain Points Panel**: Highlighted frustrations — each with a "Create Content About This" button
+- **Questions Panel**: Unanswered or poorly answered questions — each with "Answer This as a Thread" button
+- **Content Ideas**: AI-generated ideas from the discussion with one-click draft buttons
+
+---
+
+### Source Type: ANY Web URL (Enhanced)
+
+Expanding the existing URL analysis to handle more source types intelligently:
+
+**Auto-Detection & Specialized Handling:**
+URL Input → Detect source type → Route to specialized handler:
+X/Twitter URLs:
+
+x.com/{user}/status/{id}     → Single tweet or thread analysis (see above)
+x.com/{user}                  → Full account analysis (see above)
+x.com/i/lists/{id}           → List analysis — fetch recent tweets from list members
+
+Reddit URLs:
+
+reddit.com/r/{sub}/comments/  → Full thread analysis (see above)
+reddit.com/r/{sub}/           → Subreddit trending analysis
+reddit.com/user/{name}        → User's top posts analysis
+
+LinkedIn URLs:
+
+linkedin.com/posts/{id}       → Scrape post content (or prompt user to paste)
+linkedin.com/pulse/{slug}     → Scrape LinkedIn article
+linkedin.com/in/{username}    → Profile info (prompt user to paste notable posts)
+
+YouTube URLs:
+
+youtube.com/watch?v={id}      → Extract transcript via YouTube API / yt-dlp
+youtube.com/@{channel}        → Channel analysis (recent videos, topics)
+
+GitHub URLs:
+
+github.com/{owner}/{repo}     → Fetch README, description, stars, language, recent activity
+github.com/{owner}/{repo}/discussions → Fetch discussion thread
+github.com/{owner}/{repo}/issues/{id} → Fetch issue with comments
+
+Newsletter/Blog URLs:
+
+substack.com, medium.com, dev.to, hashnode.dev → Extract article content via HTML parsing
+Any blog URL → goquery HTML extraction with readability algorithm (extract main content, strip nav/ads)
+
+Research/Paper URLs:
+
+arxiv.org/abs/{id}            → Fetch paper abstract and metadata via ArXiv API
+arxiv.org/pdf/{id}            → Download PDF, extract text
+papers.ssrn.com, scholar.google.com → Extract metadata
+
+News URLs:
+
+Any news site → Extract article via readability parsing
+Support for: TechCrunch, The Verge, Ars Technica, Wired, MIT Tech Review, etc.
+
+Podcast URLs:
+
+podcast episode page → Try to find transcript, otherwise extract show notes
+
+Documentation URLs:
+
+docs.*, *.readthedocs.io → Extract documentation content for technical analysis
+
+Generic fallback:
+
+Any URL → Fetch HTML → Extract main content via readability algorithm → Analyze
+
+
+**Enhanced Web Extraction Pipeline (Go Backend):**
+```go
+// URL Router
+func AnalyzeURL(url string) (*Analysis, error) {
+    sourceType := DetectSourceType(url) // pattern matching on URL
+    
+    switch sourceType {
+    case SourceTypeXTweet, SourceTypeXThread:
+        return analyzeXContent(url)
+    case SourceTypeXProfile:
+        return analyzeXAccount(url)
+    case SourceTypeRedditThread:
+        return analyzeRedditThread(url)
+    case SourceTypeRedditSubreddit:
+        return analyzeSubredditTrending(url)
+    case SourceTypeYouTubeVideo:
+        return analyzeYouTubeVideo(url)
+    case SourceTypeGitHubRepo:
+        return analyzeGitHubRepo(url)
+    case SourceTypeGitHubDiscussion:
+        return analyzeGitHubDiscussion(url)
+    case SourceTypeLinkedInPost:
+        return analyzeLinkedInPost(url)
+    case SourceTypeArxivPaper:
+        return analyzeArxivPaper(url)
+    case SourceTypeSubstack, SourceTypeMedium, SourceTypeBlog:
+        return analyzeBlogArticle(url)
+    default:
+        return analyzeGenericWebPage(url)
+    }
+}
+```
+
+---
+
+### Source Type: Screenshots & Images
+
+**Users can upload screenshots of tweets, threads, LinkedIn posts, articles, Slack messages, or any visual content — the app extracts text and context using vision-capable AI models, then creates content from it.**
+
+**Why This Matters:**
+- Many viral tweets/threads get screenshotted and shared in DMs, Slack, Discord
+- Paywalled content can be captured as screenshots
+- LinkedIn doesn't have a good public API — screenshots are the easiest capture method
+- Conference slides, whiteboard photos, handwritten notes
+- Competitor analysis from platforms you can't easily scrape
+
+**Screenshot Analysis Flow:**
+1. User uploads one or more images (drag-and-drop, paste from clipboard via Ctrl+V, or file picker)
+2. Images sent to a vision-capable model
+
+**Supported Vision Models (auto-select based on configured providers):**
+Priority order for screenshot analysis:
+
+Claude (claude-sonnet-4-20250514, claude-opus-4-0-20250115) — excellent at structured extraction
+GPT-4o — strong vision capabilities
+Gemini 2.0 Flash / Pro — good vision, fast
+Any other vision-capable model the user has configured
+
+If no vision-capable model is configured → show error: "Screenshot analysis requires a vision-capable AI model. Please configure Claude, GPT-4o, or Gemini in Settings → AI Providers."
+
+**Screenshot Analysis Prompt (Vision Model Call):**
+"""
+Analyze this screenshot carefully. Extract ALL text and visual information, then provide a structured analysis.
+
+Return JSON:
+{
+  "extracted_text": "Full text visible in the screenshot, preserving line breaks and structure",
+  "source_type": "tweet | thread | linkedin_post | article | slack_message | code | slide | whiteboard | chart | infographic | other",
+  "source_platform": "x | linkedin | reddit | slack | discord | medium | other",
+  "author": "Username or name if visible",
+  "engagement_metrics": {
+    "likes": null or number if visible,
+    "retweets": null or number,
+    "comments": null or number,
+    "views": null or number
+  },
+  "timestamp": "Date/time if visible",
+  "visual_elements": ["Any charts, graphs, images, code blocks visible"],
+  "context_clues": "Any additional context from the UI elements, reply counts, platform indicators",
+  "content_summary": "2-3 sentence summary of what this screenshot shows",
+  "content_quality_signals": "Why this content might be noteworthy — high engagement, interesting insight, controversial take, etc."
+}
+"""
+
+**After Extraction → Standard Analysis Pipeline:**
+Once text is extracted from the screenshot, it flows into the same analysis pipeline as any other source:
+- Style analysis
+- Engagement pattern detection
+- Content idea generation
+- "Kishore's angle" identification
+
+**Multi-Screenshot Thread Reconstruction:**
+- User can upload multiple screenshots (e.g., screenshots of a long thread taken in parts)
+- App detects sequential content and reconstructs the full thread in order
+- Prompt: "These screenshots appear to be parts of the same thread/conversation. Reconstruct the full content in order."
+
+**Screenshot UI:**
+- **Drop Zone**: Large drag-and-drop area with "Drop screenshots here or paste from clipboard"
+- **Clipboard Paste**: Listen for Ctrl+V / Cmd+V globally on the ingest page — auto-capture pasted images
+- **Multi-Upload**: Upload up to 10 images at once
+- **Preview Grid**: Show uploaded screenshots in a grid with "Analyzing..." overlay
+- **Extraction Result**: Show extracted text alongside the original screenshot for verification
+- **Edit Extraction**: User can correct any OCR errors before proceeding to analysis
+- **"Create Content" buttons**: Same as all other source types — tweet, thread, article, hot take, quote tweet
+
+---
+
+### Source Type: Batch / Multi-Source Ingestion
+
+**Users often want to analyze multiple related sources together — e.g., "here are 5 different takes on the same topic, help me create my take."**
+
+**Multi-Source Flow:**
+1. User clicks "Multi-Source Ingest"
+2. Adds multiple sources (mix of URLs, screenshots, pasted text):
+   - URL 1: An X thread about "K8s vs serverless for ML"
+   - URL 2: A Reddit discussion on the same topic
+   - URL 3: A blog post with benchmarks
+   - Screenshot: A LinkedIn post by a tech leader
+   - Pasted text: Notes from a conference talk
+3. App analyzes ALL sources together
+4. AI synthesizes a unified analysis
+
+**Multi-Source Synthesis Prompt:**
+"""
+I have collected multiple sources on a related topic. Analyze them together and synthesize:
+
+SOURCE 1 ({source_type}): {content}
+SOURCE 2 ({source_type}): {content}
+SOURCE 3 ({source_type}): {content}
+...
+
+Return:
+{
+  "unified_topic": "The common topic across all sources",
+  "consensus_points": ["What most sources agree on"],
+  "disagreement_points": ["Where sources contradict each other — these are GOLD for content"],
+  "unique_per_source": [
+    {"source": 1, "unique_insight": "What only this source mentions"}
+  ],
+  "missing_perspectives": ["What NONE of the sources cover — especially from a DevOps/Infra angle"],
+  "synthesis_content_ideas": [
+    {
+      "idea": "Content that synthesizes all these perspectives into something new",
+      "format": "thread/article/tweet",
+      "angle": "Kishore's unique take that combines insights from multiple sources",
+      "hook": "Opening line"
+    }
+  ],
+  "debate_content_ideas": [
+    {
+      "idea": "Content that highlights disagreements and takes a stance",
+      "format": "thread/hot_take",
+      "kishore_stance": "Where Kishore stands based on his experience",
+      "supporting_evidence": "From which sources + his own experience"
+    }
+  ]
+}
+"""
+
+---
+
+### Source Type: Existing Threads / Articles (by Anyone, from Any Platform)
+
+**A dedicated "Analyze Existing Content" mode that's specifically optimized for analyzing someone else's published thread or long-form article.**
+
+**For Threads (from any platform):**
+User provides URL or pastes content of an existing thread (X thread, Threads thread, LinkedIn carousel).
+
+**Thread Reconstruction:**
+- If URL: auto-fetch via API (X) or scraping
+- If pasted: AI detects it's a thread format and reconstructs the structure
+- If screenshots: vision model extracts and orders the tweets
+
+**Thread-Specific Actions (after analysis):**
+| Action | What It Does |
+|--------|-------------|
+| "My Take on This" | Generate Kishore's perspective on the same topic — agree, disagree, or add nuance |
+| "Quote Tweet the Hook" | Generate 5 different quote tweet reactions to their opening tweet |
+| "Reply Thread" | Create a thread that replies to theirs, adding Kishore's infrastructure angle |
+| "Remix Structure" | Take their exact thread structure (hook type, pacing, closer) but apply it to a different topic from Kishore's expertise |
+| "One-Up This Thread" | Analyze what they missed or got wrong, create a more comprehensive thread |
+| "Summarize & React" | Single tweet that summarizes their thread + Kishore's hot take |
+| "Turn Into Article" | Expand their thread's ideas (with Kishore's additions) into a full X Article |
+| "Create the Opposite Take" | If they say X is good, create a thread on why X has issues (or vice versa). Contrarian content drives engagement |
+
+**For Articles (from any platform):**
+User provides URL of a blog post, Substack article, Medium post, or any long-form content.
+
+**Article-Specific Actions (after analysis):**
+| Action | What It Does |
+|--------|-------------|
+| "Thread Summary" | Distill the article into a 5-10 tweet thread capturing key points |
+| "My Response Article" | Write a response article from Kishore's perspective |
+| "Hot Take Tweet" | One-tweet reaction — agree, disagree, or "here's what they missed" |
+| "Key Takeaway Thread" | "I just read [author]'s article on [topic]. Here are the 5 things every engineer should know:" |
+| "Bridge to My Niche" | "This article about [AI topic] has huge implications for infrastructure. Here's why:" |
+| "Debate This" | Create content that respectfully challenges the article's thesis |
+
+---
+
+### Updated Database Tables
+```sql
+-- Enhanced references table (replaces the one in Addendum #1)
+CREATE TABLE references (
+  id SERIAL PRIMARY KEY,
+  
+  -- Source identification
+  source_url TEXT,
+  source_type VARCHAR(30) NOT NULL, 
+    -- x_tweet, x_thread, x_account, reddit_thread, reddit_subreddit,
+    -- linkedin_post, linkedin_article, youtube_video, youtube_channel,
+    -- github_repo, github_discussion, github_issue,
+    -- arxiv_paper, blog_article, newsletter, substack, medium,
+    -- news_article, documentation, podcast, screenshot, 
+    -- pasted_text, multi_source, generic_webpage
+  source_platform VARCHAR(30), -- x, reddit, linkedin, youtube, github, arxiv, web, manual
+  
+  -- Source author info (if applicable)
+  source_author_username VARCHAR(200),
+  source_author_display_name VARCHAR(300),
+  source_author_follower_count INTEGER,
+  
+  -- Extracted content
+  raw_content TEXT, -- full extracted text
+  raw_content_html TEXT, -- HTML version if applicable
+  screenshot_urls TEXT[], -- paths to uploaded screenshot files
+  
+  -- AI Analysis
+  analysis_json JSONB NOT NULL, -- full structured analysis
+  style_analysis_json JSONB, -- separate style fingerprint (for "Write in This Style")
+  
+  -- Metadata
+  title VARCHAR(500),
+  source_engagement_metrics JSONB, -- likes, shares, etc. from the source
+  word_count INTEGER,
+  tags TEXT[],
+  pillar_id INTEGER REFERENCES pillars(id),
+  
+  -- User interaction
+  is_bookmarked BOOLEAN DEFAULT FALSE,
+  is_style_saved BOOLEAN DEFAULT FALSE, -- saved as a reusable style reference
+  notes TEXT, -- user's personal notes about this reference
+  
+  -- Batch grouping (for multi-source ingestion)
+  batch_id VARCHAR(50), -- groups multiple references analyzed together
+  batch_synthesis_json JSONB, -- unified analysis across batch
+  
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Saved style profiles (extracted from account/content analysis)
+CREATE TABLE style_profiles (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(200) NOT NULL, -- e.g., "@levelsio style", "Pragmatic Engineer style"
+  source_reference_id INTEGER REFERENCES references(id),
+  style_json JSONB NOT NULL, -- full style fingerprint
+  style_prompt_snippet TEXT NOT NULL, -- the actual text to inject into generation prompts
+  usage_count INTEGER DEFAULT 0, -- how many times this style has been used
+  is_favorite BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Screenshot uploads
+CREATE TABLE screenshots (
+  id SERIAL PRIMARY KEY,
+  reference_id INTEGER REFERENCES references(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  file_size_bytes INTEGER,
+  extracted_text TEXT,
+  extraction_confidence DECIMAL(3,2), -- 0.00 to 1.00
+  extraction_model VARCHAR(100), -- which vision model did the extraction
+  display_order INTEGER DEFAULT 0, -- for multi-screenshot threads
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content created from references (track lineage)
+CREATE TABLE reference_content (
+  id SERIAL PRIMARY KEY,
+  reference_id INTEGER REFERENCES references(id),
+  post_id INTEGER REFERENCES posts(id),
+  article_id INTEGER REFERENCES articles(id),
+  creation_action VARCHAR(50), 
+    -- my_take, quote_tweet, remix_structure, one_up, summarize_react,
+    -- thread_to_article, article_to_thread, respond, debate,
+    -- style_clone, bridge_to_niche, opposite_take, expand,
+    -- multi_source_synthesis
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Updated/New API Endpoints
+--- Universal Ingestion ---
+POST   /api/ingest                          — Smart ingest: auto-detect URL type and route
+POST   /api/ingest/batch                    — Multi-source batch ingestion
+POST   /api/ingest/screenshot               — Upload and analyze screenshots (multipart form)
+POST   /api/ingest/paste                    — Analyze pasted text content
+POST   /api/ingest/clipboard                — Receive pasted image from clipboard (base64)
+--- X Account Analysis ---
+POST   /api/analyze/x-account               — Analyze any X account by username
+GET    /api/analyze/x-account/:username      — Get cached analysis for an X account
+POST   /api/analyze/x-account/:username/style — Extract and save style profile
+--- X Thread Analysis ---
+POST   /api/analyze/x-thread                — Analyze any X thread by URL or tweet ID
+POST   /api/analyze/x-thread/:id/remix      — Remix the thread structure with new topic
+POST   /api/analyze/x-thread/:id/respond    — Generate response thread
+POST   /api/analyze/x-thread/:id/quote      — Generate quote tweet reactions
+--- Reddit Analysis ---
+POST   /api/analyze/reddit                  — Analyze any Reddit thread by URL
+POST   /api/analyze/reddit/subreddit        — Analyze trending in a subreddit
+--- Article/Blog Analysis ---
+POST   /api/analyze/article                 — Analyze any article/blog URL
+POST   /api/analyze/article/:id/to-thread   — Convert analyzed article to thread
+POST   /api/analyze/article/:id/respond     — Generate response article
+--- Screenshot Management ---
+POST   /api/screenshots/upload              — Upload screenshots (supports multiple)
+POST   /api/screenshots/extract             — Extract text from uploaded screenshots
+POST   /api/screenshots/reconstruct-thread  — Reconstruct thread from multiple screenshots
+GET    /api/screenshots/:id                 — Get screenshot with extraction result
+--- Style Profiles ---
+GET    /api/styles                          — List saved style profiles
+POST   /api/styles                          — Create/save a style profile
+GET    /api/styles/:id                      — Get style profile details
+DELETE /api/styles/:id                      — Delete style profile
+POST   /api/styles/:id/apply               — Generate content using this style
+--- References (enhanced) ---
+GET    /api/references                      — List all references (with filters: type, platform, bookmarked, date)
+GET    /api/references/:id                  — Get full reference with analysis
+POST   /api/references/:id/create-content   — Generate content from reference (specify action type)
+POST   /api/references/:id/bookmark         — Toggle bookmark
+POST   /api/references/:id/add-note         — Add personal notes
+DELETE /api/references/:id                  — Delete reference
+GET    /api/references/batch/:batch_id      — Get all references in a batch with synthesis
+--- Content Actions (from any analyzed source) ---
+POST   /api/content-actions/my-take         — Generate "my take" on analyzed source
+POST   /api/content-actions/remix           — Remix structure with new topic
+POST   /api/content-actions/one-up          — Create superior version
+POST   /api/content-actions/bridge          — Bridge topic to DevOps/AI niche
+POST   /api/content-actions/opposite        — Create contrarian take
+POST   /api/content-actions/summarize       — Summarize + react in one tweet
+POST   /api/content-actions/debate          — Create respectful debate content
+
+### Updated Sidebar Navigation
+📝 Generate           — Content generation (tweets, threads, articles)
+📅 Calendar           — Content calendar with scheduling
+💡 Ideas              — Personal ideas bank
+🔍 Discover           — Idea Discovery Engine (top 50 trending ideas)
+🔗 Ingest             — Universal Source Ingestion (URLs, accounts, screenshots) ← NEW/EXPANDED
+📚 References         — Analyzed sources library (with style profiles)
+📄 Articles           — Article editor and management
+📋 Templates          — Template library
+📊 Analytics          — Performance dashboard
+⚙️ Settings           — AI Providers, Connected Accounts, Discovery Settings, Preferences
+
+### Ingest Page UI Layout
+┌─────────────────────────────────────────────────────────┐
+│  🔗 Ingest Content                           [Cmd+Shift+I] │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  🌐 Paste URL           📸 Upload Screenshots    │   │
+│  │  ──────────────────    ─────────────────────     │   │
+│  │  [                    ]  [Drop images here or    │   │
+│  │  [  Any URL — we'll  ]  [ paste from clipboard]  │   │
+│  │  [  auto-detect type ]  [                     ]  │   │
+│  │  [                    ]  [  Supports: PNG, JPG, │   │
+│  │                          [  WebP, up to 10 imgs] │   │
+│  │  📝 Paste Text          👤 Analyze X Account     │   │
+│  │  ──────────────────    ─────────────────────     │   │
+│  │  [                    ]  [  @username          ]  │   │
+│  │  [  Paste any content ]  [                     ]  │   │
+│  │  [  directly          ]  [  [Analyze Account]  ]  │   │
+│  │  [                    ]                           │   │
+│  │                                                   │   │
+│  │  📦 Multi-Source (combine multiple sources)       │   │
+│  │  ───────────────────────────────────────────     │   │
+│  │  [+ Add URL] [+ Add Screenshot] [+ Add Text]     │   │
+│  │  Source 1: https://x.com/...     ✅ Analyzed      │   │
+│  │  Source 2: reddit.com/r/...      ✅ Analyzed      │   │
+│  │  Source 3: screenshot.png        ✅ Extracted     │   │
+│  │  [Synthesize All Sources]                         │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+│  ── Recent Ingestions ──────────────────────────────    │
+│  📌 @levelsio account analysis          2 hours ago    │
+│  📌 Reddit: "K8s vs Serverless" thread  yesterday      │
+│  📌 3 screenshots from conf talk        2 days ago     │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+
+
+Quick Summary — What Addendum #2 Adds
+CapabilityDescriptionAny X Account AnalysisPaste any @username → full strategy analysis, style fingerprinting, top tweets, "Write in This Style" cloningAny X Thread AnalysisPaste any thread URL → structure breakdown, engagement curve, 8 content actions (remix, respond, one-up, debate, etc.)Any Reddit ThreadPaste any Reddit URL → opinion mapping, pain point extraction, question mining, content ideasEnhanced URL DetectionAuto-detects 15+ source types (YouTube, GitHub, ArXiv, Substack, LinkedIn, news, docs, podcasts) and routes to specialized handlersScreenshot AnalysisUpload/paste screenshots → vision AI extracts text → multi-screenshot thread reconstruction → standard analysis pipelineMulti-Source SynthesisCombine 2-10 sources on the same topic → AI finds consensus, disagreements, and missing perspectives → generate synthesized contentStyle ProfilesSave writing styles from any analyzed account/content → reuse as generation presetsContent Action System10+ one-click actions: my take, remix, one-up, bridge to niche, opposite take, debate, quote tweet, summarize+react, thread↔article conversionClipboard PasteCmd+V screenshots directly into the app from anywhereBrowser BookmarkletOne-click capture of any web page into ContentForge

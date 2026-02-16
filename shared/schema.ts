@@ -112,13 +112,47 @@ export const references = pgTable("references", {
   id: serial("id").primaryKey(),
   sourceUrl: text("source_url"),
   sourceType: varchar("source_type", { length: 30 }),
+  sourcePlatform: varchar("source_platform", { length: 30 }),
+  sourceAuthorUsername: varchar("source_author_username", { length: 200 }),
+  sourceAuthorDisplayName: varchar("source_author_display_name", { length: 300 }),
+  sourceAuthorFollowerCount: integer("source_author_follower_count"),
   rawContent: text("raw_content"),
+  rawContentHtml: text("raw_content_html"),
+  screenshotUrls: text("screenshot_urls").array(),
   analysisJson: jsonb("analysis_json").notNull().default({}),
-  title: varchar("title", { length: 300 }),
+  styleAnalysisJson: jsonb("style_analysis_json"),
+  title: varchar("title", { length: 500 }),
   author: varchar("author", { length: 200 }),
   sourceEngagementMetrics: jsonb("source_engagement_metrics"),
+  wordCount: integer("word_count"),
   tags: text("tags").array(),
+  pillarId: integer("pillar_id"),
   isBookmarked: boolean("is_bookmarked").default(false),
+  isStyleSaved: boolean("is_style_saved").default(false),
+  notes: text("notes"),
+  batchId: varchar("batch_id", { length: 50 }),
+  batchSynthesisJson: jsonb("batch_synthesis_json"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const styleProfiles = pgTable("style_profiles", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  sourceReferenceId: integer("source_reference_id"),
+  styleJson: jsonb("style_json").notNull().default({}),
+  stylePromptSnippet: text("style_prompt_snippet").notNull(),
+  usageCount: integer("usage_count").default(0),
+  isFavorite: boolean("is_favorite").default(false),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const referenceContent = pgTable("reference_content", {
+  id: serial("id").primaryKey(),
+  referenceId: integer("reference_id"),
+  postId: integer("post_id"),
+  articleId: integer("article_id"),
+  creationAction: varchar("creation_action", { length: 50 }),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
@@ -207,7 +241,9 @@ export const insertTemplateSchema = createInsertSchema(templates).omit({ id: tru
 export const insertAnalyticsSchema = createInsertSchema(analytics).omit({ id: true, recordedAt: true });
 export const insertAiUsageLogSchema = createInsertSchema(aiUsageLog).omit({ id: true, createdAt: true });
 export const insertArticleSchema = createInsertSchema(articles).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertReferenceSchema = createInsertSchema(references).omit({ id: true, createdAt: true });
+export const insertReferenceSchema = createInsertSchema(references).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertStyleProfileSchema = createInsertSchema(styleProfiles).omit({ id: true, createdAt: true });
+export const insertReferenceContentSchema = createInsertSchema(referenceContent).omit({ id: true, createdAt: true });
 export const insertDiscoveredIdeaSchema = createInsertSchema(discoveredIdeas).omit({ id: true, discoveredAt: true });
 export const insertViralScoreSchema = createInsertSchema(viralScores).omit({ id: true, createdAt: true });
 export const insertMonitoredAccountSchema = createInsertSchema(monitoredAccounts).omit({ id: true, createdAt: true });
@@ -233,6 +269,10 @@ export type Article = typeof articles.$inferSelect;
 export type InsertArticle = z.infer<typeof insertArticleSchema>;
 export type Reference = typeof references.$inferSelect;
 export type InsertReference = z.infer<typeof insertReferenceSchema>;
+export type StyleProfile = typeof styleProfiles.$inferSelect;
+export type InsertStyleProfile = z.infer<typeof insertStyleProfileSchema>;
+export type ReferenceContent = typeof referenceContent.$inferSelect;
+export type InsertReferenceContent = z.infer<typeof insertReferenceContentSchema>;
 export type DiscoveredIdea = typeof discoveredIdeas.$inferSelect;
 export type InsertDiscoveredIdea = z.infer<typeof insertDiscoveredIdeaSchema>;
 export type ViralScore = typeof viralScores.$inferSelect;
