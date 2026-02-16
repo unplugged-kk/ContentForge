@@ -89,6 +89,111 @@ export const messages = pgTable("messages", {
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const articles = pgTable("articles", {
+  id: serial("id").primaryKey(),
+  postId: integer("post_id"),
+  title: varchar("title", { length: 200 }).notNull(),
+  subtitle: varchar("subtitle", { length: 300 }),
+  coverImageUrl: text("cover_image_url"),
+  contentJson: jsonb("content_json").notNull().default({}),
+  contentHtml: text("content_html"),
+  contentMarkdown: text("content_markdown"),
+  wordCount: integer("word_count").default(0),
+  estimatedReadMinutes: integer("estimated_read_minutes").default(0),
+  seoDescription: varchar("seo_description", { length: 200 }),
+  articleTemplate: varchar("article_template", { length: 50 }),
+  status: varchar("status", { length: 20 }).default("draft"),
+  pillarId: integer("pillar_id"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const references = pgTable("references", {
+  id: serial("id").primaryKey(),
+  sourceUrl: text("source_url"),
+  sourceType: varchar("source_type", { length: 30 }),
+  rawContent: text("raw_content"),
+  analysisJson: jsonb("analysis_json").notNull().default({}),
+  title: varchar("title", { length: 300 }),
+  author: varchar("author", { length: 200 }),
+  sourceEngagementMetrics: jsonb("source_engagement_metrics"),
+  tags: text("tags").array(),
+  isBookmarked: boolean("is_bookmarked").default(false),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const referencePosts = pgTable("reference_posts", {
+  id: serial("id").primaryKey(),
+  referenceId: integer("reference_id"),
+  postId: integer("post_id"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const discoveredIdeas = pgTable("discovered_ideas", {
+  id: serial("id").primaryKey(),
+  rank: integer("rank"),
+  title: varchar("title", { length: 500 }).notNull(),
+  description: text("description"),
+  sourceInspiration: text("source_inspiration"),
+  sourceUrl: text("source_url"),
+  contentTypeSuggestion: varchar("content_type_suggestion", { length: 30 }),
+  pillarId: integer("pillar_id"),
+  viralScore: decimal("viral_score", { precision: 3, scale: 1 }),
+  viralReasoning: text("viral_reasoning"),
+  valueProposition: text("value_proposition"),
+  uniqueAngle: text("unique_angle"),
+  timeliness: varchar("timeliness", { length: 30 }),
+  targetAudience: text("target_audience"),
+  suggestedHook: text("suggested_hook"),
+  hashtagSuggestions: text("hashtag_suggestions").array(),
+  status: varchar("status", { length: 20 }).default("new"),
+  batchId: varchar("batch_id", { length: 50 }),
+  discoveredAt: timestamp("discovered_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const discoverySettings = pgTable("discovery_settings", {
+  id: serial("id").primaryKey(),
+  autoRefreshFrequency: varchar("auto_refresh_frequency", { length: 20 }).default("daily"),
+  customKeywords: text("custom_keywords").array().default(sql`'{}'::text[]`),
+  monitoredXAccounts: text("monitored_x_accounts").array().default(sql`'{}'::text[]`),
+  enabledSources: jsonb("enabled_sources").default({ hackernews: true, reddit: true, rss: true, github: true }),
+  minViralScore: decimal("min_viral_score", { precision: 3, scale: 1 }).default("5.0"),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const viralScores = pgTable("viral_scores", {
+  id: serial("id").primaryKey(),
+  postId: integer("post_id"),
+  articleId: integer("article_id"),
+  version: integer("version").notNull().default(1),
+  overallScore: decimal("overall_score", { precision: 3, scale: 1 }),
+  dimensionScores: jsonb("dimension_scores"),
+  improvements: jsonb("improvements"),
+  predictedEngagement: jsonb("predicted_engagement"),
+  scoredByModel: varchar("scored_by_model", { length: 100 }),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const monitoredAccounts = pgTable("monitored_accounts", {
+  id: serial("id").primaryKey(),
+  platform: varchar("platform", { length: 20 }).notNull(),
+  username: varchar("username", { length: 100 }).notNull(),
+  displayName: varchar("display_name", { length: 200 }),
+  category: varchar("category", { length: 50 }),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const rssSources = pgTable("rss_sources", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  feedUrl: text("feed_url").notNull(),
+  category: varchar("category", { length: 50 }),
+  isActive: boolean("is_active").default(true),
+  lastFetchedAt: timestamp("last_fetched_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export const insertPillarSchema = createInsertSchema(pillars).omit({ id: true });
 export const insertPostSchema = createInsertSchema(posts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTweetSchema = createInsertSchema(tweets).omit({ id: true });
@@ -96,6 +201,12 @@ export const insertIdeaSchema = createInsertSchema(ideas).omit({ id: true, creat
 export const insertTemplateSchema = createInsertSchema(templates).omit({ id: true });
 export const insertAnalyticsSchema = createInsertSchema(analytics).omit({ id: true, recordedAt: true });
 export const insertAiUsageLogSchema = createInsertSchema(aiUsageLog).omit({ id: true, createdAt: true });
+export const insertArticleSchema = createInsertSchema(articles).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertReferenceSchema = createInsertSchema(references).omit({ id: true, createdAt: true });
+export const insertDiscoveredIdeaSchema = createInsertSchema(discoveredIdeas).omit({ id: true, discoveredAt: true });
+export const insertViralScoreSchema = createInsertSchema(viralScores).omit({ id: true, createdAt: true });
+export const insertMonitoredAccountSchema = createInsertSchema(monitoredAccounts).omit({ id: true, createdAt: true });
+export const insertRssSourceSchema = createInsertSchema(rssSources).omit({ id: true, createdAt: true });
 
 export type Pillar = typeof pillars.$inferSelect;
 export type InsertPillar = z.infer<typeof insertPillarSchema>;
@@ -113,3 +224,16 @@ export type AiUsageLog = typeof aiUsageLog.$inferSelect;
 export type InsertAiUsageLog = z.infer<typeof insertAiUsageLogSchema>;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type Article = typeof articles.$inferSelect;
+export type InsertArticle = z.infer<typeof insertArticleSchema>;
+export type Reference = typeof references.$inferSelect;
+export type InsertReference = z.infer<typeof insertReferenceSchema>;
+export type DiscoveredIdea = typeof discoveredIdeas.$inferSelect;
+export type InsertDiscoveredIdea = z.infer<typeof insertDiscoveredIdeaSchema>;
+export type ViralScore = typeof viralScores.$inferSelect;
+export type InsertViralScore = z.infer<typeof insertViralScoreSchema>;
+export type MonitoredAccount = typeof monitoredAccounts.$inferSelect;
+export type InsertMonitoredAccount = z.infer<typeof insertMonitoredAccountSchema>;
+export type RssSource = typeof rssSources.$inferSelect;
+export type InsertRssSource = z.infer<typeof insertRssSourceSchema>;
+export type DiscoverySettings = typeof discoverySettings.$inferSelect;

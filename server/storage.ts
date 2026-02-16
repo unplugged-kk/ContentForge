@@ -6,10 +6,19 @@ import {
   type Template, type InsertTemplate,
   type Analytics, type InsertAnalytics,
   type AiUsageLog, type InsertAiUsageLog,
+  type Article, type InsertArticle,
+  type Reference, type InsertReference,
+  type DiscoveredIdea, type InsertDiscoveredIdea,
+  type ViralScore, type InsertViralScore,
+  type MonitoredAccount, type InsertMonitoredAccount,
+  type RssSource, type InsertRssSource,
+  type DiscoverySettings,
   pillars, posts, tweets, ideas, templates, analytics, aiUsageLog,
+  articles, references, referencePosts, discoveredIdeas, discoverySettings,
+  viralScores, monitoredAccounts, rssSources,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, and } from "drizzle-orm";
+import { eq, desc, sql, and, gte } from "drizzle-orm";
 
 export interface IStorage {
   getPillars(): Promise<Pillar[]>;
@@ -35,6 +44,36 @@ export interface IStorage {
 
   createAiUsageLog(log: InsertAiUsageLog): Promise<AiUsageLog>;
   getAiUsageLogs(): Promise<AiUsageLog[]>;
+
+  getArticles(): Promise<Article[]>;
+  getArticle(id: number): Promise<Article | undefined>;
+  createArticle(article: InsertArticle): Promise<Article>;
+  updateArticle(id: number, article: Partial<InsertArticle>): Promise<Article | undefined>;
+  deleteArticle(id: number): Promise<void>;
+
+  getReferences(): Promise<Reference[]>;
+  getReference(id: number): Promise<Reference | undefined>;
+  createReference(ref: InsertReference): Promise<Reference>;
+  updateReference(id: number, ref: Partial<InsertReference>): Promise<Reference | undefined>;
+  deleteReference(id: number): Promise<void>;
+
+  getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]>;
+  createDiscoveredIdeas(ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
+  updateDiscoveredIdeaStatus(id: number, status: string): Promise<DiscoveredIdea | undefined>;
+
+  getDiscoverySettings(): Promise<DiscoverySettings>;
+  updateDiscoverySettings(settings: Partial<DiscoverySettings>): Promise<DiscoverySettings>;
+
+  getViralScores(postId?: number, articleId?: number): Promise<ViralScore[]>;
+  createViralScore(score: InsertViralScore): Promise<ViralScore>;
+
+  getMonitoredAccounts(): Promise<MonitoredAccount[]>;
+  createMonitoredAccount(account: InsertMonitoredAccount): Promise<MonitoredAccount>;
+  deleteMonitoredAccount(id: number): Promise<void>;
+
+  getRssSources(): Promise<RssSource[]>;
+  createRssSource(source: InsertRssSource): Promise<RssSource>;
+  deleteRssSource(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -195,6 +234,132 @@ export class DatabaseStorage implements IStorage {
 
   async getAiUsageLogs(): Promise<AiUsageLog[]> {
     return db.select().from(aiUsageLog).orderBy(desc(aiUsageLog.createdAt)).limit(50);
+  }
+
+  async getArticles(): Promise<Article[]> {
+    return db.select().from(articles).orderBy(desc(articles.createdAt));
+  }
+
+  async getArticle(id: number): Promise<Article | undefined> {
+    const [result] = await db.select().from(articles).where(eq(articles.id, id));
+    return result;
+  }
+
+  async createArticle(article: InsertArticle): Promise<Article> {
+    const [result] = await db.insert(articles).values(article).returning();
+    return result;
+  }
+
+  async updateArticle(id: number, article: Partial<InsertArticle>): Promise<Article | undefined> {
+    const [result] = await db.update(articles).set({ ...article, updatedAt: new Date() }).where(eq(articles.id, id)).returning();
+    return result;
+  }
+
+  async deleteArticle(id: number): Promise<void> {
+    await db.delete(articles).where(eq(articles.id, id));
+  }
+
+  async getReferences(): Promise<Reference[]> {
+    return db.select().from(references).orderBy(desc(references.createdAt));
+  }
+
+  async getReference(id: number): Promise<Reference | undefined> {
+    const [result] = await db.select().from(references).where(eq(references.id, id));
+    return result;
+  }
+
+  async createReference(ref: InsertReference): Promise<Reference> {
+    const [result] = await db.insert(references).values(ref).returning();
+    return result;
+  }
+
+  async updateReference(id: number, ref: Partial<InsertReference>): Promise<Reference | undefined> {
+    const [result] = await db.update(references).set(ref).where(eq(references.id, id)).returning();
+    return result;
+  }
+
+  async deleteReference(id: number): Promise<void> {
+    await db.delete(referencePosts).where(eq(referencePosts.referenceId, id));
+    await db.delete(references).where(eq(references.id, id));
+  }
+
+  async getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]> {
+    if (batchId) {
+      return db.select().from(discoveredIdeas).where(eq(discoveredIdeas.batchId, batchId)).orderBy(discoveredIdeas.rank);
+    }
+    return db.select().from(discoveredIdeas).orderBy(desc(discoveredIdeas.discoveredAt), discoveredIdeas.rank).limit(50);
+  }
+
+  async createDiscoveredIdeas(ideaList: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]> {
+    if (ideaList.length === 0) return [];
+    const results: DiscoveredIdea[] = [];
+    for (const idea of ideaList) {
+      const [result] = await db.insert(discoveredIdeas).values(idea).returning();
+      results.push(result);
+    }
+    return results;
+  }
+
+  async updateDiscoveredIdeaStatus(id: number, status: string): Promise<DiscoveredIdea | undefined> {
+    const [result] = await db.update(discoveredIdeas).set({ status }).where(eq(discoveredIdeas.id, id)).returning();
+    return result;
+  }
+
+  async getDiscoverySettings(): Promise<DiscoverySettings> {
+    const [existing] = await db.select().from(discoverySettings).limit(1);
+    if (existing) return existing;
+    const [created] = await db.insert(discoverySettings).values({}).returning();
+    return created;
+  }
+
+  async updateDiscoverySettings(settings: Partial<DiscoverySettings>): Promise<DiscoverySettings> {
+    const existing = await this.getDiscoverySettings();
+    const [result] = await db.update(discoverySettings)
+      .set({ ...settings, updatedAt: new Date() })
+      .where(eq(discoverySettings.id, existing.id))
+      .returning();
+    return result;
+  }
+
+  async getViralScores(postId?: number, articleId?: number): Promise<ViralScore[]> {
+    if (postId) {
+      return db.select().from(viralScores).where(eq(viralScores.postId, postId)).orderBy(viralScores.version);
+    }
+    if (articleId) {
+      return db.select().from(viralScores).where(eq(viralScores.articleId, articleId)).orderBy(viralScores.version);
+    }
+    return db.select().from(viralScores).orderBy(desc(viralScores.createdAt)).limit(20);
+  }
+
+  async createViralScore(score: InsertViralScore): Promise<ViralScore> {
+    const [result] = await db.insert(viralScores).values(score).returning();
+    return result;
+  }
+
+  async getMonitoredAccounts(): Promise<MonitoredAccount[]> {
+    return db.select().from(monitoredAccounts).orderBy(monitoredAccounts.platform, monitoredAccounts.username);
+  }
+
+  async createMonitoredAccount(account: InsertMonitoredAccount): Promise<MonitoredAccount> {
+    const [result] = await db.insert(monitoredAccounts).values(account).returning();
+    return result;
+  }
+
+  async deleteMonitoredAccount(id: number): Promise<void> {
+    await db.delete(monitoredAccounts).where(eq(monitoredAccounts.id, id));
+  }
+
+  async getRssSources(): Promise<RssSource[]> {
+    return db.select().from(rssSources).orderBy(rssSources.name);
+  }
+
+  async createRssSource(source: InsertRssSource): Promise<RssSource> {
+    const [result] = await db.insert(rssSources).values(source).returning();
+    return result;
+  }
+
+  async deleteRssSource(id: number): Promise<void> {
+    await db.delete(rssSources).where(eq(rssSources.id, id));
   }
 }
 

@@ -1,0 +1,626 @@
+
+The Additional Prompt
+## ADDENDUM — Additional Features for ContentForge
+
+These features extend the core ContentForge app. Implement them as part of the same codebase, same Go backend, same React frontend, same database.
+
+---
+
+### Feature A: X Articles (Long-Form Writing)
+
+X (Twitter) supports long-form articles (formerly Twitter Notes) via the X Articles feature. ContentForge must support creating, editing, and publishing these articles.
+
+**What X Articles Are:**
+- Long-form posts on X (up to ~25,000 characters, supports rich text)
+- They appear as article cards in the X timeline with a title, subtitle, cover image, and "Read more" link
+- Published under the user's X account
+- Great for in-depth technical content, tutorials, case studies, opinion pieces
+
+**Article Editor Requirements:**
+- Rich text editor in the frontend (use TipTap, Lexical, or Milkdown for the editor component)
+- Support for:
+  - Headings (H1, H2, H3)
+  - Bold, italic, strikethrough, inline code
+  - Code blocks with syntax highlighting (use Prism.js or Shiki)
+  - Bullet lists and numbered lists
+  - Block quotes
+  - Embedded images (upload to a local /uploads directory, served by Go backend)
+  - Embedded tweets (paste a tweet URL → renders as embed preview)
+  - Horizontal dividers
+  - Links
+- Article metadata fields:
+  - **Title** (required, max 100 chars)
+  - **Subtitle** (optional, max 200 chars)
+  - **Cover image** (upload or generate with AI prompt)
+  - **Content pillar** tag
+  - **Estimated read time** (auto-calculated from word count, ~200 words/min)
+  - **SEO description** (for the article card preview, max 160 chars — AI can auto-generate)
+- Character count and word count displayed live
+- Preview mode showing how the article card will appear in X timeline
+- Article status: Draft → Writing → Ready → Published
+
+**Article-Specific AI Features:**
+- "Generate Article Outline" — given a topic and pillar, AI creates a structured outline with sections
+- "Expand Section" — click on any section heading, AI expands it into 2-4 paragraphs
+- "Generate Full Article" — AI writes a complete 1,500-2,500 word article from a topic + outline
+- "Improve Section" — select text, AI rewrites for clarity, impact, or technical depth
+- "Generate Title & Subtitle" — AI suggests 5 title/subtitle combos optimized for clicks
+- "Generate SEO Description" — auto-generate article card preview text
+- "Article → Thread" — AI distills a full article into a 5-10 tweet thread for cross-promotion
+- "Article → Single Tweet" — AI creates a compelling one-tweet summary with a link to the article
+- "Thread → Article" — AI expands an existing thread into a full long-form article
+
+**X Articles API Integration:**
+- Use X API v2 to publish articles (if the articles endpoint is available in the user's tier)
+- Fallback: If X Articles API is not available, export as formatted Markdown that the user can paste into X's article editor manually
+- Store article content in the database as structured JSON (blocks-based, like Notion or EditorJS format) for flexibility
+- Also store a rendered HTML version for preview
+
+**Article Templates:**
+Provide these pre-built article structures:
+1. **Technical Deep Dive** — "How [Technology] Works Under the Hood" (intro → problem → architecture → implementation → results → takeaways)
+2. **Case Study** — "How We [Achievement] at [Company]" (context → challenge → approach → metrics → lessons)
+3. **Comparison** — "[Tool A] vs [Tool B]: An Honest Breakdown" (intro → criteria → head-to-head → verdict → when to use each)
+4. **Tutorial** — "Step-by-Step: [Building/Setting Up X]" (prerequisites → steps → code examples → troubleshooting → next steps)
+5. **Opinion/Hot Take** — "Why [Controversial Claim] Is Actually Right" (hook → conventional wisdom → contrarian argument → evidence → conclusion)
+6. **Lessons Learned** — "[N] Things I Wish I Knew About [Topic]" (intro → numbered lessons with stories → summary)
+7. **Industry Analysis** — "The State of [Technology/Field] in [Year]" (overview → trends → data → predictions → what to watch)
+8. **Career Story** — "From [Role A] to [Role B]: What Actually Changed" (personal narrative → key transitions → advice)
+
+---
+
+### Feature B: Source Analysis & Style Mirroring Engine
+
+Build a "Reference Analyzer" feature that takes ANY web source as input, deeply analyzes its content, structure, writing style, and engagement patterns, then generates new original content inspired by it.
+
+**How It Works — User Flow:**
+1. User clicks "Create from Reference" (new button in the Generate page, alongside the existing generation form)
+2. User provides one or more of:
+   - **URL** — any web page, X thread, LinkedIn post, blog post, newsletter, Substack article, Medium article, YouTube transcript, GitHub README, HackerNews discussion
+   - **Pasted text** — raw text content (for paywalled content or PDFs)
+   - **Screenshot** — upload an image of a tweet/thread/post (use vision-capable models to extract text)
+3. User selects what they want to create from this reference:
+   - Tweet inspired by this
+   - Thread inspired by this
+   - Article inspired by this
+   - Hot take responding to this
+   - Quote tweet reacting to this
+   - "My take on this" (agree/disagree/add nuance)
+4. App analyzes the source and generates content
+
+**Source Analysis Pipeline (Go Backend):**
+
+Step 1 — **Content Extraction:**
+URL provided → fetch page content:
+
+For general web URLs: use Go HTTP client + goquery (HTML parser) to extract main content, strip nav/ads/sidebar
+For X/Twitter URLs: detect tweet/thread URL pattern → use X API v2 to fetch tweet(s) with full text and engagement metrics
+For LinkedIn URLs: use web scraper or ask user to paste content (LinkedIn blocks bots)
+For YouTube URLs: extract video ID → fetch transcript via YouTube transcript API or yt-dlp
+For GitHub URLs: fetch raw content via GitHub API
+For paywalled sites: prompt user to paste the content manually
+For image/screenshot: send to a vision-capable model (GPT-4o, Claude, Gemini) to extract text via OCR
+
+
+Step 2 — **Deep Analysis (LLM Call):**
+Send the extracted content to the active AI provider with this analysis prompt:
+
+"""
+Analyze the following content thoroughly and return a structured JSON response:
+
+{
+  "summary": "2-3 sentence summary of the core message",
+  "key_points": ["list of 5-10 main arguments or insights"],
+  "writing_style": {
+    "tone": "technical/casual/provocative/storytelling/academic/humorous",
+    "sentence_structure": "short_punchy/long_flowing/mixed",
+    "vocabulary_level": "beginner/intermediate/advanced/expert",
+    "personality_traits": ["confident", "self-deprecating", "data-driven", etc.],
+    "hook_technique": "how they open — question/bold_claim/statistic/story/controversy",
+    "cta_technique": "how they close — question/call_to_action/summary/open_ended"
+  },
+  "engagement_signals": {
+    "why_it_works": "analysis of why this content resonates or could go viral",
+    "emotional_triggers": ["curiosity", "contrarian", "fomo", "relatability", etc.],
+    "structural_patterns": ["numbered list", "before/after", "problem/solution", "story arc", etc.]
+  },
+  "topic_tags": ["list of relevant topics"],
+  "content_type": "thread/article/tweet/post/video_transcript",
+  "estimated_reading_level": "grade level or audience",
+  "data_points": ["any statistics, metrics, or numbers mentioned"],
+  "quotes_worth_referencing": ["notable quotes that could be referenced or responded to"],
+  "gaps_and_angles": ["things the source missed or where Kishore could add unique value based on his DevOps/Infrastructure expertise"]
+}
+"""
+
+Step 3 — **Content Generation:**
+Using the analysis, generate the requested content type with this meta-prompt:
+
+"""
+Based on the following source analysis, create [requested content type] for Kishore Kumar Behera's X/Threads account.
+
+SOURCE ANALYSIS:
+{analysis_json}
+
+INSTRUCTIONS:
+- Create ORIGINAL content inspired by the source — NEVER copy or closely paraphrase
+- Apply the engagement patterns and structural techniques identified in the analysis
+- Add Kishore's unique angle: infrastructure engineering, multi-cloud, Kubernetes, platform engineering perspective
+- If the source is about Data/AI, connect it to DevOps/Infrastructure implications
+- If the source is about DevOps/Infrastructure, connect it to Data/AI trends
+- Mirror the effective style elements (hook technique, sentence structure) but make it authentically Kishore's voice
+- Include specific technical details, tool names, and real-world scenarios to build credibility
+- Optimize for virality: use the emotional triggers and structural patterns identified
+- Generate 3 variations with different angles/hooks
+
+CONTENT REQUIREMENTS:
+[Insert platform-specific requirements: char limits, thread format, article structure, etc.]
+"""
+
+**Source Analysis UI:**
+- URL input field with "Analyze" button
+- While analyzing: show animated skeleton with "Extracting content... Analyzing style... Identifying patterns..."
+- Analysis results displayed in a clean card:
+  - Summary
+  - Style fingerprint (visual tags for tone, structure, hooks)
+  - Engagement pattern badges
+  - "Gaps & Angles" section highlighting where Kishore can add unique value
+- Below the analysis: generation form pre-filled based on context
+- Generated content appears below with the standard 3-variation view
+- "Save Reference" button to store the analysis in a references library for future use
+
+**References Library:**
+- Store analyzed sources in a `references` table
+- Browse past references, filter by topic/date
+- Re-use a past reference's style for new content
+- Track which references led to best-performing posts
+
+---
+
+### Feature C: Idea Discovery Engine ("Find New Ideas")
+
+Build a powerful idea discovery system that actively scans the internet, X, LinkedIn, and tech communities to surface trending topics and high-potential content ideas.
+
+**"Discover Ideas" Page — New Section in Sidebar:**
+
+When the user clicks "Discover Ideas" or hits the "Find New Ideas" button, the app:
+
+1. **Fetches from multiple sources simultaneously** (Go backend goroutines for parallel fetching):
+
+| Source | Method | What to Fetch |
+|--------|--------|--------------|
+| **X/Twitter Trending** | X API v2 `GET /2/tweets/search/recent` | Search queries: "MLOps", "Kubernetes AI", "data engineering", "platform engineering", "DevOps AI", "infrastructure as code", "LLM deployment", "AI agents" — fetch tweets with high engagement (>100 likes) from last 7 days |
+| **X Influential Accounts** | X API v2 `GET /2/users/:id/tweets` | Monitor a curated list of ~30 influential accounts in Data/AI/DevOps space. Fetch their recent high-performing tweets. Pre-configured list: @kelaboratory, @kaboroevich, @iaborovik etc. (user can customize the list in settings) |
+| **LinkedIn Trending** | Web scraping via Go HTTP client or RSS | Fetch trending posts from LinkedIn's public feed for topics: "data engineering", "MLOps", "DevOps", "cloud infrastructure", "AI engineering". Alternatively, integrate with LinkedIn API if user connects their account |
+| **Hacker News** | HN Algolia API (`http://hn.algolia.com/api/v1/search`) | Search for recent stories with keywords: AI, ML, Kubernetes, DevOps, data pipeline, infrastructure, cloud. Sort by points. Fetch top 20 |
+| **Reddit** | Reddit JSON API (`https://www.reddit.com/r/{sub}/top.json?t=week`) | Subreddits: r/MachineLearning, r/dataengineering, r/devops, r/kubernetes, r/mlops, r/ExperiencedDevs. Fetch top weekly posts |
+| **Tech Newsletters/Blogs** | RSS feeds via Go RSS parser (`gofeed`) | The Batch (Andrew Ng), TLDR AI, TLDR DevOps, DevOps Weekly, KubeWeekly, Data Engineering Weekly, The Pragmatic Engineer, ByteByteGo, Last Week in AI |
+| **GitHub Trending** | GitHub API or scrape `https://github.com/trending` | Trending repos in Go, Python, Kubernetes, Terraform, AI/ML categories from last week |
+| **ArXiv (Research Papers)** | ArXiv API | Recent papers in cs.AI, cs.LG, cs.DC (distributed computing) with high social buzz |
+| **Product Hunt** | Product Hunt API or RSS | New AI/DevOps tools launched in the last week |
+| **Google Trends** | Google Trends RSS or SerpAPI | Rising search trends for: "AI infrastructure", "MLOps", "data platform", "Kubernetes AI" |
+
+2. **AI Analysis & Ranking Pipeline:**
+
+After fetching raw data from all sources, send batches to the AI provider with this prompt:
+
+"""
+You are a content strategist for Kishore Kumar Behera, a DevOps/Infrastructure engineering leader building a brand at the intersection of Data & AI and Platform Engineering on X and Threads.
+
+Here are raw trending topics and posts from various sources this week:
+
+{raw_data_json}
+
+Analyze these and return exactly 50 content ideas ranked by viral potential. For each idea, provide:
+
+{
+  "ideas": [
+    {
+      "rank": 1,
+      "title": "Compelling content idea title (this becomes the tweet hook or article title)",
+      "description": "2-3 sentences explaining the angle and why it matters",
+      "source_inspiration": "What trending topic/post inspired this idea",
+      "source_url": "URL of the inspiring source if applicable",
+      "content_type_suggestion": "thread | tweet | article | hot_take | poll",
+      "pillar": "Which of Kishore's 6 content pillars this fits",
+      "viral_score": 8.5,  // 1-10 score
+      "viral_reasoning": "Why this has viral potential — what emotional trigger, timeliness, or controversy drives it",
+      "value_proposition": "What specific value the audience gets — what they'll learn, reconsider, or be able to do",
+      "unique_angle": "How Kishore's DevOps/Infra background makes this take unique vs. what others are saying",
+      "timeliness": "evergreen | trending_now | this_week | time_sensitive",
+      "target_audience": "Who specifically would engage with this — senior engineers, engineering managers, data engineers, etc.",
+      "suggested_hook": "A draft opening line for the post",
+      "hashtag_suggestions": ["2-3 relevant hashtags"]
+    }
+  ]
+}
+
+RANKING CRITERIA (in order of importance):
+1. **Value Density** — Does this teach something actionable, challenge a common belief, or share a non-obvious insight? Content that provides genuine value gets shared more.
+2. **Kishore's Unique Angle** — Can Kishore add a perspective that 95% of other creators can't? His multi-cloud, Kubernetes, platform engineering experience is the differentiator.
+3. **Emotional Trigger** — Does this provoke curiosity, disagreement, "I need to save this", or "I've been thinking this too"? The strongest viral triggers are: contrarian takes, "TIL" moments, relatable frustrations, and surprising data.
+4. **Timeliness** — Is this riding a current wave? Trending topics get more algorithmic boost on X and Threads.
+5. **Discussion Potential** — Will people reply, quote tweet, or debate? Engagement breeds reach.
+6. **Shareability** — Would someone share this to look smart or informed? "Social currency" content goes viral.
+7. **Format Fit** — Does the idea naturally fit a high-performing format (threads, hot takes, before/after, numbered lists)?
+
+CRITICAL RULES FOR VIRAL CONTENT:
+- Every piece of content MUST provide concrete value — no vague motivational fluff
+- Technical content should include specific tool names, version numbers, metrics, or config examples
+- Hot takes must be defensible with real experience, not just controversial for the sake of it
+- Threads should promise a clear payoff in the first tweet ("Here's exactly how...")
+- Reference real tools, real numbers, real scenarios — specificity is what separates viral tech content from generic advice
+- The hook (first line) is 80% of whether someone reads the rest — optimize for scroll-stopping power
+- Content should make the reader feel smarter after reading it
+"""
+
+3. **Display Ideas in a Ranked Feed:**
+
+**UI — Discover Ideas Page:**
+- Top section: "Last refreshed: [timestamp]" + "🔄 Refresh Ideas" button
+- Filter bar: Filter by pillar, content type, timeliness, viral score range
+- Sort options: By viral score (default), by timeliness, by pillar
+- 50 idea cards in a scrollable feed, each showing:
+  - Rank badge (#1, #2, ...)
+  - Title (large, bold)
+  - Description (2-3 lines)
+  - Tags: pillar badge, content type badge, timeliness badge
+  - Viral Score meter (visual bar, color-coded: green >7, yellow 5-7, red <5)
+  - Source attribution (small text: "Inspired by [source]" with link)
+  - Suggested hook preview (italic)
+  - **Action buttons:**
+    - "💡 Save to Ideas Bank" — saves to the ideas table
+    - "✍️ Create Draft" — opens the content generation form pre-filled with this idea
+    - "📝 Write Article" — opens article editor with AI-generated outline for this idea
+    - "🔍 Deep Dive" — runs Source Analysis on the inspiring source URL
+    - "👎 Not Relevant" — dismiss (trains future suggestions)
+
+**Idea Refresh Settings (configurable):**
+- Auto-refresh frequency: daily, twice daily, weekly
+- Source toggle: enable/disable individual sources (e.g., turn off Reddit, keep HN)
+- Custom keywords: add/remove tracking keywords beyond defaults
+- Influencer list: add/remove X accounts to monitor
+- Minimum viral score threshold for display (default: 5)
+
+---
+
+### Feature D: Viral Optimization Engine
+
+Every piece of content generated by ContentForge — whether a tweet, thread, or article — should pass through a viral optimization layer before being marked as "Ready".
+
+**Viral Score System:**
+Every generated post gets a viral score (1-10) with a detailed breakdown. This is calculated by sending the content to the AI provider with this scoring prompt:
+
+"""
+Score this content for viral potential on [X/Threads]. Be brutally honest — most content scores 4-6. Only truly exceptional content gets 8+.
+
+CONTENT:
+{content}
+
+CONTEXT: Posted by Kishore Kumar Behera (DevOps/Infrastructure Engineering Lead, 11+ years, multi-cloud expert)
+
+Score each dimension 1-10 and provide the overall weighted score:
+
+{
+  "overall_score": 7.2,
+  "dimensions": {
+    "hook_power": {
+      "score": 8,
+      "feedback": "Strong curiosity gap, but could be more specific with a number"
+    },
+    "value_density": {
+      "score": 7,
+      "feedback": "Good actionable insight, but add a concrete metric or example"
+    },
+    "emotional_trigger": {
+      "score": 6,
+      "feedback": "Mild curiosity, but lacks the 'I need to share this' factor. Try a more contrarian angle"
+    },
+    "shareability": {
+      "score": 7,
+      "feedback": "People would bookmark this. To get shares, add a surprising stat"
+    },
+    "uniqueness": {
+      "score": 8,
+      "feedback": "The infra perspective on AI is genuinely differentiated"
+    },
+    "readability": {
+      "score": 7,
+      "feedback": "Good flow, but tweet 3 in the thread is too dense. Break it up"
+    },
+    "cta_strength": {
+      "score": 5,
+      "feedback": "Weak ending. Add a question to drive replies, or a bold prediction"
+    },
+    "timeliness": {
+      "score": 6,
+      "feedback": "Relevant but not riding a current news wave. Could tie to [recent event]"
+    }
+  },
+  "weighted_overall": 7.2,  // hook_power and value_density weighted 2x
+  "improvements": [
+    "Rewrite the hook to include a specific number: 'I've deployed 50+ ML models to Kubernetes. Here's the one thing...'",
+    "Add a controversial statement in tweet 2 to drive quote tweets",
+    "End with a question: 'What's your biggest pain point with ML in production?' to boost replies",
+    "Consider splitting tweet 4 into two tweets — too much info per tweet kills engagement"
+  ],
+  "predicted_engagement": {
+    "estimated_impressions": "5K-15K",
+    "estimated_likes": "50-200",
+    "estimated_retweets": "10-50",
+    "estimated_replies": "5-20",
+    "confidence": "medium"
+  }
+}
+"""
+
+**Viral Optimization UI:**
+- After content is generated, show the viral score card alongside the content
+- Visual score meter (think a speedometer or circular progress)
+- Dimension breakdown as expandable accordion
+- Each improvement suggestion has an "Apply Fix" button → AI rewrites that specific part
+- "Optimize" button → AI rewrites the entire content applying all suggestions, regenerates score
+- Iterate until user is satisfied (show score history: "v1: 5.8 → v2: 7.1 → v3: 8.3")
+- Content can only move from "Draft" to "Ready" status (manual override available, but show warning if viral score < 6)
+
+**Value-First Content Principles (embedded in all generation prompts):**
+Add this to the system prompt for ALL content generation calls:
+
+"""
+VIRAL CONTENT PRINCIPLES — Apply these to every piece of content:
+
+1. LEAD WITH VALUE: The first 2 lines must deliver or promise specific, actionable value. "Here's how to cut your Kubernetes costs by 40%" > "Let me tell you about Kubernetes costs"
+
+2. SPECIFICITY WINS: "We reduced MTTR from 45min to 8min using Prometheus alerting rules" > "We improved our monitoring"
+
+3. CONTRARIAN + CREDIBLE: The best-performing tech content challenges conventional wisdom WITH evidence. "Unpopular opinion: You don't need a service mesh for <50 microservices. Here's why..." > "Service meshes are bad"
+
+4. TEACH ONE THING: Every tweet/thread should leave the reader knowing ONE thing they didn't know before. If you can't articulate what they learned, the content isn't ready.
+
+5. STORY > ADVICE: "Last Tuesday, our data pipeline silently dropped 2M records. Here's how we caught it..." > "Always monitor your data pipelines"
+
+6. USE THE READER'S LANGUAGE: Write how engineers talk in Slack, not how they write in documentation. Short sentences. Real frustrations. Actual tool names.
+
+7. NUMBERS ARE HOOKS: "5 things", "40% reduction", "$500K saved", "11 years of lessons" — numbers stop the scroll.
+
+8. END WITH ENGAGEMENT: Every thread/post should end with a question, a call for experiences, or a bold prediction that invites debate.
+
+9. PATTERN INTERRUPT: Start with something unexpected. An admission of failure, a surprising metric, a counterintuitive claim. Never start with "In today's fast-paced world..."
+
+10. THE SAVE TEST: Ask yourself — would someone bookmark this to reference later? If yes, it provides value. If no, it's forgettable.
+"""
+
+---
+
+### Updated Database Tables for New Features
+```sql
+-- Articles (long-form X articles)
+CREATE TABLE articles (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, -- links to the parent post
+  title VARCHAR(200) NOT NULL,
+  subtitle VARCHAR(300),
+  cover_image_url TEXT,
+  content_json JSONB NOT NULL, -- structured blocks (EditorJS format)
+  content_html TEXT, -- rendered HTML for preview
+  content_markdown TEXT, -- export format
+  word_count INTEGER,
+  estimated_read_minutes INTEGER,
+  seo_description VARCHAR(200),
+  article_template VARCHAR(50), -- deep_dive, case_study, comparison, tutorial, etc.
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Source references (analyzed sources)
+CREATE TABLE references (
+  id SERIAL PRIMARY KEY,
+  source_url TEXT,
+  source_type VARCHAR(30), -- x_thread, linkedin_post, blog, newsletter, youtube, github, arxiv, manual_paste
+  raw_content TEXT, -- extracted content
+  analysis_json JSONB NOT NULL, -- full AI analysis output
+  title VARCHAR(300),
+  author VARCHAR(200),
+  source_engagement_metrics JSONB, -- likes, shares, etc. from the source
+  tags TEXT[], -- topic tags
+  is_bookmarked BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Posts generated from references
+CREATE TABLE reference_posts (
+  id SERIAL PRIMARY KEY,
+  reference_id INTEGER REFERENCES references(id),
+  post_id INTEGER REFERENCES posts(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Discovered ideas (from the Idea Discovery Engine)
+CREATE TABLE discovered_ideas (
+  id SERIAL PRIMARY KEY,
+  rank INTEGER,
+  title VARCHAR(500) NOT NULL,
+  description TEXT,
+  source_inspiration TEXT,
+  source_url TEXT,
+  content_type_suggestion VARCHAR(30),
+  pillar_id INTEGER REFERENCES pillars(id),
+  viral_score DECIMAL(3,1),
+  viral_reasoning TEXT,
+  value_proposition TEXT,
+  unique_angle TEXT,
+  timeliness VARCHAR(30),
+  target_audience TEXT,
+  suggested_hook TEXT,
+  hashtag_suggestions TEXT[],
+  status VARCHAR(20) DEFAULT 'new', -- new, saved, drafted, dismissed
+  batch_id VARCHAR(50), -- groups ideas from the same discovery run
+  discovered_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Idea discovery settings
+CREATE TABLE discovery_settings (
+  id SERIAL PRIMARY KEY,
+  auto_refresh_frequency VARCHAR(20) DEFAULT 'daily', -- daily, twice_daily, weekly
+  custom_keywords TEXT[] DEFAULT '{}',
+  monitored_x_accounts TEXT[] DEFAULT '{}', -- list of X usernames to monitor
+  enabled_sources JSONB DEFAULT '{"hackernews": true, "reddit": true, "rss": true, "x_trending": true, "github": true, "arxiv": true, "producthunt": true}',
+  min_viral_score DECIMAL(3,1) DEFAULT 5.0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Viral score history (track optimization iterations)
+CREATE TABLE viral_scores (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL, -- v1, v2, v3...
+  overall_score DECIMAL(3,1),
+  dimension_scores JSONB, -- {hook_power: 8, value_density: 7, ...}
+  improvements JSONB, -- suggested improvements array
+  predicted_engagement JSONB,
+  scored_by_provider VARCHAR(50),
+  scored_by_model VARCHAR(100),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Monitored influencer accounts (for idea discovery)
+CREATE TABLE monitored_accounts (
+  id SERIAL PRIMARY KEY,
+  platform VARCHAR(20) NOT NULL, -- x, linkedin
+  username VARCHAR(100) NOT NULL,
+  display_name VARCHAR(200),
+  platform_user_id VARCHAR(100),
+  category VARCHAR(50), -- data_engineering, mlops, devops, ai_research, platform_engineering, leadership
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RSS feed sources (for idea discovery)
+CREATE TABLE rss_sources (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  feed_url TEXT NOT NULL,
+  category VARCHAR(50),
+  is_active BOOLEAN DEFAULT TRUE,
+  last_fetched_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Updated/New API Endpoints
+--- Articles ---
+POST   /api/articles                      — Create new article
+GET    /api/articles/:id                  — Get article with full content
+PUT    /api/articles/:id                  — Update article content
+POST   /api/articles/:id/generate-outline — AI-generate article outline from topic
+POST   /api/articles/:id/expand-section   — AI-expand a specific section
+POST   /api/articles/:id/generate-full    — AI-generate full article from outline
+POST   /api/articles/:id/improve          — AI-improve selected text
+POST   /api/articles/:id/generate-meta    — AI-generate title, subtitle, SEO description
+POST   /api/articles/:id/to-thread        — Convert article to thread
+POST   /api/articles/:id/to-tweet         — Convert article to single tweet summary
+POST   /api/threads/:id/to-article        — Convert thread to full article
+POST   /api/articles/:id/publish          — Publish article to X
+GET    /api/articles/:id/preview          — Preview article card appearance
+POST   /api/articles/upload-image         — Upload image for article content
+--- Source Analysis ---
+POST   /api/references/analyze            — Analyze a URL or pasted content
+GET    /api/references                    — List all saved references
+GET    /api/references/:id                — Get full reference with analysis
+POST   /api/references/:id/generate       — Generate content from a reference
+DELETE /api/references/:id                — Delete a reference
+POST   /api/references/:id/bookmark       — Toggle bookmark
+POST   /api/references/analyze-screenshot — Upload screenshot for OCR + analysis
+--- Idea Discovery ---
+POST   /api/discover/refresh              — Trigger a fresh idea discovery run
+GET    /api/discover/ideas                — Get latest discovered ideas (with filters)
+PATCH  /api/discover/ideas/:id/status     — Update idea status (save, draft, dismiss)
+POST   /api/discover/ideas/:id/to-draft   — Convert discovered idea to content draft
+POST   /api/discover/ideas/:id/to-article — Convert discovered idea to article outline
+GET    /api/discover/settings             — Get discovery settings
+PUT    /api/discover/settings             — Update discovery settings
+GET    /api/discover/sources              — List all sources (RSS, influencers, subreddits)
+POST   /api/discover/sources/rss          — Add RSS feed
+POST   /api/discover/sources/account      — Add monitored X/LinkedIn account
+DELETE /api/discover/sources/:id          — Remove a source
+--- Viral Optimization ---
+POST   /api/viral/score                   — Score a post's viral potential
+POST   /api/viral/optimize                — AI-optimize content based on score feedback
+POST   /api/viral/apply-fix               — Apply a specific improvement suggestion
+GET    /api/viral/scores/:post_id         — Get viral score history for a post
+
+### Updated Left Sidebar Navigation
+📝 Generate          — Content generation (tweets, threads, articles)
+📅 Calendar          — Content calendar with scheduling
+💡 Ideas             — Personal ideas bank
+🔍 Discover          — Idea Discovery Engine (top 50 trending ideas) ← NEW
+📚 References        — Analyzed sources library ← NEW
+📄 Articles          — Article editor and management ← NEW
+📋 Templates         — Template library
+📊 Analytics         — Performance dashboard
+⚙️ Settings          — AI Providers, Connected Accounts, Discovery Settings, Preferences
+
+### Default Monitored Accounts (Pre-configured — User Can Edit)
+```json
+{
+  "x_accounts": [
+    {"username": "kelseyhightower", "category": "devops"},
+    {"username": "saboroevich", "category": "platform_engineering"},
+    {"username": "taboroevich", "category": "ai_research"},
+    {"username": "chiphuyen", "category": "mlops"},
+    {"username": "kaboroevich", "category": "data_engineering"},
+    {"username": "iamdevloper", "category": "devops"},
+    {"username": "daboroevich", "category": "ai_engineering"},
+    {"username": "GergelyOrosz", "category": "leadership"},
+    {"username": "swaboroevich", "category": "data_engineering"},
+    {"username": "haboroevich", "category": "kubernetes"},
+    {"username": "maboroevich", "category": "mlops"},
+    {"username": "jaboroevich", "category": "cloud"},
+    {"username": "raboroevich", "category": "ai_research"},
+    {"username": "AndrewYNg", "category": "ai_research"},
+    {"username": "karpathy", "category": "ai_research"}
+  ],
+  "note": "Replace placeholder handles with real accounts you follow. The app will let you search and add accounts from the UI."
+}
+```
+
+### Default RSS Feeds (Pre-configured)
+```json
+{
+  "feeds": [
+    {"name": "The Batch (Andrew Ng)", "url": "https://www.deeplearning.ai/the-batch/feed/", "category": "ai"},
+    {"name": "TLDR AI", "url": "https://tldr.tech/ai/rss", "category": "ai"},
+    {"name": "TLDR DevOps", "url": "https://tldr.tech/devops/rss", "category": "devops"},
+    {"name": "DevOps Weekly", "url": "https://devopsweeklyarchive.com/feed/", "category": "devops"},
+    {"name": "KubeWeekly", "url": "https://kubeweekly.io/feed/", "category": "kubernetes"},
+    {"name": "Data Engineering Weekly", "url": "https://www.dataengineeringweekly.com/feed", "category": "data"},
+    {"name": "The Pragmatic Engineer", "url": "https://newsletter.pragmaticengineer.com/feed", "category": "leadership"},
+    {"name": "ByteByteGo", "url": "https://blog.bytebytego.com/feed", "category": "system_design"},
+    {"name": "Last Week in AI", "url": "https://lastweekin.ai/feed", "category": "ai"},
+    {"name": "Hacker News Best", "url": "https://hnrss.org/best?q=AI+OR+kubernetes+OR+devops+OR+mlops", "category": "tech"},
+    {"name": "MIT Technology Review AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed", "category": "ai"},
+    {"name": "Google AI Blog", "url": "https://blog.google/technology/ai/rss/", "category": "ai"},
+    {"name": "OpenAI Blog", "url": "https://openai.com/blog/rss.xml", "category": "ai"},
+    {"name": "Anthropic Research", "url": "https://www.anthropic.com/research/rss.xml", "category": "ai"}
+  ]
+}
+```
+
+---
+
+### Summary of All Post Types Now Supported
+
+| Post Type | Platform | Char Limit | Description |
+|-----------|----------|------------|-------------|
+| Single Tweet | X | 280 | One standalone tweet |
+| Thread | X | 280/tweet, up to 25 tweets | Chain of connected tweets |
+| Article | X | ~25,000 | Long-form rich text with title, cover image |
+| Poll | X | 280 + 4 options × 25 chars | Tweet with poll |
+| Hot Take | X / Threads | 280 / 500 | Bold, contrarian single post |
+| Quote Tweet Template | X | 280 | Template for quoting others' tweets |
+| Single Post | Threads | 500 | One standalone Threads post |
+| Thread (Threads) | Threads | 500/post | Multi-post Threads thread |
+| Cross-Platform | Both | Adapted per platform | Same content adapted for each |
+
+Quick Recap — What This Addendum Adds to v2
+FeatureWhat It DoesX ArticlesRich text editor, article templates, AI outline/expand/full-generate, article ↔ thread conversion, publishing to XSource AnalyzerPaste any URL → deep content + style analysis → generate original content inspired by it with your unique angleIdea DiscoveryScans X, HN, Reddit, RSS, GitHub, ArXiv, Product Hunt → AI ranks top 50 ideas by viral potential → one-click draftViral EngineEvery post scored 1-10 across 8 dimensions, AI improvement suggestions with one-click apply, iterative optimizationValue Principles10 viral content rules baked into every generation prompt ensuring all content teaches, challenges, or inspires
