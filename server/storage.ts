@@ -15,10 +15,11 @@ import {
   type MonitoredAccount, type InsertMonitoredAccount,
   type RssSource, type InsertRssSource,
   type DiscoverySettings,
+  type ConnectedAccount, type InsertConnectedAccount,
   pillars, posts, tweets, ideas, templates, analytics, aiUsageLog,
   articles, references, referencePosts, referenceContent, styleProfiles,
   discoveredIdeas, discoverySettings,
-  viralScores, monitoredAccounts, rssSources,
+  viralScores, monitoredAccounts, rssSources, connectedAccounts,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, gte } from "drizzle-orm";
@@ -87,6 +88,11 @@ export interface IStorage {
   getRssSources(): Promise<RssSource[]>;
   createRssSource(source: InsertRssSource): Promise<RssSource>;
   deleteRssSource(id: number): Promise<void>;
+
+  getConnectedAccounts(): Promise<ConnectedAccount[]>;
+  getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined>;
+  upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount>;
+  deleteConnectedAccount(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -410,6 +416,29 @@ export class DatabaseStorage implements IStorage {
 
   async deleteRssSource(id: number): Promise<void> {
     await db.delete(rssSources).where(eq(rssSources.id, id));
+  }
+
+  async getConnectedAccounts(): Promise<ConnectedAccount[]> {
+    return db.select().from(connectedAccounts).orderBy(connectedAccounts.platform);
+  }
+
+  async getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined> {
+    const [result] = await db.select().from(connectedAccounts).where(eq(connectedAccounts.platform, platform));
+    return result;
+  }
+
+  async upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount> {
+    const existing = await this.getConnectedAccount(account.platform);
+    if (existing) {
+      const [result] = await db.update(connectedAccounts).set(account).where(eq(connectedAccounts.id, existing.id)).returning();
+      return result;
+    }
+    const [result] = await db.insert(connectedAccounts).values(account).returning();
+    return result;
+  }
+
+  async deleteConnectedAccount(id: number): Promise<void> {
+    await db.delete(connectedAccounts).where(eq(connectedAccounts.id, id));
   }
 }
 

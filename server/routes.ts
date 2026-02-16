@@ -1336,6 +1336,113 @@ Each tweet under ${charLimit} characters.` },
     res.json({ bookmarklet, instructions: "Drag this to your bookmarks bar to capture any page into ContentForge." });
   });
 
+  // ==================== CONNECTED ACCOUNTS ====================
+
+  app.get("/api/accounts", async (_req, res) => {
+    try {
+      const accounts = await storage.getConnectedAccounts();
+      const safeAccounts = accounts.map((a) => ({
+        ...a,
+        accessToken: a.accessToken ? "••••••" + a.accessToken.slice(-4) : null,
+        refreshToken: undefined,
+      }));
+      res.json(safeAccounts);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/accounts/connect", async (req, res) => {
+    try {
+      const { platform, username, accessToken } = req.body;
+      if (!platform || !accessToken) return res.status(400).json({ message: "Platform and access token are required." });
+
+      if (platform === "x") {
+        try {
+          const verifyRes = await fetch("https://api.twitter.com/2/users/me", {
+            headers: { "Authorization": `Bearer ${accessToken}` },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (verifyRes.ok) {
+            const userData = await verifyRes.json() as any;
+            const account = await storage.upsertConnectedAccount({
+              platform: "x",
+              username: userData.data?.username || username || "unknown",
+              displayName: userData.data?.name || username,
+              accessToken,
+              isActive: true,
+              profileData: userData.data || {},
+            });
+            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+          } else {
+            const account = await storage.upsertConnectedAccount({
+              platform: "x",
+              username: username || "pending_verification",
+              accessToken,
+              isActive: true,
+            });
+            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but could not verify with X API. Posting may not work until token is verified." });
+          }
+        } catch (e) {
+          const account = await storage.upsertConnectedAccount({
+            platform: "x",
+            username: username || "pending_verification",
+            accessToken,
+            isActive: true,
+          });
+          return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but verification request failed. Check your network." });
+        }
+      }
+
+      if (platform === "threads") {
+        const account = await storage.upsertConnectedAccount({
+          platform: "threads",
+          username: username || "pending",
+          accessToken,
+          isActive: true,
+        });
+        return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+      }
+
+      return res.status(400).json({ message: `Unknown platform: ${platform}` });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/accounts/:id", async (req, res) => {
+    try {
+      await storage.deleteConnectedAccount(parseInt(req.params.id));
+      res.status(204).send();
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/accounts/:id/test", async (req, res) => {
+    try {
+      const accounts = await storage.getConnectedAccounts();
+      const account = accounts.find((a) => a.id === parseInt(req.params.id));
+      if (!account) return res.status(404).json({ message: "Account not found" });
+
+      if (account.platform === "x" && account.accessToken) {
+        try {
+          const testRes = await fetch("https://api.twitter.com/2/users/me", {
+            headers: { "Authorization": `Bearer ${account.accessToken}` },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (testRes.ok) {
+            const data = await testRes.json() as any;
+            return res.json({ success: true, username: data.data?.username, name: data.data?.name });
+          }
+          return res.json({ success: false, error: "Token rejected by X API. Please reconnect." });
+        } catch (e) {
+          return res.json({ success: false, error: "Could not reach X API." });
+        }
+      }
+
+      if (account.platform === "threads") {
+        return res.json({ success: true, note: "Threads API verification is limited. Token stored." });
+      }
+
+      return res.json({ success: false, error: "Unknown platform" });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   // ==================== IDEA DISCOVERY ====================
   app.get("/api/discover/ideas", async (req, res) => {
     try {

@@ -282,3 +282,21 @@ export type InsertMonitoredAccount = z.infer<typeof insertMonitoredAccountSchema
 export type RssSource = typeof rssSources.$inferSelect;
 export type InsertRssSource = z.infer<typeof insertRssSourceSchema>;
 export type DiscoverySettings = typeof discoverySettings.$inferSelect;
+
+export const connectedAccounts = pgTable("connected_accounts", {
+  id: serial("id").primaryKey(),
+  platform: varchar("platform", { length: 30 }).notNull(),
+  username: varchar("username", { length: 200 }),
+  displayName: varchar("display_name", { length: 300 }),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  isActive: boolean("is_active").default(true),
+  profileData: jsonb("profile_data"),
+  connectedAt: timestamp("connected_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+});
+
+export const insertConnectedAccountSchema = createInsertSchema(connectedAccounts).omit({ id: true, connectedAt: true });
+export type ConnectedAccount = typeof connectedAccounts.$inferSelect;
+export type InsertConnectedAccount = z.infer<typeof insertConnectedAccountSchema>;
