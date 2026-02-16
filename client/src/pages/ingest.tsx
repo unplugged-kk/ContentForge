@@ -13,9 +13,10 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Globe, FileText, User, Image, Loader2, ExternalLink, Bookmark, BookmarkCheck,
   Trash2, Wand2, ArrowRight, MessageSquare, Repeat2, Zap, Scale, Swords,
-  Save, Star, Copy, Upload, Link2
+  Save, Star, Copy, Upload, Link2, Calendar, Eye, Edit3, CheckCircle2
 } from "lucide-react";
-import type { Reference, StyleProfile } from "@shared/schema";
+import { useLocation } from "wouter";
+import type { Reference, StyleProfile, Post } from "@shared/schema";
 
 const ACTION_LABELS: Record<string, { label: string; icon: any; description: string }> = {
   "my-take": { label: "My Take", icon: MessageSquare, description: "Share Kishore's perspective" },
@@ -57,9 +58,12 @@ export default function IngestPage() {
   const [showStyleSaveDialog, setShowStyleSaveDialog] = useState(false);
   const [styleName, setStyleName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [, navigate] = useLocation();
 
   const { data: references = [], isLoading: refsLoading } = useQuery<Reference[]>({ queryKey: ["/api/references"] });
   const { data: styles = [] } = useQuery<StyleProfile[]>({ queryKey: ["/api/styles"] });
+  const { data: allPosts = [] } = useQuery<Post[]>({ queryKey: ["/api/posts"] });
+  const drafts = allPosts.filter((p) => p.status === "draft").sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()).slice(0, 6);
 
   const ingestMutation = useMutation({
     mutationFn: async (data: { url?: string; text?: string; xUsername?: string }) => {
@@ -183,7 +187,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
-      toast({ title: "Draft saved" });
+      toast({ title: "Draft saved!", description: "Your draft appears in the Saved Drafts section below and on the Calendar page." });
     },
   });
 
@@ -536,6 +540,44 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {drafts.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <h2 className="text-lg font-semibold" data-testid="text-saved-drafts">Saved Drafts</h2>
+            <Button variant="outline" size="sm" onClick={() => navigate("/calendar")} data-testid="button-view-all-drafts">
+              <Calendar className="h-3 w-3 mr-1" /> View All on Calendar
+            </Button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {drafts.map((draft) => {
+              const tweets = (draft as any).tweets as any[] | undefined;
+              const firstTweet = Array.isArray(tweets) && tweets.length > 0 ? tweets[0] : null;
+              const preview = firstTweet?.content || "(empty draft)";
+              return (
+                <Card key={draft.id} className="hover-elevate cursor-pointer" onClick={() => navigate("/calendar")} data-testid={`card-draft-${draft.id}`}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Badge variant="outline" className="text-[10px]">
+                        {draft.postType === "thread" ? "Thread" : "Tweet"}
+                      </Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        <CheckCircle2 className="h-2 w-2 mr-0.5" /> Draft
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm line-clamp-3">{preview}</p>
+                    {Array.isArray(tweets) && tweets.length > 1 && (
+                      <p className="text-[10px] text-muted-foreground mt-1">+{tweets.length - 1} more tweets in thread</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
         </div>
       )}
 

@@ -991,10 +991,14 @@ Return JSON:
     }
   });
 
-  // Keep legacy endpoint as alias
   app.post("/api/references/analyze", async (req, res) => {
-    req.url = "/api/ingest";
-    app.handle(req, res);
+    try {
+      const ingestRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req.body) });
+      const data = await ingestRes.json();
+      res.status(ingestRes.status).json(data);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   // ==================== BATCH INGEST ====================
@@ -1009,27 +1013,19 @@ Return JSON:
       const results: any[] = [];
       const analysisTexts: string[] = [];
 
+      const port = process.env.PORT || 5000;
       for (const src of sources) {
         try {
-          const fakeRes: any = {
-            json: (data: any) => { results.push(data); analysisTexts.push(JSON.stringify(data.analysisJson || {})); },
-            status: (code: number) => ({ json: (data: any) => { results.push({ error: data.message, source: src }); }, send: () => {} }),
-          };
-          const fakeReq: any = { body: src, url: "/api/ingest" };
-          await new Promise<void>((resolve) => {
-            const origJson = fakeRes.json;
-            fakeRes.json = (data: any) => { origJson(data); resolve(); };
-            const origStatus = fakeRes.status;
-            fakeRes.status = (code: number) => {
-              const s = origStatus(code);
-              const origSJson = s.json;
-              s.json = (data: any) => { origSJson(data); resolve(); };
-              return s;
-            };
-            app.handle(fakeReq, fakeRes);
-          });
-        } catch (e) {
-          results.push({ error: "Failed to process source", source: src });
+          const ingestRes = await fetch(`http://localhost:${port}/api/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(src) });
+          const data = await ingestRes.json();
+          if (ingestRes.ok && data.id) {
+            results.push(data);
+            analysisTexts.push(JSON.stringify(data.analysisJson || {}));
+          } else {
+            results.push({ error: data.message || "Unknown error", source: src });
+          }
+        } catch (e: any) {
+          results.push({ error: e.message || "Failed to process source", source: src });
         }
       }
 
