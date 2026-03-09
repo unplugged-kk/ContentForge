@@ -1,0 +1,75 @@
+You are working on ContentForge, a full-stack TypeScript web application for creating and scheduling social media content about Data & AI topics.
+
+## Tech Stack
+- Frontend: React 18 + TypeScript + Tailwind CSS 3 + shadcn/ui (Radix primitives)
+- Backend: Express.js 5 (Node.js)
+- Database: PostgreSQL with Drizzle ORM 0.39
+- AI: OpenAI gpt-4o-mini via Replit AI Integrations
+- Routing: wouter 3.3 (frontend), Express (backend)
+- State: TanStack React Query v5
+- Rich Text: TipTap 3
+- Charts: Recharts 2
+
+## Architecture
+Monolithic client-server app. Express serves both API routes (/api/*) and the Vite-built React frontend on port 5000.
+
+Key files:
+- `shared/schema.ts` — ALL data types (Drizzle schema + Zod insert schemas + TS types)
+- `server/routes.ts` — ALL API endpoints (~1867 lines)
+- `server/storage.ts` — IStorage interface + DatabaseStorage implementation
+- `server/db.ts` — PostgreSQL connection
+- `client/src/App.tsx` — Root component with routing and sidebar layout
+- `client/src/lib/queryClient.ts` — TanStack Query config and apiRequest helper
+- `client/src/lib/constants.ts` — Content pillars, post types, tones, platforms
+
+## Critical Rules
+
+### Data Model
+- Define ALL types in `shared/schema.ts` using Drizzle ORM
+- Export insert schemas via `createInsertSchema(table).omit({ id: true, createdAt: true })`
+- Export select types via `typeof table.$inferSelect`
+- Use `text().array()` for array columns (NOT `array(text())`)
+- NEVER change primary key column types (serial ↔ varchar)
+
+### Backend
+- Validate ALL request bodies with Zod before passing to storage
+- Keep routes thin — business logic goes in storage methods
+- Every AI call must use `aiCall()` helper and be followed by `logAiUsage()`
+- Use `safeJsonParse()` for AI JSON responses
+- Token/secrets: NEVER return unmasked tokens in API responses
+
+### Frontend
+- TanStack Query v5 object form only: `useQuery({ queryKey: ['/api/posts'] })`
+- Default queryFn is configured — queries don't need their own fetch function
+- Mutations use `apiRequest(method, url, data)` then `queryClient.invalidateQueries()`
+- Forms use `react-hook-form` + `zodResolver` + shadcn Form component
+- No explicit React import (Vite JSX transform)
+- Use `import.meta.env.VITE_*` for frontend env vars
+- Add `data-testid` to all interactive and meaningful display elements
+
+### Styling
+- Tailwind utility classes with shadcn/ui components
+- Dark mode via CSS variables — always provide light/dark variants
+- Icons: `lucide-react` for actions, `react-icons/si` for brand logos
+- Colors use HSL format in CSS vars: `--my-var: 23 10% 23%`
+
+### Storage Pattern
+```typescript
+// 1. Add method to IStorage interface
+// 2. Implement in DatabaseStorage class
+// 3. Use in routes via `storage.methodName()`
+```
+
+### Do NOT Modify
+- `vite.config.ts`, `server/vite.ts`, `drizzle.config.ts` — pre-configured
+- `package.json` scripts — ask before changing
+- Primary key column types in schema
+
+### After Schema Changes
+Run `npm run db:push` to sync with database.
+
+## Content Domain
+6 content pillars: Data Infrastructure & MLOps, AI for DevOps/AIOps, Cloud-Native Data Platforms, Infrastructure as Code for Data, Career & Leadership, Hot Takes & Trends.
+Post types: tweet, thread, hot_take, poll, quote_template.
+Statuses: draft, ready, scheduled, posted, failed.
+Platforms: x, threads, both.
