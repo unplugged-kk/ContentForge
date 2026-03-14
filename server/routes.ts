@@ -11,6 +11,8 @@ import Parser from "rss-parser";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
+import passport from "passport";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -1872,8 +1874,58 @@ Return ONLY the improved content text. Keep the same format and length constrain
   });
 
   // ── AUTH ROUTES ──────────────────────────────────────────────────────────────
-  const { hashPassword, comparePassword, getUserByEmail, getUserById, createUser } = await import("./auth");
+  const { hashPassword, comparePassword, getUserByEmail, getUserById, createUser, findOrCreateGoogleUser } = await import("./auth");
   const { users: usersTable, userProfile } = await import("@shared/schema");
+
+  // ── GOOGLE OAUTH ──────────────────────────────────────────────────────────────
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const googleEnabled = !!(googleClientId && googleClientSecret);
+
+  if (googleEnabled) {
+    const callbackURL = process.env.GOOGLE_CALLBACK_URL ||
+      (process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}/api/auth/google/callback`
+        : "http://localhost:5000/api/auth/google/callback");
+
+    passport.use(new GoogleStrategy(
+      { clientID: googleClientId!, clientSecret: googleClientSecret!, callbackURL },
+      async (_accessToken, _refreshToken, profile, done) => {
+        try {
+          const email = profile.emails?.[0]?.value || null;
+          const avatar = profile.photos?.[0]?.value || null;
+          const user = await findOrCreateGoogleUser(profile.id, email, profile.displayName, avatar);
+          done(null, user);
+        } catch (err) { done(err); }
+      }
+    ));
+    passport.serializeUser((user: any, done) => done(null, user.id));
+    passport.deserializeUser(async (id: number, done) => {
+      try { done(null, await getUserById(id)); } catch (e) { done(e); }
+    });
+
+    app.use(passport.initialize());
+
+    app.get("/api/auth/google",
+      passport.authenticate("google", { scope: ["profile", "email"], session: false })
+    );
+
+    app.get("/api/auth/google/callback",
+      passport.authenticate("google", { failureRedirect: "/?error=google_auth_failed", session: false }),
+      (req: any, res) => {
+        if (req.user) {
+          req.session.userId = req.user.id;
+          req.session.save(() => res.redirect("/"));
+        } else {
+          res.redirect("/?error=google_auth_failed");
+        }
+      }
+    );
+  }
+
+  app.get("/api/auth/config", (_req, res) => {
+    res.json({ googleEnabled });
+  });
 
   app.post("/api/auth/register", async (req, res) => {
     try {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Sparkles, Loader2, Mail, Lock, User, ArrowRight } from "lucide-react";
+import { SiGoogle } from "react-icons/si";
 
 export default function AuthPage() {
   const { toast } = useToast();
@@ -15,6 +16,13 @@ export default function AuthPage() {
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
+
+  const { data: authConfig } = useQuery<{ googleEnabled: boolean }>({
+    queryKey: ["/api/auth/config"],
+    retry: false,
+  });
+
+  const googleEnabled = authConfig?.googleEnabled ?? false;
 
   const loginMutation = useMutation({
     mutationFn: async ({ email, password }: { email: string; password: string }) => {
@@ -45,6 +53,10 @@ export default function AuthPage() {
     },
   });
 
+  const handleGoogleSignIn = () => {
+    window.location.href = "/api/auth/google";
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-muted/30 to-background p-4">
       <div className="w-full max-w-md space-y-6">
@@ -59,6 +71,25 @@ export default function AuthPage() {
         </div>
 
         <Card className="p-6 shadow-lg border-border/50">
+          {googleEnabled && (
+            <div className="mb-5">
+              <Button
+                variant="outline"
+                className="w-full gap-2 font-medium"
+                onClick={handleGoogleSignIn}
+                data-testid="button-google-signin"
+              >
+                <SiGoogle className="h-4 w-4 text-[#4285F4]" />
+                Continue with Google
+              </Button>
+              <div className="flex items-center gap-3 mt-4">
+                <div className="flex-1 border-t border-border" />
+                <span className="text-xs text-muted-foreground">or continue with email</span>
+                <div className="flex-1 border-t border-border" />
+              </div>
+            </div>
+          )}
+
           <Tabs defaultValue="login">
             <TabsList className="w-full">
               <TabsTrigger value="login" className="flex-1" data-testid="tab-login">Sign In</TabsTrigger>
@@ -103,7 +134,7 @@ export default function AuthPage() {
                 data-testid="button-login-submit"
               >
                 {loginMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ArrowRight className="h-4 w-4 mr-2" />}
-                Sign In
+                Sign In with Email
               </Button>
             </TabsContent>
 
@@ -163,7 +194,7 @@ export default function AuthPage() {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground">
-          Your personal content creation workspace for Data & AI thought leadership on X and Threads.
+          Your personal content creation workspace for Data & AI thought leadership.
         </p>
       </div>
     </div>

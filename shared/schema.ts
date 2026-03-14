@@ -285,8 +285,9 @@ export type DiscoverySettings = typeof discoverySettings.$inferSelect;
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  email: varchar("email", { length: 255 }).notNull().unique(),
+  email: varchar("email", { length: 255 }).unique(),
   passwordHash: text("password_hash"),
+  googleId: varchar("google_id", { length: 255 }).unique(),
   name: varchar("name", { length: 200 }),
   avatar: text("avatar"),
   bio: text("bio"),
