@@ -351,3 +351,36 @@ export const connectedAccounts = pgTable("connected_accounts", {
 export const insertConnectedAccountSchema = createInsertSchema(connectedAccounts).omit({ id: true, connectedAt: true });
 export type ConnectedAccount = typeof connectedAccounts.$inferSelect;
 export type InsertConnectedAccount = z.infer<typeof insertConnectedAccountSchema>;
+
+// ── CONTEXT VAULT ─────────────────────────────────────────────────────────────
+export const contextVault = pgTable("context_vault", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 300 }).notNull(),
+  content: text("content").notNull(),
+  category: varchar("category", { length: 100 }),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  sourceUrl: text("source_url"),
+  sourceType: varchar("source_type", { length: 50 }),
+  isFavorite: boolean("is_favorite").default(false),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertContextVaultSchema = createInsertSchema(contextVault).omit({ id: true, createdAt: true });
+export type ContextVaultItem = typeof contextVault.$inferSelect;
+export type InsertContextVaultItem = z.infer<typeof insertContextVaultSchema>;
+
+// ── CAROUSELS ─────────────────────────────────────────────────────────────────
+export const carousels = pgTable("carousels", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 300 }).notNull(),
+  pillarId: integer("pillar_id"),
+  slides: jsonb("slides").default([]),
+  status: varchar("status", { length: 50 }).default("draft"),
+  platform: varchar("platform", { length: 30 }).default("linkedin"),
+  backgroundStyle: varchar("background_style", { length: 50 }).default("gradient-blue"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertCarouselSchema = createInsertSchema(carousels).omit({ id: true, createdAt: true });
+export type Carousel = typeof carousels.$inferSelect;
+export type InsertCarousel = z.infer<typeof insertCarouselSchema>;

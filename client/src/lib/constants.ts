@@ -13,6 +13,8 @@ export const POST_TYPES = [
   { value: "hot_take", label: "Hot Take" },
   { value: "poll", label: "Poll" },
   { value: "quote_template", label: "Quote Tweet" },
+  { value: "linkedin_post", label: "LinkedIn Post" },
+  { value: "carousel", label: "Carousel" },
 ] as const;
 
 export const TONES = [
@@ -26,7 +28,8 @@ export const TONES = [
 export const PLATFORMS = [
   { value: "x", label: "X (Twitter)" },
   { value: "threads", label: "Threads" },
-  { value: "both", label: "Both" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "both", label: "X + Threads" },
 ] as const;
 
 export const POST_STATUSES = [
@@ -40,4 +43,14 @@ export const POST_STATUSES = [
 export const CHAR_LIMITS = {
   x: 280,
   threads: 500,
+  linkedin: 3000,
 } as const;
+
+export const CAROUSEL_BACKGROUNDS = [
+  { value: "gradient-blue", label: "Ocean Blue", from: "#1e3a5f", to: "#2d6a9f" },
+  { value: "gradient-purple", label: "Royal Purple", from: "#3b1f6b", to: "#6d3fc0" },
+  { value: "gradient-green", label: "Forest Green", from: "#1a3d2b", to: "#2d7a50" },
+  { value: "gradient-orange", label: "Sunset", from: "#7c2d12", to: "#ea580c" },
+  { value: "gradient-dark", label: "Dark Pro", from: "#0f172a", to: "#1e293b" },
+  { value: "gradient-warm", label: "Warm Sand", from: "#78350f", to: "#d97706" },
+] as const;

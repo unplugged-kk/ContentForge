@@ -20,6 +20,10 @@ import DiscoverPage from "@/pages/discover";
 import IngestPage from "@/pages/ingest";
 import ImageGenPage from "@/pages/imagegen";
 import AuthPage from "@/pages/auth";
+import VaultPage from "@/pages/vault";
+import HooksPage from "@/pages/hooks";
+import CarouselPage from "@/pages/carousel";
+import ChatPage from "@/pages/chat";
 import { QuickCapture } from "@/components/quick-capture";
 
 function Router() {
@@ -36,6 +40,10 @@ function Router() {
       <Route path="/discover" component={DiscoverPage} />
       <Route path="/ingest" component={IngestPage} />
       <Route path="/images" component={ImageGenPage} />
+      <Route path="/vault" component={VaultPage} />
+      <Route path="/hooks" component={HooksPage} />
+      <Route path="/carousel" component={CarouselPage} />
+      <Route path="/chat" component={ChatPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -67,7 +75,7 @@ function AppShell() {
   return (
     <SidebarProvider style={sidebarStyle as React.CSSProperties}>
       <div className="flex h-screen w-full">
-        <AppSidebar user={user} />
+        <AppSidebar user={user as any} />
         <div className="flex flex-col flex-1 min-w-0">
           <header className="flex items-center justify-between gap-2 px-2 py-1.5 border-b bg-background sticky top-0 z-50">
             <SidebarTrigger data-testid="button-sidebar-toggle" />

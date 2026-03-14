@@ -53,6 +53,15 @@ Writing style:
 - For Threads: Stay within 500 characters per individual post
 - Never use hashtags inside post body`;
 
+const CONTENT_PILLARS_DATA = [
+  { id: 1, name: "Data Infrastructure & MLOps" },
+  { id: 2, name: "AI for DevOps / AIOps" },
+  { id: 3, name: "Cloud-Native Data Platforms" },
+  { id: 4, name: "Infrastructure as Code for Data" },
+  { id: 5, name: "Career & Leadership" },
+  { id: 6, name: "Hot Takes & Trends" },
+];
+
 function safeJsonParse(str: string): any {
   try {
     return JSON.parse(str);
@@ -2117,6 +2126,327 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       await logAiUsage(usage, latency, "smart_scheduling");
       const parsed = safeJsonParse(content);
       res.json(parsed || { suggestions: [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── CONTEXT VAULT ────────────────────────────────────────────────────────────
+  const { contextVault: vaultTable, carousels: carouselsTable } = await import("@shared/schema");
+
+  app.get("/api/vault", async (req, res) => {
+    try {
+      const items = await db.select().from(vaultTable).orderBy(desc(vaultTable.createdAt));
+      res.json(items);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/vault", async (req, res) => {
+    try {
+      const { title, content, category, tags, sourceUrl, sourceType } = req.body;
+      if (!title || !content) return res.status(400).json({ message: "Title and content are required" });
+      const [item] = await db.insert(vaultTable).values({ title, content, category, tags, sourceUrl, sourceType }).returning();
+      res.json(item);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/vault/extract-url", async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) return res.status(400).json({ message: "URL is required" });
+      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      $("script, style, nav, footer, header").remove();
+      const title = $("title").text().trim() || $("h1").first().text().trim() || "Extracted Content";
+      const content = $("article, main, .content, .post-content, .entry-content").text() || $("body").text();
+      const cleaned = content.replace(/\s+/g, " ").trim().substring(0, 5000);
+      const { content: summary, usage, latency } = await aiCall([
+        { role: "system", content: "Summarize this web content concisely, capturing the key insights and facts. Focus on the most important points for a Data & AI professional. Return a clean, well-structured summary." },
+        { role: "user", content: `URL: ${url}\n\nTitle: ${title}\n\nContent:\n${cleaned}` },
+      ]);
+      await logAiUsage(usage, latency, "vault_extract_url");
+      res.json({ title: title.substring(0, 300), summary: summary.trim(), rawContent: cleaned, url });
+    } catch (err: any) {
+      console.error("URL extract error:", err);
+      res.status(500).json({ message: `Failed to extract URL: ${err.message}` });
+    }
+  });
+
+  app.post("/api/vault/extract-image", async (req, res) => {
+    try {
+      const { imageBase64, mimeType = "image/jpeg" } = req.body;
+      if (!imageBase64) return res.status(400).json({ message: "Image data required" });
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "user",
+          content: [{
+            type: "text",
+            text: "Analyze this image and extract all text, key information, insights, and any important visual content. Structure your response as a detailed summary that captures everything useful from the image. Include any statistics, quotes, diagrams described, or key points visible."
+          }, {
+            type: "image_url",
+            image_url: { url: `data:${mimeType};base64,${imageBase64}` }
+          }]
+        }],
+        max_tokens: 1000,
+      });
+      const extracted = response.choices[0]?.message?.content || "";
+      res.json({ content: extracted, title: "Extracted from Image" });
+    } catch (err: any) {
+      console.error("Image extract error:", err);
+      res.status(500).json({ message: `Failed to analyze image: ${err.message}` });
+    }
+  });
+
+  app.post("/api/vault/:id/favorite", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [current] = await db.select().from(vaultTable).where(eq(vaultTable.id, id));
+      if (!current) return res.status(404).json({ message: "Not found" });
+      const [updated] = await db.update(vaultTable).set({ isFavorite: !current.isFavorite }).where(eq(vaultTable.id, id)).returning();
+      res.json(updated);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/vault/:id", async (req, res) => {
+    try {
+      await db.delete(vaultTable).where(eq(vaultTable.id, parseInt(req.params.id)));
+      res.status(204).end();
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── YOUTUBE TO POST ───────────────────────────────────────────────────────────
+  app.post("/api/youtube/extract", async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) return res.status(400).json({ message: "YouTube URL is required" });
+      const videoIdMatch = url.match(/(?:v=|youtu\.be\/|\/embed\/)([a-zA-Z0-9_-]{11})/);
+      if (!videoIdMatch) return res.status(400).json({ message: "Invalid YouTube URL" });
+      const videoId = videoIdMatch[1];
+      const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+      const oembedRes = await fetch(oembedUrl);
+      const oembed = oembedRes.ok ? await oembedRes.json() : {};
+      const title = (oembed as any).title || "YouTube Video";
+      const author = (oembed as any).author_name || "";
+      const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+      res.json({ videoId, title, author, thumbnailUrl, url: `https://www.youtube.com/watch?v=${videoId}` });
+    } catch (err: any) {
+      res.status(500).json({ message: `Failed to extract YouTube info: ${err.message}` });
+    }
+  });
+
+  app.post("/api/youtube/generate-post", async (req, res) => {
+    try {
+      const { videoId, title, author, pillarId, platform = "x", tone = "educational", postType = "thread" } = req.body;
+      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === pillarId);
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `Create a ${postType} for ${platform === "x" ? "X (Twitter)" : platform} based on this YouTube video.
+
+Video Title: "${title}"
+Channel: ${author}
+Video URL: https://www.youtube.com/watch?v=${videoId}
+${pillar ? `Content Pillar: ${pillar.name}` : ""}
+Tone: ${tone}
+
+Generate a compelling social media post that:
+1. References insights from the video (use your knowledge of the topic based on the title)
+2. Provides YOUR unique perspective as a Data & AI infrastructure expert
+3. Adds commentary, agrees/disagrees, or builds on the topic
+4. Ends with a call to action to watch the video
+5. If it's a thread, create 3-5 tweets
+
+Format as a thread with tweets separated by "---"` },
+      ]);
+      await logAiUsage(usage, latency, "youtube_to_post");
+      const tweets = content.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content);
+      res.json({ tweets, model: "gpt-4o-mini" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── GENERATE FROM SOURCES (images + URLs + combined) ─────────────────────────
+  app.post("/api/generate/from-sources", async (req, res) => {
+    try {
+      const { sources = [], pillarId, postType = "thread", tone = "educational", platform = "x", instructions = "" } = req.body;
+      if (!sources.length) return res.status(400).json({ message: "At least one source is required" });
+      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === parseInt(pillarId || "0"));
+      let combinedContext = "";
+      for (const source of sources) {
+        if (source.type === "text") {
+          combinedContext += `\n\n[Source: Text]\n${source.content}`;
+        } else if (source.type === "url" && source.content) {
+          combinedContext += `\n\n[Source: ${source.url || "URL"}]\n${source.content}`;
+        } else if (source.type === "image" && source.content) {
+          combinedContext += `\n\n[Source: Image Analysis]\n${source.content}`;
+        } else if (source.type === "vault" && source.content) {
+          combinedContext += `\n\n[Vault: ${source.title || "Context"}]\n${source.content}`;
+        }
+      }
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `Create 3 variations of a ${postType} for ${platform === "x" ? "X (Twitter)" : platform === "linkedin" ? "LinkedIn" : "Threads"} based on the following source material.
+
+${pillar ? `Content Pillar: ${pillar.name}` : ""}
+Tone: ${tone}
+${instructions ? `Special instructions: ${instructions}` : ""}
+
+SOURCE MATERIAL:
+${combinedContext}
+
+Important: Transform this information into YOUR unique perspective as a Data & AI infrastructure expert named Kishore Kumar Behera. Don't just summarize — add insight, commentary, and actionable takeaways.
+
+For each variation, use "---VARIATION---" as separator. For threads, separate tweets with "---".` },
+      ]);
+      await logAiUsage(usage, latency, "generate_from_sources");
+      const variationTexts = content.split("---VARIATION---").filter((v: string) => v.trim());
+      const variations = variationTexts.map((v: string) => ({
+        tweets: v.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content)
+      }));
+      res.json({ variations: variations.length ? variations : [{ tweets: [{ content: content.trim(), charCount: content.trim().length }] }], model: "gpt-4o-mini" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── HOOK GENERATOR ────────────────────────────────────────────────────────────
+  app.post("/api/hooks/generate", async (req, res) => {
+    try {
+      const { topic, pillarId, count = 8, includeViralScore = true } = req.body;
+      if (!topic) return res.status(400).json({ message: "Topic is required" });
+      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === parseInt(pillarId || "0"));
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are an expert social media hook writer specializing in Data & AI, Infrastructure, and Tech content. You understand viral psychology and what makes technical professionals stop scrolling." },
+        { role: "user", content: `Generate ${count} powerful hooks/openers for this topic: "${topic}"
+${pillar ? `Content Pillar: ${pillar.name}` : ""}
+
+Hook types to include:
+- Contrarian/Hot take ("Everyone says X, but...")
+- Stat-based ("X% of companies...")
+- Story opener ("I made a $500k mistake...")
+- Question hook ("What if you could...")
+- List hook ("5 things nobody tells you about...")
+- Confession ("I used to think X...")
+- Bold claim ("X is dead. Here's what's next:")
+- FOMO ("Most engineers don't know this...")
+
+${includeViralScore ? "For each hook, rate its viral potential (1-10) and explain why." : ""}
+
+Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why": "..." }] }` },
+      ], true);
+      await logAiUsage(usage, latency, "hook_generate");
+      const parsed = safeJsonParse(content);
+      res.json(parsed || { hooks: [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── CAROUSEL BUILDER ──────────────────────────────────────────────────────────
+  app.get("/api/carousels", async (req, res) => {
+    try {
+      const items = await db.select().from(carouselsTable).orderBy(desc(carouselsTable.createdAt));
+      res.json(items);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/carousels", async (req, res) => {
+    try {
+      const { title, pillarId, slides, platform, backgroundStyle } = req.body;
+      if (!title) return res.status(400).json({ message: "Title is required" });
+      const [item] = await db.insert(carouselsTable).values({ title, pillarId: pillarId || null, slides: slides || [], platform, backgroundStyle }).returning();
+      res.json(item);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/carousels/:id", async (req, res) => {
+    try {
+      const { title, slides, status, backgroundStyle, platform, pillarId } = req.body;
+      const [updated] = await db.update(carouselsTable).set({ title, slides, status, backgroundStyle, platform, pillarId: pillarId || null }).where(eq(carouselsTable.id, parseInt(req.params.id))).returning();
+      res.json(updated);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/carousels/:id", async (req, res) => {
+    try {
+      await db.delete(carouselsTable).where(eq(carouselsTable.id, parseInt(req.params.id)));
+      res.status(204).end();
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/carousels/generate", async (req, res) => {
+    try {
+      const { topic, pillarId, slideCount = 8, tone = "educational" } = req.body;
+      if (!topic) return res.status(400).json({ message: "Topic is required" });
+      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === parseInt(pillarId || "0"));
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are an expert LinkedIn carousel creator for Data & AI professionals. You create highly engaging, visually-structured carousel posts that get saves and shares." },
+        { role: "user", content: `Create a ${slideCount}-slide LinkedIn carousel about: "${topic}"
+${pillar ? `Content Pillar: ${pillar.name}` : ""}
+Tone: ${tone}
+
+Carousel Structure:
+- Slide 1: Cover/Hook (title + compelling subtitle)
+- Slides 2-${slideCount - 1}: Content slides (1 key point each, max 3 bullet points)
+- Slide ${slideCount}: Call to action (follow, save, comment)
+
+Return JSON: { 
+  "title": "Carousel title",
+  "slides": [
+    { "slideNumber": 1, "type": "cover", "heading": "...", "subheading": "...", "emoji": "🚀" },
+    { "slideNumber": 2, "type": "content", "heading": "...", "bullets": ["...", "..."], "emoji": "💡" },
+    { "slideNumber": ${slideCount}, "type": "cta", "heading": "...", "body": "...", "cta": "..." }
+  ]
+}` },
+      ], true);
+      await logAiUsage(usage, latency, "carousel_generate");
+      const parsed = safeJsonParse(content);
+      res.json(parsed || { title: topic, slides: [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── CHAT → POST ───────────────────────────────────────────────────────────────
+  app.post("/api/chat/message", async (req, res) => {
+    try {
+      const { messages, pillarId, platform = "x", postType = "tweet" } = req.body;
+      if (!messages?.length) return res.status(400).json({ message: "Messages are required" });
+      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === parseInt(pillarId || "0"));
+      const systemPrompt = `${SYSTEM_PROMPT}
+
+You are also a collaborative content creation assistant. Help the user refine their ideas through conversation. 
+When they're ready to generate a post, produce it in the format specified.
+${pillar ? `Current content pillar: ${pillar.name}` : ""}
+Target platform: ${platform === "x" ? "X (Twitter)" : platform === "linkedin" ? "LinkedIn" : "Threads"}
+Post type: ${postType}
+
+If the user asks to generate a post or says something like "write this", "create a post", "generate", or "make it a tweet/thread/post", produce the final post content ready to publish. Mark the final post with [POST_START] and [POST_END] tags.`;
+      const aiMessages = [
+        { role: "system" as const, content: systemPrompt },
+        ...messages.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      ];
+      const { content, usage, latency } = await aiCall(aiMessages);
+      await logAiUsage(usage, latency, "chat_message");
+      const postMatch = content.match(/\[POST_START\]([\s\S]*?)\[POST_END\]/);
+      const postContent = postMatch ? postMatch[1].trim() : null;
+      const displayContent = postMatch ? content.replace(/\[POST_START\][\s\S]*?\[POST_END\]/, "").trim() : content;
+      res.json({ content: displayContent, postContent, hasPost: !!postContent });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/chat/refine-post", async (req, res) => {
+    try {
+      const { postContent, instruction, platform = "x" } = req.body;
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `Refine this social media post based on the instruction.
+
+CURRENT POST:
+${postContent}
+
+INSTRUCTION: ${instruction}
+
+Return only the refined post content, no explanation.` },
+      ]);
+      await logAiUsage(usage, latency, "chat_refine");
+      res.json({ content: content.trim() });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

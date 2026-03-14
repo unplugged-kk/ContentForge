@@ -1,4 +1,4 @@
-import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Zap, Globe, Image, LogOut, User } from "lucide-react";
+import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -19,6 +19,9 @@ import { useToast } from "@/hooks/use-toast";
 
 const createItems = [
   { title: "Generate", url: "/", icon: Sparkles },
+  { title: "Chat → Post", url: "/chat", icon: MessageSquare },
+  { title: "Hook Generator", url: "/hooks", icon: Zap },
+  { title: "Carousel Builder", url: "/carousel", icon: LayoutGrid },
   { title: "AI Images", url: "/images", icon: Image },
   { title: "Articles", url: "/articles", icon: FileText },
   { title: "Templates", url: "/templates", icon: LayoutTemplate },
@@ -27,6 +30,7 @@ const createItems = [
 const discoverItems = [
   { title: "Ingest", url: "/ingest", icon: Globe },
   { title: "Discover", url: "/discover", icon: Compass },
+  { title: "Context Vault", url: "/vault", icon: Database },
   { title: "References", url: "/references", icon: Search },
   { title: "Ideas", url: "/ideas", icon: Lightbulb },
 ];
@@ -51,7 +55,7 @@ function NavGroup({ label, items }: { label: string; items: typeof createItems }
             return (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton asChild isActive={isActive}>
-                  <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase().replace(" ", "-")}`}>
+                  <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-")}`}>
                     <item.icon className="h-4 w-4" />
                     <span>{item.title}</span>
                   </Link>
@@ -107,12 +111,12 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
       </SidebarHeader>
       <SidebarContent>
         <NavGroup label="Create" items={createItems} />
-        <NavGroup label="Discover" items={discoverItems} />
+        <NavGroup label="Research" items={discoverItems} />
         <NavGroup label="Manage" items={manageItems} />
       </SidebarContent>
       <SidebarFooter className="p-3 border-t">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-primary shrink-0">
+          <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-primary shrink-0 overflow-hidden">
             {user?.avatar
               ? <img src={user.avatar} alt={user.name} className="h-8 w-8 rounded-full object-cover" />
               : initials}

@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
+import { SiX, SiThreads, SiLinkedin } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
 
@@ -71,6 +71,7 @@ export default function SettingsPage() {
 
   const xAccount = accounts.find((a) => a.platform === "x");
   const threadsAccount = accounts.find((a) => a.platform === "threads");
+  const linkedinAccount = accounts.find((a) => a.platform === "linkedin");
 
   const connectMutation = useMutation({
     mutationFn: async ({ platform, username, accessToken }: { platform: string; username: string; accessToken: string }) => {
@@ -283,6 +284,15 @@ export default function SettingsPage() {
                   account={threadsAccount}
                   helpUrl="https://developers.facebook.com/docs/threads/"
                   helpText="You need an access token from Meta's Threads API. Create a Meta app, add the Threads product, and generate a long-lived access token."
+                />
+                <AccountCard
+                  platform="linkedin"
+                  label="LinkedIn"
+                  description="Connect to publish posts and carousels to LinkedIn"
+                  icon={SiLinkedin}
+                  account={linkedinAccount}
+                  helpUrl="https://www.linkedin.com/developers/apps"
+                  helpText="You need an OAuth access token from the LinkedIn Developer Portal. Create an app, add the Share on LinkedIn product, and generate a token with w_member_social scope."
                 />
               </>
             )}
