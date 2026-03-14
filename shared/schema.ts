@@ -283,6 +283,57 @@ export type RssSource = typeof rssSources.$inferSelect;
 export type InsertRssSource = z.infer<typeof insertRssSourceSchema>;
 export type DiscoverySettings = typeof discoverySettings.$inferSelect;
 
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
+  passwordHash: text("password_hash"),
+  name: varchar("name", { length: 200 }),
+  avatar: text("avatar"),
+  bio: text("bio"),
+  title: varchar("title", { length: 200 }),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const userProfile = pgTable("user_profile", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  brandVoice: text("brand_voice"),
+  writingStyleNotes: text("writing_style_notes"),
+  audienceDescription: text("audience_description"),
+  contentGoals: text("content_goals"),
+  niche: varchar("niche", { length: 200 }),
+  targetPlatforms: text("target_platforms").array().default(sql`'{}'::text[]`),
+  postingFrequency: varchar("posting_frequency", { length: 50 }),
+  memoryJson: jsonb("memory_json").default({}),
+  brandingJson: jsonb("branding_json").default({}),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const generatedImages = pgTable("generated_images", {
+  id: serial("id").primaryKey(),
+  prompt: text("prompt").notNull(),
+  revisedPrompt: text("revised_prompt"),
+  imageUrl: text("image_url").notNull(),
+  style: varchar("style", { length: 50 }),
+  aspectRatio: varchar("aspect_ratio", { length: 20 }),
+  pillarId: integer("pillar_id"),
+  postId: integer("post_id"),
+  isFavorite: boolean("is_favorite").default(false),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertUserProfileSchema = createInsertSchema(userProfile).omit({ id: true, updatedAt: true });
+export const insertGeneratedImageSchema = createInsertSchema(generatedImages).omit({ id: true, createdAt: true });
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type UserProfile = typeof userProfile.$inferSelect;
+export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
+export type GeneratedImage = typeof generatedImages.$inferSelect;
+export type InsertGeneratedImage = z.infer<typeof insertGeneratedImageSchema>;
+
 export const connectedAccounts = pgTable("connected_accounts", {
   id: serial("id").primaryKey(),
   platform: varchar("platform", { length: 30 }).notNull(),

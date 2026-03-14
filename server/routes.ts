@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { discoveredIdeas } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
@@ -1860,6 +1860,284 @@ Return ONLY the improved content text. Keep the same format and length constrain
   app.get("/api/viral/scores/:postId", async (req, res) => {
     try { res.json(await storage.getViralScores(parseInt(req.params.postId))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── AUTH ROUTES ──────────────────────────────────────────────────────────────
+  const { hashPassword, comparePassword, getUserByEmail, getUserById, createUser } = await import("./auth");
+  const { users: usersTable, userProfile } = await import("@shared/schema");
+
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const { email, password, name } = req.body;
+      if (!email || !password || !name) return res.status(400).json({ message: "Email, password, and name are required" });
+      if (password.length < 6) return res.status(400).json({ message: "Password must be at least 6 characters" });
+      const existing = await getUserByEmail(email);
+      if (existing) return res.status(409).json({ message: "An account with that email already exists" });
+      const user = await createUser(email, password, name);
+      req.session.userId = user.id;
+      res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title });
+    } catch (err: any) {
+      console.error("Register error:", err);
+      res.status(500).json({ message: "Registration failed" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
+      const user = await getUserByEmail(email);
+      if (!user || !user.passwordHash) return res.status(401).json({ message: "Invalid email or password" });
+      const valid = await comparePassword(password, user.passwordHash);
+      if (!valid) return res.status(401).json({ message: "Invalid email or password" });
+      req.session.userId = user.id;
+      res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
+    } catch (err: any) {
+      console.error("Login error:", err);
+      res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy(() => {});
+    res.json({ success: true });
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    try {
+      if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
+      const user = await getUserById(req.session.userId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/auth/me", async (req, res) => {
+    try {
+      if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
+      const { name, title, bio, avatar } = req.body;
+      const [updated] = await db.update(usersTable)
+        .set({ name, title, bio, avatar, updatedAt: new Date() })
+        .where(eq(usersTable.id, req.session.userId!))
+        .returning();
+      res.json({ id: updated.id, email: updated.email, name: updated.name, avatar: updated.avatar, title: updated.title, bio: updated.bio });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── PROFILE / MEMORY / BRANDING ──────────────────────────────────────────────
+  app.get("/api/profile/memory", async (req, res) => {
+    try {
+      const userId = req.session?.userId || 1;
+      const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      res.json(profile || {});
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/profile/memory", async (req, res) => {
+    try {
+      const userId = req.session?.userId || 1;
+      const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency } = req.body;
+      const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      let result;
+      if (existing) {
+        [result] = await db.update(userProfile)
+          .set({ brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, updatedAt: new Date() })
+          .where(eq(userProfile.userId, userId))
+          .returning();
+      } else {
+        [result] = await db.insert(userProfile)
+          .values({ userId, brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency })
+          .returning();
+      }
+      res.json(result);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.get("/api/profile/branding", async (req, res) => {
+    try {
+      const userId = req.session?.userId || 1;
+      const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      res.json((profile?.brandingJson as any) || {});
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/profile/branding", async (req, res) => {
+    try {
+      const userId = req.session?.userId || 1;
+      const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      let result;
+      if (existing) {
+        [result] = await db.update(userProfile)
+          .set({ brandingJson: req.body, updatedAt: new Date() })
+          .where(eq(userProfile.userId, userId))
+          .returning();
+      } else {
+        [result] = await db.insert(userProfile)
+          .values({ userId, brandingJson: req.body })
+          .returning();
+      }
+      res.json(result.brandingJson);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/profile/memory/ai-learn", async (req, res) => {
+    try {
+      const userId = req.session?.userId || 1;
+      const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      const posts = await storage.getPosts();
+      const recentContent = posts.slice(0, 10).flatMap(p => p.tweets.map(t => t.content)).join("\n");
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are an expert personal branding analyst. Analyze the content and extract key patterns about the writer's style, voice, and approach." },
+        { role: "user", content: `Analyze these recent social media posts and extract a detailed personal brand profile:\n\n${recentContent}\n\nReturn JSON: { "brandVoice": "...", "writingStyleNotes": "...", "contentPatterns": ["..."], "topTopics": ["..."], "toneWords": ["..."], "uniqueStrengths": ["..."] }` },
+      ], true);
+      await logAiUsage(usage, latency, "memory_ai_learn");
+      const learned = safeJsonParse(content);
+      const currentMemory = (profile?.memoryJson as any) || {};
+      const updatedMemory = { ...currentMemory, ...learned, lastLearned: new Date().toISOString() };
+      const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
+      let result;
+      if (existing) {
+        [result] = await db.update(userProfile).set({ memoryJson: updatedMemory, brandVoice: learned.brandVoice || existing.brandVoice, updatedAt: new Date() }).where(eq(userProfile.userId, userId)).returning();
+      } else {
+        [result] = await db.insert(userProfile).values({ userId, memoryJson: updatedMemory, brandVoice: learned.brandVoice }).returning();
+      }
+      res.json({ learned, profile: result });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── AI IMAGE GENERATION ───────────────────────────────────────────────────────
+  const { generatedImages } = await import("@shared/schema");
+
+  app.get("/api/images", async (req, res) => {
+    try {
+      const images = await db.select().from(generatedImages).orderBy(desc(generatedImages.createdAt));
+      res.json(images);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/images/generate", async (req, res) => {
+    try {
+      const { prompt, style = "professional", aspectRatio = "1:1", pillarId, postId, enhancePrompt = true } = req.body;
+      if (!prompt) return res.status(400).json({ message: "Prompt is required" });
+
+      let finalPrompt = prompt;
+      if (enhancePrompt) {
+        const styleGuides: Record<string, string> = {
+          professional: "clean, professional, corporate, high-quality photography or illustration",
+          minimal: "minimalist, clean lines, white space, modern design",
+          technical: "technical diagram, infographic style, data visualization, clean and precise",
+          bold: "bold typography, strong contrast, impactful visual, attention-grabbing",
+          warm: "warm colors, approachable, human-centered, relatable photography",
+        };
+        const styleGuide = styleGuides[style] || styleGuides.professional;
+        const sizeMap: Record<string, string> = { "1:1": "1024x1024", "16:9": "1792x1024", "9:16": "1024x1792" };
+        const size = sizeMap[aspectRatio] || "1024x1024";
+
+        finalPrompt = `${prompt}. Style: ${styleGuide}. No text overlays. No watermarks. No people's faces unless specifically requested. Professional content creation context.`;
+
+        const response = await openai.images.generate({
+          model: "dall-e-3",
+          prompt: finalPrompt,
+          n: 1,
+          size: size as any,
+          quality: "standard",
+        });
+
+        const imageUrl = response.data[0]?.url || "";
+        const revisedPrompt = response.data[0]?.revised_prompt || finalPrompt;
+
+        const [saved] = await db.insert(generatedImages).values({
+          prompt,
+          revisedPrompt,
+          imageUrl,
+          style,
+          aspectRatio,
+          pillarId: pillarId ? parseInt(pillarId) : null,
+          postId: postId ? parseInt(postId) : null,
+        }).returning();
+
+        res.json(saved);
+      }
+    } catch (err: any) {
+      console.error("Image generation error:", err);
+      res.status(500).json({ message: err.message || "Image generation failed" });
+    }
+  });
+
+  app.post("/api/images/:id/favorite", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [current] = await db.select().from(generatedImages).where(eq(generatedImages.id, id));
+      if (!current) return res.status(404).json({ message: "Image not found" });
+      const [updated] = await db.update(generatedImages).set({ isFavorite: !current.isFavorite }).where(eq(generatedImages.id, id)).returning();
+      res.json(updated);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/images/:id", async (req, res) => {
+    try {
+      await db.delete(generatedImages).where(eq(generatedImages.id, parseInt(req.params.id)));
+      res.status(204).end();
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/images/generate-for-post", async (req, res) => {
+    try {
+      const { postId, style = "professional" } = req.body;
+      if (!postId) return res.status(400).json({ message: "postId required" });
+      const post = await storage.getPost(parseInt(postId));
+      if (!post) return res.status(404).json({ message: "Post not found" });
+      const content = post.tweets.map(t => t.content).join(" ");
+      const { content: promptSuggestion, usage, latency } = await aiCall([
+        { role: "system", content: "Generate a concise image generation prompt for a social media post image. The image should complement and enhance the post content. Return just the prompt text, no explanation." },
+        { role: "user", content: `Post content:\n${content}\n\nGenerate a social media image prompt (max 100 words) that visually represents this post's key message.` },
+      ]);
+      await logAiUsage(usage, latency, "image_prompt_for_post");
+      res.json({ suggestedPrompt: promptSuggestion.trim() });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── SMART SCHEDULING ─────────────────────────────────────────────────────────
+  app.post("/api/schedule/suggest", async (req, res) => {
+    try {
+      const { platform = "x", contentType = "thread", timezone = "UTC", count = 5 } = req.body;
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are a social media scheduling expert. Suggest optimal posting times based on platform best practices, audience behavior research, and content type." },
+        { role: "user", content: `Suggest ${count} optimal posting times for the next 7 days for a Data & AI professional on ${platform === "x" ? "X (Twitter)" : "Threads"}.
+Content type: ${contentType}
+Target audience: Infrastructure engineers, data scientists, tech leaders
+Timezone: ${timezone}
+
+Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason": "...", "expectedEngagement": "high|medium|low", "audienceActivity": "..." }] }` },
+      ], true);
+      await logAiUsage(usage, latency, "smart_scheduling");
+      const parsed = safeJsonParse(content);
+      res.json(parsed || { suggestions: [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.get("/api/schedule/best-times", async (req, res) => {
+    const bestTimes = {
+      x: [
+        { day: "Tuesday", times: ["9:00 AM", "12:00 PM", "5:00 PM"], engagement: "highest" },
+        { day: "Wednesday", times: ["8:00 AM", "1:00 PM", "5:00 PM"], engagement: "high" },
+        { day: "Thursday", times: ["9:00 AM", "12:00 PM", "6:00 PM"], engagement: "high" },
+        { day: "Monday", times: ["10:00 AM", "2:00 PM"], engagement: "medium" },
+        { day: "Friday", times: ["9:00 AM", "11:00 AM"], engagement: "medium" },
+      ],
+      threads: [
+        { day: "Wednesday", times: ["7:00 AM", "11:00 AM", "7:00 PM"], engagement: "highest" },
+        { day: "Thursday", times: ["8:00 AM", "12:00 PM", "8:00 PM"], engagement: "high" },
+        { day: "Tuesday", times: ["9:00 AM", "1:00 PM"], engagement: "high" },
+        { day: "Monday", times: ["8:00 AM", "6:00 PM"], engagement: "medium" },
+        { day: "Friday", times: ["10:00 AM", "2:00 PM"], engagement: "medium" },
+      ],
+    };
+    res.json(bestTimes);
   });
 
   return httpServer;

@@ -4,19 +4,25 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { CONTENT_PILLARS, POST_STATUSES } from "@/lib/constants";
-import { ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon } from "lucide-react";
+import { CONTENT_PILLARS } from "@/lib/constants";
+import { ChevronLeft, ChevronRight, Clock, Sparkles, Loader2, TrendingUp, X } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek } from "date-fns";
 import type { Post, Tweet } from "@shared/schema";
 
 interface PostWithTweets extends Post {
   tweets: Tweet[];
+}
+
+interface BestTimeSlot {
+  day: string;
+  times: string[];
+  engagement: string;
 }
 
 function PlatformBadge({ platform }: { platform: string }) {
@@ -37,9 +43,16 @@ export default function CalendarPage() {
   const [selectedPost, setSelectedPost] = useState<PostWithTweets | null>(null);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
+  const [showBestTimes, setShowBestTimes] = useState(false);
+  const [bestTimesPlatform, setBestTimesPlatform] = useState<"x" | "threads">("x");
 
   const { data: posts = [], isLoading } = useQuery<PostWithTweets[]>({
     queryKey: ["/api/posts"],
+  });
+
+  const { data: bestTimes, isLoading: bestTimesLoading } = useQuery<{ x: BestTimeSlot[]; threads: BestTimeSlot[] }>({
+    queryKey: ["/api/schedule/best-times"],
+    enabled: showBestTimes,
   });
 
   const scheduleMutation = useMutation({
@@ -85,6 +98,14 @@ export default function CalendarPage() {
     }
   };
 
+  const engagementColor = (level: string) => {
+    if (level === "highest") return "text-green-500";
+    if (level === "high") return "text-blue-500";
+    return "text-muted-foreground";
+  };
+
+  const currentBestTimes = bestTimes?.[bestTimesPlatform] || [];
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between p-4 border-b">
@@ -93,6 +114,16 @@ export default function CalendarPage() {
           <p className="text-xs text-muted-foreground">Plan and schedule your content</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowBestTimes(!showBestTimes)}
+            className="gap-1.5"
+            data-testid="button-best-times"
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+            Best Times
+          </Button>
           <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} data-testid="button-prev-month">
             <ChevronLeft className="h-4 w-4" />
           </Button>
@@ -104,6 +135,67 @@ export default function CalendarPage() {
           </Button>
         </div>
       </div>
+
+      {showBestTimes && (
+        <div className="border-b bg-muted/20 p-3" data-testid="panel-best-times">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Best Times to Post</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setBestTimesPlatform("x")}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "x" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+                  data-testid="button-best-times-x"
+                >
+                  <SiX className="h-3 w-3" /> X
+                </button>
+                <button
+                  onClick={() => setBestTimesPlatform("threads")}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "threads" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+                  data-testid="button-best-times-threads"
+                >
+                  <SiThreads className="h-3 w-3" /> Threads
+                </button>
+              </div>
+            </div>
+            <button onClick={() => setShowBestTimes(false)} className="text-muted-foreground hover:text-foreground">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {bestTimesLoading ? (
+            <div className="flex gap-2">
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-32" />)}
+            </div>
+          ) : (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {currentBestTimes.map((slot, i) => (
+                <div key={i} className="flex-shrink-0 bg-card border rounded-md p-2 min-w-[120px]">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium">{slot.day}</span>
+                    <span className={`text-[10px] font-medium capitalize ${engagementColor(slot.engagement)}`}>{slot.engagement}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {slot.times.map((t, j) => (
+                      <button
+                        key={j}
+                        onClick={() => {
+                          const [h, m] = t.split(":").length > 1 ? t.split(":") : t.replace(" AM", "").replace(" PM", "").split(":");
+                          setScheduleTime(t.includes("PM") && parseInt(h) !== 12 ? `${parseInt(h) + 12}:${m || "00"}` : `${h.padStart(2, "0")}:${m || "00"}`);
+                          toast({ title: `Time set to ${t} ${slot.day}` });
+                        }}
+                        className="text-[10px] bg-muted hover:bg-primary/10 hover:text-primary px-1.5 py-0.5 rounded transition-colors"
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-4">
         {isLoading ? (

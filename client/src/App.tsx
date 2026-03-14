@@ -1,6 +1,6 @@
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -18,6 +18,8 @@ import ArticlesPage from "@/pages/articles";
 import ReferencesPage from "@/pages/references";
 import DiscoverPage from "@/pages/discover";
 import IngestPage from "@/pages/ingest";
+import ImageGenPage from "@/pages/imagegen";
+import AuthPage from "@/pages/auth";
 import { QuickCapture } from "@/components/quick-capture";
 
 function Router() {
@@ -33,6 +35,7 @@ function Router() {
       <Route path="/references" component={ReferencesPage} />
       <Route path="/discover" component={DiscoverPage} />
       <Route path="/ingest" component={IngestPage} />
+      <Route path="/images" component={ImageGenPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -43,26 +46,49 @@ const sidebarStyle = {
   "--sidebar-width-icon": "3rem",
 };
 
+function AppShell() {
+  const { data: user, isLoading } = useQuery({
+    queryKey: ["/api/auth/me"],
+    retry: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  return (
+    <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+      <div className="flex h-screen w-full">
+        <AppSidebar user={user} />
+        <div className="flex flex-col flex-1 min-w-0">
+          <header className="flex items-center justify-between gap-2 px-2 py-1.5 border-b bg-background sticky top-0 z-50">
+            <SidebarTrigger data-testid="button-sidebar-toggle" />
+            <ThemeToggle />
+          </header>
+          <main className="flex-1 overflow-hidden">
+            <Router />
+          </main>
+          <QuickCapture />
+        </div>
+      </div>
+    </SidebarProvider>
+  );
+}
+
 function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-            <div className="flex h-screen w-full">
-              <AppSidebar />
-              <div className="flex flex-col flex-1 min-w-0">
-                <header className="flex items-center justify-between gap-2 px-2 py-1.5 border-b bg-background sticky top-0 z-50">
-                  <SidebarTrigger data-testid="button-sidebar-toggle" />
-                  <ThemeToggle />
-                </header>
-                <main className="flex-1 overflow-hidden">
-                  <Router />
-                </main>
-                <QuickCapture />
-              </div>
-            </div>
-          </SidebarProvider>
+          <AppShell />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>

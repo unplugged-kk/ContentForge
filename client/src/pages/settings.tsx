@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
@@ -18,6 +19,53 @@ export default function SettingsPage() {
   const [connectDialog, setConnectDialog] = useState<{ platform: string; label: string } | null>(null);
   const [accessToken, setAccessToken] = useState("");
   const [username, setUsername] = useState("");
+  const [brandVoice, setBrandVoice] = useState("");
+  const [writingStyleNotes, setWritingStyleNotes] = useState("");
+  const [audienceDescription, setAudienceDescription] = useState("");
+  const [contentGoals, setContentGoals] = useState("");
+  const [niche, setNiche] = useState("");
+
+  const { data: memoryProfile, isLoading: memoryLoading } = useQuery({
+    queryKey: ["/api/profile/memory"],
+  });
+
+  useEffect(() => {
+    if (memoryProfile) {
+      const p = memoryProfile as any;
+      setBrandVoice(p.brandVoice || "");
+      setWritingStyleNotes(p.writingStyleNotes || "");
+      setAudienceDescription(p.audienceDescription || "");
+      setContentGoals(p.contentGoals || "");
+      setNiche(p.niche || "");
+    }
+  }, [memoryProfile]);
+
+  const saveMemoryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PUT", "/api/profile/memory", { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/memory"] });
+      toast({ title: "Brand profile saved!" });
+    },
+    onError: (err: any) => toast({ title: "Failed to save", description: err.message, variant: "destructive" }),
+  });
+
+  const aiLearnMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/profile/memory/ai-learn", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      const learned = data.learned || {};
+      if (learned.brandVoice) setBrandVoice(learned.brandVoice);
+      if (learned.writingStyleNotes) setWritingStyleNotes(learned.writingStyleNotes);
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/memory"] });
+      toast({ title: "AI analysis complete!", description: "Brand profile updated from your content." });
+    },
+    onError: (err: any) => toast({ title: "AI analysis failed", description: err.message, variant: "destructive" }),
+  });
 
   const { data: accounts = [], isLoading: accountsLoading } = useQuery<ConnectedAccount[]>({ queryKey: ["/api/accounts"] });
 
@@ -207,6 +255,10 @@ export default function SettingsPage() {
               <Zap className="h-3.5 w-3.5 mr-1.5" />
               Content Pillars
             </TabsTrigger>
+            <TabsTrigger value="brand" data-testid="tab-brand-profile">
+              <Brain className="h-3.5 w-3.5 mr-1.5" />
+              Brand Profile
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="accounts" className="mt-4 space-y-4">
@@ -277,6 +329,87 @@ export default function SettingsPage() {
                 </div>
               </Card>
             ))}
+          </TabsContent>
+
+          <TabsContent value="brand" className="mt-4 space-y-4">
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-medium flex items-center gap-1.5"><Brain className="h-4 w-4 text-primary" />Brand Memory Profile</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Your personal branding second brain — used to personalize AI content generation</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => aiLearnMutation.mutate()}
+                  disabled={aiLearnMutation.isPending}
+                  data-testid="button-ai-learn"
+                >
+                  {aiLearnMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+                  AI Learn from My Content
+                </Button>
+              </div>
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Brand Voice</label>
+                  <Textarea
+                    placeholder="e.g. Direct, data-driven, no-fluff. I speak from experience as a practitioner..."
+                    value={brandVoice}
+                    onChange={(e) => setBrandVoice(e.target.value)}
+                    className="min-h-[80px] resize-none text-sm"
+                    data-testid="textarea-brand-voice"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Writing Style Notes</label>
+                  <Textarea
+                    placeholder="e.g. Short sentences. Use analogies. Start with a hook. Avoid buzzwords..."
+                    value={writingStyleNotes}
+                    onChange={(e) => setWritingStyleNotes(e.target.value)}
+                    className="min-h-[80px] resize-none text-sm"
+                    data-testid="textarea-writing-style"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Target Audience</label>
+                  <Textarea
+                    placeholder="e.g. Infrastructure engineers, platform teams, data engineers, and CTOs who care about..."
+                    value={audienceDescription}
+                    onChange={(e) => setAudienceDescription(e.target.value)}
+                    className="min-h-[70px] resize-none text-sm"
+                    data-testid="textarea-audience"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Content Goals</label>
+                  <Textarea
+                    placeholder="e.g. Build thought leadership in MLOps. Grow to 10k followers. Get consulting leads..."
+                    value={contentGoals}
+                    onChange={(e) => setContentGoals(e.target.value)}
+                    className="min-h-[70px] resize-none text-sm"
+                    data-testid="textarea-content-goals"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Niche / Expertise</label>
+                  <Input
+                    placeholder="e.g. Infrastructure Engineering, MLOps, AIOps, Cloud Native"
+                    value={niche}
+                    onChange={(e) => setNiche(e.target.value)}
+                    data-testid="input-niche"
+                  />
+                </div>
+              </div>
+              <Button
+                onClick={() => saveMemoryMutation.mutate()}
+                disabled={saveMemoryMutation.isPending}
+                className="w-full"
+                data-testid="button-save-brand-profile"
+              >
+                {saveMemoryMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                Save Brand Profile
+              </Button>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>
