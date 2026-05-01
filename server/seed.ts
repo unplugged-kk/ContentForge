@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { pillars, templates, posts, tweets, ideas, analytics, rssSources, monitoredAccounts } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { MODELS } from "./ai/config";
 
 export async function seedDatabase() {
   const existingRss = await db.select().from(rssSources);
@@ -67,7 +68,7 @@ export async function seedDatabase() {
     tone: "technical",
     targetPlatform: "x",
     status: "posted",
-    aiModel: "gpt-4o-mini",
+    aiModel: MODELS.TEXT,
     postedAt: new Date("2025-02-10"),
   }).returning();
 
@@ -95,7 +96,7 @@ export async function seedDatabase() {
     tone: "provocative",
     targetPlatform: "both",
     status: "ready",
-    aiModel: "gpt-4o-mini",
+    aiModel: MODELS.TEXT,
   }).returning();
 
   await db.insert(tweets).values([
@@ -108,7 +109,7 @@ export async function seedDatabase() {
     tone: "educational",
     targetPlatform: "x",
     status: "scheduled",
-    aiModel: "gpt-4o-mini",
+    aiModel: MODELS.TEXT,
     scheduledAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
   }).returning();
 
@@ -134,7 +135,7 @@ export async function seedDatabase() {
     tone: "storytelling",
     targetPlatform: "threads",
     status: "draft",
-    aiModel: "gpt-4o-mini",
+    aiModel: MODELS.TEXT,
   }).returning();
 
   await db.insert(tweets).values([

@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response } from "express";
 import { chatStorage } from "../chat/storage";
-import { openai, speechToText, ensureCompatibleFormat } from "./client";
+import { ai, MODELS } from "../../ai/config";
+import { speechToText, ensureCompatibleFormat } from "./client";
 
 // Body parser with 50MB limit for audio payloads
 const audioBodyParser = express.json({ limit: "50mb" });
@@ -93,9 +94,9 @@ export function registerAudioRoutes(app: Express): void {
 
       res.write(`data: ${JSON.stringify({ type: "user_transcript", data: userTranscript })}\n\n`);
 
-      // 6. Stream audio response from gpt-audio
-      const stream = await openai.chat.completions.create({
-        model: "gpt-audio",
+      // 6. Stream audio response from AI provider
+      const stream = await ai.chat.completions.create({
+        model: MODELS.AUDIO,
         modalities: ["text", "audio"],
         audio: { voice, format: "pcm16" },
         messages: chatHistory,

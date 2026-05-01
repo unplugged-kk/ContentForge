@@ -1,15 +1,11 @@
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
 import { Buffer } from "node:buffer";
 import { spawn } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
 import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
-
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { ai, MODELS } from "../../ai/config";
 
 export type AudioFormat = "wav" | "mp3" | "webm" | "mp4" | "ogg" | "unknown";
 
@@ -107,7 +103,7 @@ export async function ensureCompatibleFormat(
 
 /**
  * Voice Chat: User speaks, LLM responds with audio (audio-in, audio-out).
- * Uses gpt-audio model via Replit AI Integrations.
+ * Uses the configured AUDIO model (default: gpt-audio).
  * Note: Browser records WebM/opus - convert to WAV using ffmpeg before calling this.
  */
 export async function voiceChat(
@@ -117,8 +113,8 @@ export async function voiceChat(
   outputFormat: "wav" | "mp3" = "mp3"
 ): Promise<{ transcript: string; audioResponse: Buffer }> {
   const audioBase64 = audioBuffer.toString("base64");
-  const response = await openai.chat.completions.create({
-    model: "gpt-audio",
+  const response = await ai.chat.completions.create({
+    model: MODELS.AUDIO,
     modalities: ["text", "audio"],
     audio: { voice, format: outputFormat },
     messages: [{
@@ -153,8 +149,8 @@ export async function voiceChatStream(
   inputFormat: "wav" | "mp3" = "wav"
 ): Promise<AsyncIterable<{ type: "transcript" | "audio"; data: string }>> {
   const audioBase64 = audioBuffer.toString("base64");
-  const stream = await openai.chat.completions.create({
-    model: "gpt-audio",
+  const stream = await ai.chat.completions.create({
+    model: MODELS.AUDIO,
     modalities: ["text", "audio"],
     audio: { voice, format: "pcm16" },
     messages: [{
@@ -182,15 +178,15 @@ export async function voiceChatStream(
 
 /**
  * Text-to-Speech: Converts text to speech verbatim.
- * Uses gpt-audio model via Replit AI Integrations.
+ * Uses the configured AUDIO model (default: gpt-audio).
  */
 export async function textToSpeech(
   text: string,
   voice: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer" = "alloy",
   format: "wav" | "mp3" | "flac" | "opus" | "pcm16" = "wav"
 ): Promise<Buffer> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-audio",
+  const response = await ai.chat.completions.create({
+    model: MODELS.AUDIO,
     modalities: ["text", "audio"],
     audio: { voice, format },
     messages: [
@@ -204,15 +200,15 @@ export async function textToSpeech(
 
 /**
  * Streaming Text-to-Speech: Converts text to speech with real-time streaming.
- * Uses gpt-audio model via Replit AI Integrations.
+ * Uses the configured AUDIO model (default: gpt-audio).
  * Note: Streaming only supports pcm16 output format.
  */
 export async function textToSpeechStream(
   text: string,
   voice: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer" = "alloy"
 ): Promise<AsyncIterable<string>> {
-  const stream = await openai.chat.completions.create({
-    model: "gpt-audio",
+  const stream = await ai.chat.completions.create({
+    model: MODELS.AUDIO,
     modalities: ["text", "audio"],
     audio: { voice, format: "pcm16" },
     messages: [
@@ -235,32 +231,32 @@ export async function textToSpeechStream(
 
 /**
  * Speech-to-Text: Transcribes audio using dedicated transcription model.
- * Uses gpt-4o-mini-transcribe for accurate transcription.
+ * Uses the configured AUDIO_TRANSCRIBE model (default: gpt-4o-mini-transcribe).
  */
 export async function speechToText(
   audioBuffer: Buffer,
   format: "wav" | "mp3" | "webm" = "wav"
 ): Promise<string> {
   const file = await toFile(audioBuffer, `audio.${format}`);
-  const response = await openai.audio.transcriptions.create({
+  const response = await ai.audio.transcriptions.create({
     file,
-    model: "gpt-4o-mini-transcribe",
+    model: MODELS.AUDIO_TRANSCRIBE,
   });
   return response.text;
 }
 
 /**
  * Streaming Speech-to-Text: Transcribes audio with real-time streaming.
- * Uses gpt-4o-mini-transcribe for accurate transcription.
+ * Uses the configured AUDIO_TRANSCRIBE model (default: gpt-4o-mini-transcribe).
  */
 export async function speechToTextStream(
   audioBuffer: Buffer,
   format: "wav" | "mp3" | "webm" = "wav"
 ): Promise<AsyncIterable<string>> {
   const file = await toFile(audioBuffer, `audio.${format}`);
-  const stream = await openai.audio.transcriptions.create({
+  const stream = await ai.audio.transcriptions.create({
     file,
-    model: "gpt-4o-mini-transcribe",
+    model: MODELS.AUDIO_TRANSCRIBE,
     stream: true,
   });
 

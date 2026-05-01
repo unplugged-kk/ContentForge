@@ -1,32 +1,28 @@
 import fs from "node:fs";
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
 import { Buffer } from "node:buffer";
-
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { ai, MODELS } from "../../ai/config";
 
 /**
  * Generate an image and return as Buffer.
- * Uses gpt-image-1 model via Replit AI Integrations.
+ * Uses the configured IMAGE model (default: gpt-image-1).
  */
 export async function generateImageBuffer(
   prompt: string,
   size: "1024x1024" | "512x512" | "256x256" = "1024x1024"
 ): Promise<Buffer> {
-  const response = await openai.images.generate({
-    model: "gpt-image-1",
+  const response = await ai.images.generate({
+    model: MODELS.IMAGE,
     prompt,
     size,
   });
-  const base64 = response.data[0]?.b64_json ?? "";
+  const base64 = response.data?.[0]?.b64_json ?? "";
   return Buffer.from(base64, "base64");
 }
 
 /**
  * Edit/combine multiple images into a composite.
- * Uses gpt-image-1 model via Replit AI Integrations.
+ * Uses the configured IMAGE model (default: gpt-image-1).
  */
 export async function editImages(
   imageFiles: string[],
@@ -41,13 +37,13 @@ export async function editImages(
     )
   );
 
-  const response = await openai.images.edit({
-    model: "gpt-image-1",
+  const response = await ai.images.edit({
+    model: MODELS.IMAGE,
     image: images,
     prompt,
   });
 
-  const imageBase64 = response.data[0]?.b64_json ?? "";
+  const imageBase64 = response.data?.[0]?.b64_json ?? "";
   const imageBytes = Buffer.from(imageBase64, "base64");
 
   if (outputPath) {

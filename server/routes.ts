@@ -5,7 +5,6 @@ import { db } from "./db";
 import { discoveredIdeas } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
-import OpenAI from "openai";
 import * as cheerio from "cheerio";
 import Parser from "rss-parser";
 import path from "path";
@@ -13,11 +12,7 @@ import fs from "fs";
 import multer from "multer";
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { ai, MODELS } from "./ai/config";
 
 const rssParser = new Parser();
 
@@ -76,7 +71,7 @@ function safeJsonParse(str: string): any {
   }
 }
 
-async function aiCall(messages: any[], jsonMode = false) {
+async function aiCall(messages: any[], jsonMode = false, model = MODELS.TEXT) {
   const msgs = jsonMode
     ? messages.map((m: any, i: number) =>
         i === 0 && m.role === "system"
@@ -84,20 +79,21 @@ async function aiCall(messages: any[], jsonMode = false) {
           : m
       )
     : messages;
-  const opts: any = { model: "gpt-4o-mini", messages: msgs, max_completion_tokens: 8192 };
+  const opts: any = { model, messages: msgs, max_completion_tokens: 8192 };
   if (jsonMode) opts.response_format = { type: "json_object" };
   const startTime = Date.now();
-  const response = await openai.chat.completions.create(opts);
+  const response = await ai.chat.completions.create(opts);
   return {
     content: response.choices[0]?.message?.content || "",
     usage: response.usage,
     latency: Date.now() - startTime,
+    model,
   };
 }
 
-async function logAiUsage(usage: any, latency: number, feature: string) {
+async function logAiUsage(usage: any, latency: number, feature: string, model = MODELS.TEXT) {
   await storage.createAiUsageLog({
-    model: "gpt-4o-mini",
+    model,
     inputTokens: usage?.prompt_tokens || 0,
     outputTokens: usage?.completion_tokens || 0,
     totalTokens: usage?.total_tokens || 0,
@@ -221,6 +217,14 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  app.get("/api/ideas/:id", async (req, res) => {
+    try {
+      const idea = await storage.getIdea(parseInt(req.params.id));
+      if (!idea) return res.status(404).json({ message: "Idea not found" });
+      res.json(idea);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   app.post("/api/ideas", async (req, res) => {
     try {
       const parsed = createIdeaBody.parse(req.body);
@@ -254,7 +258,7 @@ export async function registerRoutes(
       if (!parsed?.tweets) return res.status(500).json({ message: "AI returned invalid response. Please try again." });
 
       const post = await storage.createPost(
-        { pillarId: idea.pillarId, postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: "gpt-4o-mini" },
+        { pillarId: idea.pillarId, postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: MODELS.TEXT },
         parsed.tweets.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 }))
       );
       await storage.updateIdea(parseInt(req.params.id), { isExpanded: true });
@@ -286,7 +290,7 @@ export async function registerRoutes(
         { role: "user", content: `Fill in this tweet template with specific, real-world content.\n\nTemplate: "${template.pattern}"\n${pillar ? `Content Pillar: ${pillar.name}` : ""}\n\nReturn ONLY the filled-in tweet text. Keep it under 280 characters if possible.` },
       ]);
       await logAiUsage(usage, latency, "fill_template");
-      res.json({ content: content.trim(), model: "gpt-4o-mini" });
+      res.json({ content: content.trim(), model: MODELS.TEXT });
     } catch (err: any) {
       console.error("Fill template error:", err);
       res.status(500).json({ message: "Failed to fill template. Please try again." });
@@ -314,7 +318,7 @@ export async function registerRoutes(
       const variations = result.variations.map((v: any) => ({
         tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
       }));
-      res.json({ variations, model: "gpt-4o-mini" });
+      res.json({ variations, model: MODELS.TEXT });
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
       console.error("Generate error:", err);
@@ -514,7 +518,7 @@ export async function registerRoutes(
       if (!parsed?.tweets) return res.status(500).json({ message: "AI returned invalid response." });
 
       const post = await storage.createPost(
-        { pillarId: article.pillarId, postType: "thread", tone: "educational", targetPlatform: "x", status: "draft", aiModel: "gpt-4o-mini" },
+        { pillarId: article.pillarId, postType: "thread", tone: "educational", targetPlatform: "x", status: "draft", aiModel: MODELS.TEXT },
         parsed.tweets.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 }))
       );
       res.json(post);
@@ -1201,7 +1205,7 @@ Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}` },
         creationAction: action,
       });
 
-      res.json({ variations, model: "gpt-4o-mini", action });
+      res.json({ variations, model: MODELS.TEXT, action });
     } catch (err: any) {
       console.error("Content action error:", err);
       res.status(500).json({ message: "Failed to generate content." });
@@ -1257,7 +1261,7 @@ ${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet 
       const variations = parsed.variations.map((v: any) => ({
         tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
       }));
-      res.json({ variations, model: "gpt-4o-mini", styleName: profile.name });
+      res.json({ variations, model: MODELS.TEXT, styleName: profile.name });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -1304,7 +1308,7 @@ Each tweet under ${charLimit} characters.` },
       const variations = parsed.variations.map((v: any) => ({
         tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
       }));
-      res.json({ variations, model: "gpt-4o-mini" });
+      res.json({ variations, model: MODELS.TEXT });
     } catch (err: any) {
       console.error("Generate from reference error:", err);
       res.status(500).json({ message: "Failed to generate from reference." });
@@ -1465,109 +1469,101 @@ Each tweet under ${charLimit} characters.` },
   app.post("/api/discover/refresh", async (req, res) => {
     try {
       const batchId = `batch_${Date.now()}`;
-      const rawData: any[] = [];
 
-      // Fetch from Hacker News
-      try {
-        const hnResponse = await fetch("https://hn.algolia.com/api/v1/search?query=AI+OR+kubernetes+OR+devops+OR+MLOps+OR+data+engineering&tags=story&hitsPerPage=15");
-        const hnData = await hnResponse.json() as any;
-        if (hnData.hits) {
-          rawData.push(...hnData.hits.slice(0, 15).map((h: any) => ({
-            source: "Hacker News",
-            sourceType: "hackernews",
-            category: "tech",
-            title: h.title,
-            url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
-            points: h.points,
-            comments: h.num_comments,
-          })));
-        }
-      } catch (e) { console.error("HN fetch error:", e); }
-
-      // Fetch from Reddit
-      const subreddits = ["dataengineering", "devops", "kubernetes", "MachineLearning", "mlops"];
-      for (const sub of subreddits) {
+      // ── Fetch all sources in parallel with timeouts ─────────────────────────
+      const hnPromise = (async () => {
         try {
-          const redditResponse = await fetch(`https://www.reddit.com/r/${sub}/top.json?t=week&limit=5`, {
-            headers: { "User-Agent": "ContentForge/1.0" },
-            signal: AbortSignal.timeout(5000),
-          });
-          const redditData = await redditResponse.json() as any;
-          if (redditData?.data?.children) {
-            rawData.push(...redditData.data.children.map((c: any) => ({
-              source: `Reddit r/${sub}`,
-              sourceType: "reddit",
-              category: sub === "MachineLearning" || sub === "mlops" ? "mlops" : sub === "kubernetes" ? "devops" : "tech",
-              title: c.data.title,
-              url: `https://reddit.com${c.data.permalink}`,
-              points: c.data.score,
-              comments: c.data.num_comments,
-            })));
-          }
-        } catch (e) { /* skip failed subreddit */ }
-      }
+          const r = await fetch("https://hn.algolia.com/api/v1/search?query=AI+OR+kubernetes+OR+devops+OR+MLOps+OR+data+engineering&tags=story&hitsPerPage=10", { signal: AbortSignal.timeout(8000) });
+          const d = await r.json() as any;
+          return (d.hits || []).slice(0, 10).map((h: any) => ({
+            source: "Hacker News", sourceType: "hackernews", category: "tech",
+            title: h.title, url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
+            points: h.points, comments: h.num_comments,
+          }));
+        } catch (e) { console.error("[discover] HN error:", e); return []; }
+      })();
 
-      // Fetch from RSS feeds
-      const rssFeedSources = await storage.getRssSources();
-      const activeFeeds = rssFeedSources.filter((f) => f.isActive);
-      for (const feed of activeFeeds.slice(0, 8)) {
-        try {
-          const parsed = await rssParser.parseURL(feed.feedUrl);
-          rawData.push(...(parsed.items || []).slice(0, 3).map((item) => ({
-            source: feed.name,
-            sourceType: "rss",
-            category: feed.category || "tech",
-            title: item.title || "",
-            url: item.link || "",
-            summary: item.contentSnippet?.substring(0, 200) || "",
-          })));
-        } catch (e) { /* skip failed feed */ }
-      }
-
-      // Fetch from GitHub Trending
-      try {
-        const ghResponse = await fetch("https://api.github.com/search/repositories?q=AI+OR+kubernetes+OR+devops+OR+mlops+created:>2026-02-01&sort=stars&order=desc&per_page=10", {
-          headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "ContentForge/1.0" },
-          signal: AbortSignal.timeout(8000),
-        });
-        const ghData = await ghResponse.json() as any;
-        if (ghData?.items) {
-          rawData.push(...ghData.items.slice(0, 10).map((r: any) => ({
-            source: "GitHub",
-            sourceType: "github",
-            category: "tech",
-            title: `${r.full_name}: ${r.description || ""}`.substring(0, 200),
-            url: r.html_url,
-            points: r.stargazers_count,
-            summary: `Stars: ${r.stargazers_count}, Language: ${r.language || "N/A"}, ${r.description || ""}`.substring(0, 200),
-          })));
-        }
-      } catch (e) { console.error("GitHub fetch error:", e); }
-
-      // Fetch from ArXiv
-      try {
-        const arxivResponse = await fetch("http://export.arxiv.org/api/query?search_query=all:AI+infrastructure+OR+all:MLOps+OR+all:kubernetes+machine+learning&start=0&max_results=8&sortBy=submittedDate&sortOrder=descending", {
-          signal: AbortSignal.timeout(8000),
-        });
-        const arxivText = await arxivResponse.text();
-        const arxivEntries = arxivText.match(/<entry>([\s\S]*?)<\/entry>/g) || [];
-        for (const entry of arxivEntries.slice(0, 8)) {
-          const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
-          const summaryMatch = entry.match(/<summary>([\s\S]*?)<\/summary>/);
-          const linkMatch = entry.match(/<id>([\s\S]*?)<\/id>/);
-          if (titleMatch) {
-            rawData.push({
-              source: "ArXiv",
-              sourceType: "arxiv",
-              category: "ai_research",
-              title: titleMatch[1].replace(/\s+/g, " ").trim().substring(0, 200),
-              url: linkMatch?.[1]?.trim() || "",
-              summary: summaryMatch?.[1]?.replace(/\s+/g, " ").trim().substring(0, 200) || "",
+      const redditPromise = (async () => {
+        const subreddits = ["dataengineering", "devops", "kubernetes", "MachineLearning", "mlops"];
+        const results = await Promise.all(subreddits.map(async (sub) => {
+          try {
+            const r = await fetch(`https://www.reddit.com/r/${sub}/top.json?t=week&limit=3`, {
+              headers: { "User-Agent": "ContentForge/1.0" },
+              signal: AbortSignal.timeout(6000),
             });
-          }
-        }
-      } catch (e) { console.error("ArXiv fetch error:", e); }
+            const d = await r.json() as any;
+            return (d?.data?.children || []).slice(0, 3).map((c: any) => ({
+              source: `Reddit r/${sub}`, sourceType: "reddit",
+              category: sub === "MachineLearning" || sub === "mlops" ? "mlops" : sub === "kubernetes" ? "devops" : "tech",
+              title: c.data.title, url: `https://reddit.com${c.data.permalink}`,
+              points: c.data.score, comments: c.data.num_comments,
+            }));
+          } catch (e) { return []; }
+        }));
+        return results.flat();
+      })();
 
+      const rssPromise = (async () => {
+        try {
+          const feeds = (await storage.getRssSources()).filter((f) => f.isActive).slice(0, 6);
+          const results = await Promise.all(feeds.map(async (feed) => {
+            try {
+              const parsed = await rssParser.parseURL(feed.feedUrl);
+              return (parsed.items || []).slice(0, 2).map((item) => ({
+                source: feed.name, sourceType: "rss", category: feed.category || "tech",
+                title: item.title || "", url: item.link || "",
+                summary: item.contentSnippet?.substring(0, 150) || "",
+              }));
+            } catch (e) { return []; }
+          }));
+          return results.flat();
+        } catch (e) { return []; }
+      })();
+
+      const githubPromise = (async () => {
+        try {
+          const r = await fetch("https://api.github.com/search/repositories?q=AI+OR+kubernetes+OR+devops+OR+mlops+created:>2026-02-01&sort=stars&order=desc&per_page=8", {
+            headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "ContentForge/1.0" },
+            signal: AbortSignal.timeout(8000),
+          });
+          const d = await r.json() as any;
+          return (d?.items || []).slice(0, 8).map((repo: any) => ({
+            source: "GitHub", sourceType: "github", category: "tech",
+            title: `${repo.full_name}: ${repo.description || ""}`.substring(0, 180),
+            url: repo.html_url, points: repo.stargazers_count,
+            summary: `Stars: ${repo.stargazers_count}, Lang: ${repo.language || "N/A"}`.substring(0, 150),
+          }));
+        } catch (e) { console.error("[discover] GitHub error:", e); return []; }
+      })();
+
+      const arxivPromise = (async () => {
+        try {
+          const r = await fetch("http://export.arxiv.org/api/query?search_query=all:AI+infrastructure+OR+all:MLOps+OR+all:kubernetes+machine+learning&start=0&max_results=5&sortBy=submittedDate&sortOrder=descending", { signal: AbortSignal.timeout(8000) });
+          const text = await r.text();
+          const entries = text.match(/<entry>([\s\S]*?)<\/entry>/g) || [];
+          return entries.slice(0, 5).map((entry) => {
+            const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
+            const summaryMatch = entry.match(/<summary>([\s\S]*?)<\/summary>/);
+            const linkMatch = entry.match(/<id>([\s\S]*?)<\/id>/);
+            if (!titleMatch) return null;
+            return {
+              source: "ArXiv", sourceType: "arxiv", category: "ai_research",
+              title: titleMatch[1].replace(/\s+/g, " ").trim().substring(0, 180),
+              url: linkMatch?.[1]?.trim() || "",
+              summary: summaryMatch?.[1]?.replace(/\s+/g, " ").trim().substring(0, 150) || "",
+            };
+          }).filter(Boolean);
+        } catch (e) { console.error("[discover] ArXiv error:", e); return []; }
+      })();
+
+      // Wait for all fetches concurrently
+      const [hnData, redditData, rssData, githubData, arxivData] = await Promise.all([
+        hnPromise, redditPromise, rssPromise, githubPromise, arxivPromise,
+      ]);
+
+      const rawData = [...hnData, ...redditData, ...rssData, ...githubData, ...arxivData];
+
+      // Fallback if all sources failed
       if (rawData.length === 0) {
         rawData.push(
           { source: "Hacker News", sourceType: "hackernews", category: "tech", title: "The rise of AI agents in infrastructure automation", url: "" },
@@ -1579,11 +1575,12 @@ Each tweet under ${charLimit} characters.` },
       const allPillars = await storage.getPillars();
       const pillarNames = allPillars.map((p) => p.name).join(", ");
 
+      // Send top 20 items to AI (reduced from 30 for speed + cost)
       const { content, usage, latency } = await aiCall([
         { role: "system", content: `You are a content strategist for Kishore Kumar Behera, a DevOps/Infrastructure engineering leader building a brand on X and Threads at the intersection of Data & AI and Platform Engineering.` },
-        { role: "user", content: `Here are raw trending topics and posts from various sources this week:
+        { role: "user", content: `Here are raw trending topics from various sources this week:
 
-${JSON.stringify(rawData.slice(0, 30))}
+${JSON.stringify(rawData.slice(0, 20))}
 
 Analyze these and return exactly 20 content ideas ranked by viral potential. For each idea, provide:
 
@@ -1719,8 +1716,8 @@ Rank by: Value Density > Unique Angle > Emotional Trigger > Timeliness > Discuss
       const id = parseInt(req.params.id);
       const [idea] = await db.select().from(discoveredIdeas).where(eq(discoveredIdeas.id, id));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+      const response = await ai.chat.completions.create({
+        model: MODELS.TEXT,
         messages: [
           { role: "system", content: "You are an expert social media content writer specializing in Data & AI infrastructure topics. Convert this discovered idea into a ready-to-post thread." },
           { role: "user", content: `Turn this idea into a compelling Twitter/X thread (5-7 tweets, each under 280 characters):\n\nTitle: ${idea.title}\nDescription: ${idea.description || idea.summary || ""}\nUnique Angle: ${idea.uniqueAngle || ""}\nSuggested Hook: ${idea.suggestedHook || ""}\n\nReturn JSON: { "tweets": [{ "content": "tweet text", "position": 0 }] }` }
@@ -1729,12 +1726,10 @@ Rank by: Value Density > Unique Angle > Emotional Trigger > Timeliness > Discuss
         response_format: { type: "json_object" },
       });
       const result = JSON.parse(response.choices[0]?.message?.content || "{}");
-      const post = await storage.createPost({ postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: "gpt-4o-mini" } as any);
-      if (result.tweets) {
-        for (const tweet of result.tweets) {
-          await storage.createTweet({ postId: post.id, content: tweet.content, position: tweet.position, charCount: tweet.content.length });
-        }
-      }
+      const post = await storage.createPost(
+        { postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: MODELS.TEXT } as any,
+        result.tweets?.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 })) || []
+      );
       await db.update(discoveredIdeas).set({ status: "used" }).where(eq(discoveredIdeas.id, id));
       res.json({ postId: post.id, tweets: result.tweets });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -1802,7 +1797,7 @@ Return JSON:
         dimensionScores: parsed.dimensions,
         improvements: parsed.improvements,
         predictedEngagement: parsed.predicted_engagement,
-        scoredByModel: "gpt-4o-mini",
+        scoredByModel: MODELS.TEXT,
       });
 
       res.json({ ...score, parsed });
@@ -2001,17 +1996,27 @@ Return ONLY the improved content text. Keep the same format and length constrain
   app.put("/api/profile/memory", async (req, res) => {
     try {
       const userId = req.session?.userId || 1;
-      const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency } = req.body;
+      const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, memoryJson } = req.body;
       const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       let result;
       if (existing) {
         [result] = await db.update(userProfile)
-          .set({ brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, updatedAt: new Date() })
+          .set({
+            brandVoice: brandVoice ?? existing.brandVoice,
+            writingStyleNotes: writingStyleNotes ?? existing.writingStyleNotes,
+            audienceDescription: audienceDescription ?? existing.audienceDescription,
+            contentGoals: contentGoals ?? existing.contentGoals,
+            niche: niche ?? existing.niche,
+            targetPlatforms: targetPlatforms ?? existing.targetPlatforms,
+            postingFrequency: postingFrequency ?? existing.postingFrequency,
+            memoryJson: memoryJson ?? existing.memoryJson,
+            updatedAt: new Date(),
+          })
           .where(eq(userProfile.userId, userId))
           .returning();
       } else {
         [result] = await db.insert(userProfile)
-          .values({ userId, brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency })
+          .values({ userId, brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, memoryJson })
           .returning();
       }
       res.json(result);
@@ -2100,16 +2105,16 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
         finalPrompt = `${prompt}. Style: ${styleGuide}. No text overlays. No watermarks. No people's faces unless specifically requested. Professional content creation context.`;
 
-        const response = await openai.images.generate({
-          model: "dall-e-3",
+        const response = await ai.images.generate({
+          model: MODELS.IMAGE,
           prompt: finalPrompt,
           n: 1,
           size: size as any,
           quality: "standard",
         });
 
-        const imageUrl = response.data[0]?.url || "";
-        const revisedPrompt = response.data[0]?.revised_prompt || finalPrompt;
+        const imageUrl = response.data?.[0]?.url || "";
+        const revisedPrompt = response.data?.[0]?.revised_prompt || finalPrompt;
 
         const [saved] = await db.insert(generatedImages).values({
           prompt,
@@ -2227,8 +2232,8 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
     try {
       const { imageBase64, mimeType = "image/jpeg" } = req.body;
       if (!imageBase64) return res.status(400).json({ message: "Image data required" });
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
+      const response = await ai.chat.completions.create({
+        model: MODELS.VISION,
         messages: [{
           role: "user",
           content: [{
@@ -2311,7 +2316,7 @@ Format as a thread with tweets separated by "---"` },
       ]);
       await logAiUsage(usage, latency, "youtube_to_post");
       const tweets = content.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content);
-      res.json({ tweets, model: "gpt-4o-mini" });
+      res.json({ tweets, model: MODELS.TEXT });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -2355,7 +2360,7 @@ For each variation, use "---VARIATION---" as separator. For threads, separate tw
       const variations = variationTexts.map((v: string) => ({
         tweets: v.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content)
       }));
-      res.json({ variations: variations.length ? variations : [{ tweets: [{ content: content.trim(), charCount: content.trim().length }] }], model: "gpt-4o-mini" });
+      res.json({ variations: variations.length ? variations : [{ tweets: [{ content: content.trim(), charCount: content.trim().length }] }], model: MODELS.TEXT });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

@@ -36,6 +36,7 @@ export interface IStorage {
   deletePost(id: number): Promise<void>;
 
   getIdeas(): Promise<Idea[]>;
+  getIdea(id: number): Promise<Idea | undefined>;
   createIdea(idea: InsertIdea): Promise<Idea>;
   updateIdea(id: number, idea: Partial<InsertIdea>): Promise<Idea | undefined>;
   deleteIdea(id: number): Promise<void>;
@@ -151,6 +152,11 @@ export class DatabaseStorage implements IStorage {
 
   async getIdeas(): Promise<Idea[]> {
     return db.select().from(ideas).orderBy(desc(ideas.createdAt));
+  }
+
+  async getIdea(id: number): Promise<Idea | undefined> {
+    const [result] = await db.select().from(ideas).where(eq(ideas.id, id));
+    return result;
   }
 
   async createIdea(idea: InsertIdea): Promise<Idea> {

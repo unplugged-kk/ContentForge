@@ -4,3 +4,16 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+.env
+
+# IDE / AI tooling
+.claude/
+.cursor/
+.codex/
+.mcp.json
+
+# code-review-graph
+.code-review-graph/
+.graphify_chunks.json
+.graphify_python
+graphify-out/
