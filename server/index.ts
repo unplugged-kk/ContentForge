@@ -29,22 +29,6 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-const PgStore = connectPg(session);
-app.use(
-  session({
-    store: new PgStore({ pool, createTableIfMissing: true }),
-    secret: process.env.SESSION_SECRET || "contentforge-dev-secret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    },
-  })
-);
-
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -83,6 +67,34 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Create session table manually (connect-pg-simple's table.sql is lost after esbuild)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default",
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
+  `);
+
+  const PgStore = connectPg(session);
+  app.use(
+    session({
+      store: new PgStore({ pool, createTableIfMissing: false }),
+      secret: process.env.SESSION_SECRET || "contentforge-dev-secret",
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        secure: process.env.NODE_ENV === "production",
+        httpOnly: true,
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      },
+    })
+  );
+
   const { seedDatabase } = await import("./seed");
   await seedDatabase().catch((err) => console.error("Seed error:", err));
 
