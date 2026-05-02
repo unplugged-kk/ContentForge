@@ -1908,12 +1908,18 @@ Return ONLY the improved content text. Keep the same format and length constrain
     app.get("/api/auth/google/callback",
       passport.authenticate("google", { failureRedirect: "/?error=google_auth_failed", session: false }),
       (req: any, res) => {
-        if (req.user) {
-          req.session.userId = req.user.id;
-          req.session.save(() => res.redirect("/"));
-        } else {
-          res.redirect("/?error=google_auth_failed");
+        if (!req.user) {
+          return res.redirect("/?error=google_auth_failed");
         }
+        req.session.userId = req.user.id;
+        req.session.save((err: Error | null) => {
+          if (err) {
+            console.error("[google oauth] session save failed:", err);
+            return res.redirect("/?error=session_save_failed");
+          }
+          console.log(`[google oauth] login ok user=${req.user.id} sid=${req.session.id}`);
+          res.redirect("/");
+        });
       }
     );
   }

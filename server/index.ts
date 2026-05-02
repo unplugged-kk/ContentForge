@@ -67,16 +67,31 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Create session table manually (connect-pg-simple's table.sql is lost after esbuild)
+  // Create session table manually (connect-pg-simple's table.sql is lost after esbuild).
+  // The PRIMARY KEY on sid is REQUIRED — connect-pg-simple uses INSERT ... ON CONFLICT (sid)
+  // to upsert sessions. Without it, session saves fail silently and cookies never persist.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
       "sid" varchar NOT NULL COLLATE "default",
       "sess" json NOT NULL,
-      "expire" timestamp(6) NOT NULL
+      "expire" timestamp(6) NOT NULL,
+      CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
     )
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
+  `);
+
+  // If table already existed without the primary key (from a prior buggy deploy), add it.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'session_pkey'
+      ) THEN
+        ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid");
+      END IF;
+    END$$;
   `);
 
   const PgStore = connectPg(session);
