@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { tryPublishPostById } from "./social/x";
 import { runDiscoverRefresh } from "./discoverRefresh";
-import { runMorningBriefing, autofillCalendar } from "./autopilot";
+import { runMorningBriefing, autofillCalendar, generateWeekendContent } from "./autopilot";
 
 // Exponential backoff delays (minutes) for failed posts
 const RETRY_DELAYS_MINUTES = [5, 30, 120];
@@ -107,6 +107,38 @@ export function startSchedulers() {
     console.log(`[scheduler] Discover cron: ${discoverCron}`);
   }
 
+  // Saturday 09:00 UTC — deep-dive article thread (15-20 tweets)
+  if (process.env.DISABLE_WEEKEND_CONTENT !== "1") {
+    cron.schedule(
+      "0 9 * * 6",
+      async () => {
+        console.log("[scheduler] Saturday article thread generating...");
+        try {
+          const r = await generateWeekendContent("article_thread");
+          console.log(`[scheduler] Sat article done: "${r.ideaTitle.substring(0, 60)}" tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+        } catch (e) {
+          console.error("[scheduler] Saturday article failed:", e);
+        }
+      },
+      { timezone: "UTC" },
+    );
+
+    // Sunday 10:00 UTC — weekly recap thread (12-15 tweets)
+    cron.schedule(
+      "0 10 * * 0",
+      async () => {
+        console.log("[scheduler] Sunday weekly recap generating...");
+        try {
+          const r = await generateWeekendContent("weekly_recap");
+          console.log(`[scheduler] Sun recap done: tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+        } catch (e) {
+          console.error("[scheduler] Sunday recap failed:", e);
+        }
+      },
+      { timezone: "UTC" },
+    );
+  }
+
   // Sunday 18:00 UTC — autofill calendar for the coming week (skips slots already filled)
   if (process.env.DISABLE_AUTOFILL !== "1") {
     cron.schedule(
@@ -124,5 +156,5 @@ export function startSchedulers() {
     );
   }
 
-  console.log(`[scheduler] Started — publish/retry * * * * *, morning briefing 0 5 * * * UTC, autofill Sun 18:00 UTC`);
+  console.log(`[scheduler] Started — publish/retry * * * * *, morning briefing 0 5 UTC, sat article 0 9 Sat UTC, sun recap 0 10 Sun UTC, autofill Sun 18:00 UTC`);
 }

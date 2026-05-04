@@ -115,7 +115,7 @@ export default function AiUsagePage() {
     return (
       <div className="flex flex-col h-full">
         <div className="p-4 border-b">
-          <h1 className="text-lg font-semibold">AI Usage & Cost</h1>
+          <h1 className="text-lg font-semibold" data-testid="text-ai-usage-title">AI Usage & Cost</h1>
           <p className="text-xs text-muted-foreground">Token consumption and estimated spend</p>
         </div>
         <div className="p-6 space-y-4">
@@ -140,7 +140,7 @@ export default function AiUsagePage() {
     <div className="flex flex-col h-full">
       <div className="p-4 border-b flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold flex items-center gap-2">
+          <h1 className="text-lg font-semibold flex items-center gap-2" data-testid="text-ai-usage-title">
             <Bot className="h-5 w-5 text-purple-500" />
             AI Usage & Cost
           </h1>

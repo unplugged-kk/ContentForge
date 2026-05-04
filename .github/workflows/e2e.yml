@@ -1,0 +1,108 @@
+# Ephemeral Postgres only (GitHub "services" container). Never uses Railway or production DATABASE_URL.
+# Required check: set branch protection → require status "E2E Tests" before merge so deploys only see green E2E.
+# Railway: prefer "Wait for CI" / deploy from default branch after merge, or require this check in GitHub.
+
+name: E2E Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: contentforge_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d contentforge_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      CI: true
+      # Isolated CI database only — do not replace with Railway or shared dev URLs.
+      DATABASE_URL: postgresql://test:test@localhost:5432/contentforge_e2e
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify DATABASE_URL is job-local Postgres only
+        run: |
+          case "$DATABASE_URL" in
+            *localhost*|*127.0.0.1*) ;;
+            *) echo "::error::DATABASE_URL must point at the CI Postgres service (localhost), not a remote host."; exit 1 ;;
+          esac
+          echo "Using isolated CI database (localhost). Railway/production URLs are not used."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Apply Drizzle schema to CI database
+        run: npm run db:push
+
+      - name: TypeScript check
+        run: npm run check
+
+      - name: Production build (client + server)
+        run: npm run build
+
+      - name: Run Playwright E2E
+        run: npx playwright test
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## E2E Tests finished"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|--------|"
+            echo "| Database | Ephemeral Postgres **service** on \`localhost:5432\` (schema via \`db:push\`) — **not** Railway |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Ref | \`${{ github.ref }}\` |"
+            echo ""
+            echo "### What to download if something failed"
+            echo "Artifact **\`e2e-report\`** contains:"
+            echo "- \`playwright-report/index.html\` — open locally for step-by-step traces, screenshots, and videos"
+            echo "- \`test-results/\` — raw outputs and **\`e2e-junit.xml\`**"
+            echo ""
+            echo "### Railway / production"
+            echo "This job does **not** connect to Railway. To avoid deploying broken code, require **E2E Tests** as a required status check on your default branch and use merge (or Railway \"Wait for CI\") before deploy."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Playwright HTML report and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: warn

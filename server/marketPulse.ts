@@ -12,6 +12,8 @@
  *   - Ending with a question → reply rate × 2–3
  *   - Hot takes on TRENDING tools (whatever is in the news today) = max impressions
  *   - Posting during trending events (Nvidia launch, AWS outage, K8s release) → 5-10× reach
+ *
+ * Trends inputs: HN front page + Google Trends **official RSS** (US, India, UK merged — no HTML scraping).
  */
 
 import Parser from "rss-parser";
@@ -40,16 +42,34 @@ async function fetchHnFrontPage(): Promise<string[]> {
   }
 }
 
-/** Fetch Google Trends daily RSS for trending topics */
-async function fetchGoogleTrends(): Promise<string[]> {
+/** Fetch Google Trends RSS for one region (official RSS — no scraping). */
+async function fetchGoogleTrendsForGeo(geo: string, hl: string): Promise<string[]> {
   try {
     const parsed = await rssParser.parseURL(
-      "https://trends.google.com/trending/rss?geo=US&hl=en-US",
+      `https://trends.google.com/trending/rss?geo=${encodeURIComponent(geo)}&hl=${encodeURIComponent(hl)}`,
     );
-    return (parsed.items || []).slice(0, 15).map((i) => i.title || "").filter(Boolean);
+    return (parsed.items || []).slice(0, 12).map((i) => i.title || "").filter(Boolean);
   } catch {
     return [];
   }
+}
+
+/** US + India + UK (EU proxy) — merged and de-duped for ranking keywords */
+async function fetchGoogleTrendsMultiRegion(): Promise<string[]> {
+  const [us, ind, gb] = await Promise.all([
+    fetchGoogleTrendsForGeo("US", "en-US"),
+    fetchGoogleTrendsForGeo("IN", "en-GB"),
+    fetchGoogleTrendsForGeo("GB", "en-GB"),
+  ]);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of [...us, ...ind, ...gb]) {
+    const k = t.toLowerCase().trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out.slice(0, 36);
 }
 
 /** Niche keywords that indicate a topic is relevant to Kishore's audience */
@@ -127,7 +147,7 @@ ${trendingBlock}
 export async function getMarketPulse(): Promise<MarketPulseResult> {
   const [hnTitles, trendTitles] = await Promise.all([
     fetchHnFrontPage(),
-    fetchGoogleTrends(),
+    fetchGoogleTrendsMultiRegion(),
   ]);
 
   const allTitles = [...hnTitles, ...trendTitles];

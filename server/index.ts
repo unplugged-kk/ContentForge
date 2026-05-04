@@ -102,7 +102,9 @@ app.use((req, res, next) => {
       resave: false,
       saveUninitialized: false,
       cookie: {
-        secure: process.env.NODE_ENV === "production",
+        // Allow http://localhost E2E against production build (SESSION_COOKIE_SECURE=0)
+        secure:
+          process.env.NODE_ENV === "production" && process.env.SESSION_COOKIE_SECURE !== "0",
         httpOnly: true,
         sameSite: "lax",
         maxAge: 30 * 24 * 60 * 60 * 1000,

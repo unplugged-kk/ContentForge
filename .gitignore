@@ -17,3 +17,9 @@ vite.config.ts.*
 .graphify_chunks.json
 .graphify_python
 graphify-out/
+
+# Playwright
+e2e/.auth/
+test-results/
+playwright-report/
+playwright/.cache/

@@ -27,9 +27,12 @@
 ## Last Checkpoint (update this every session)
 
 ```
-Date: 2026-05-04
-Agent: Claude Code
-What was done this session:
+Date: 2026-05-04 (resume)
+Agent: Cursor
+What was done this session (resume):
+  - server/marketPulse.ts: Google Trends RSS merged for US + IN + GB (deduped); still HN front page + niche filter
+  - client/discover.tsx: "Today's market pulse" panel (GET /api/autopilot/market-pulse), refresh + data-testids; trends source label
+What was done earlier (same branch):
   - server/autopilot.ts (NEW): core autopilot engine — generateDraftFromIdea(), autofillCalendar(), runMorningBriefing()
   - server/discoverRefresh.ts: added Google Trends RSS, 6 more Reddit subreddits (sre/platformengineering/cloudnative/aws/googlecloud/finops), URL+title dedupe against existing ideas, stronger AI/DevOps intersection prompt
   - server/scheduler.ts: morning briefing cron (05:00 UTC), calendar autofill cron (Sun 18:00 UTC), exponential backoff retry (3x: 5/30/120 min), retry count tracking

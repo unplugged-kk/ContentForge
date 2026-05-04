@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark, BookmarkCheck, Sparkles, ArrowUpRight, Filter, Zap, Flame, Star, Rss, Clock, ShieldCheck } from "lucide-react";
+import { format } from "date-fns";
+import { Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark, BookmarkCheck, Sparkles, Filter, Zap, Flame, Star, Rss, ShieldCheck, Radio } from "lucide-react";
 import type { DiscoveredIdea, RssSource, MonitoredAccount } from "@shared/schema";
 import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -29,7 +30,16 @@ const sourceTypeLabels: Record<string, string> = {
   rss: "RSS Feed",
   github: "GitHub",
   arxiv: "ArXiv",
+  trends: "Google Trends",
   x_account: "X Account",
+};
+
+export type MarketPulsePayload = {
+  breakingTopics: string[];
+  trendingKeywords: string[];
+  boostTopics: string[];
+  xAlgorithmContext: string;
+  fetchedAt: string;
 };
 
 export default function DiscoverPage() {
@@ -40,6 +50,11 @@ export default function DiscoverPage() {
 
   const { data: ideas = [], isLoading: ideasLoading } = useQuery<DiscoveredIdea[]>({
     queryKey: ["/api/discover/ideas"],
+  });
+
+  const { data: pulse, isLoading: pulseLoading } = useQuery<MarketPulsePayload>({
+    queryKey: ["/api/autopilot/market-pulse"],
+    staleTime: 1000 * 60 * 5,
   });
 
   const { data: rssSources = [] } = useQuery<RssSource[]>({ queryKey: ["/api/discover/rss-sources"] });
@@ -114,6 +129,85 @@ export default function DiscoverPage() {
           </Button>
         </div>
       </div>
+
+      <Card data-testid="card-market-pulse">
+        <CardHeader className="pb-2 flex flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Radio className="h-4 w-4" />
+            Today&apos;s market pulse
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {pulse?.fetchedAt && (
+              <span className="text-[10px] text-muted-foreground" data-testid="text-pulse-fetched-at">
+                Updated {format(new Date(pulse.fetchedAt), "MMM d, HH:mm")}
+              </span>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              disabled={pulseLoading}
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/autopilot/market-pulse"] })}
+              data-testid="button-refresh-market-pulse"
+            >
+              {pulseLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3 text-xs">
+          <p className="text-muted-foreground">
+            Hacker News front page + Google Trends RSS (US, India, UK). These signals feed the morning briefing so ideas tied to what&apos;s hot rank higher.
+          </p>
+          {pulseLoading && !pulse ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : pulse ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <p className="font-medium text-foreground mb-2 flex items-center gap-1">
+                  <Flame className="h-3.5 w-3.5 text-orange-400" /> Niche &amp; breaking
+                </p>
+                <ul className="space-y-1.5 text-muted-foreground max-h-44 overflow-y-auto" data-testid="list-pulse-breaking">
+                  {pulse.breakingTopics.slice(0, 12).map((t, i) => (
+                    <li key={i} className="line-clamp-2 border-l-2 border-orange-500/40 pl-2">{t}</li>
+                  ))}
+                  {pulse.breakingTopics.length === 0 && (
+                    <li className="italic text-muted-foreground">No DevOps/AI keyword overlap on titles yet — check trending keywords.</li>
+                  )}
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-2 flex items-center gap-1">
+                  <TrendingUp className="h-3.5 w-3.5" /> Trending keywords
+                </p>
+                <div className="flex flex-wrap gap-1 max-h-44 overflow-y-auto" data-testid="list-pulse-keywords">
+                  {pulse.trendingKeywords.slice(0, 28).map((k) => (
+                    <Badge key={k} variant="secondary" className="text-[10px] font-normal">
+                      {k}
+                    </Badge>
+                  ))}
+                  {pulse.trendingKeywords.length === 0 && (
+                    <span className="italic text-muted-foreground">No repeated terms extracted.</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-2">Score boost today</p>
+                <ul className="space-y-1 text-muted-foreground max-h-44 overflow-y-auto" data-testid="list-pulse-boost">
+                  {pulse.boostTopics.slice(0, 8).map((t, i) => (
+                    <li key={i} className="line-clamp-2">• {t}</li>
+                  ))}
+                  {pulse.boostTopics.length === 0 && (
+                    <li className="italic text-muted-foreground">Same as breaking when niche matches exist.</li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {showSources && (
         <div className="grid gap-4 md:grid-cols-2">

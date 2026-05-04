@@ -1,0 +1,22 @@
+name: contentforge-e2e
+
+# Ephemeral Postgres for Playwright E2E (local). Does not touch Railway or dev DB on :5432.
+# Usage: npm run build:verify:docker
+#
+# - Listens on host port 5433 → no clash with docker-compose.yml (5432) or local Postgres.
+# - Data is discarded with: docker compose -f docker-compose.e2e.yml down -v
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: e2e
+      POSTGRES_PASSWORD: e2e
+      POSTGRES_DB: contentforge_e2e
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e2e -d contentforge_e2e"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

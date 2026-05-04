@@ -2,10 +2,14 @@
  * Autopilot engine — discover → rank → template-match → draft → schedule.
  * Manual flow (Discover page, Generate page) works independently alongside this.
  *
- * Posting slots (UTC):
+ * Weekday posting slots (UTC):
  *   07:30 — EU morning commute  → thread/educational
  *   14:00 — India evening       → tweet/hot_take
- *   17:30 — US lunch scroll     → thread/long_thread
+ *   17:30 — US lunch scroll     → long_thread
+ *
+ * Weekend slots (UTC):
+ *   Saturday 09:00 — deep-dive article thread (15–20 tweets)
+ *   Sunday   10:00 — weekly recap / "this week in DevOps" thread (12–15 tweets)
  *
  * Niche filter: only DevOps · AI · Kubernetes · Platform Engineering · SRE · MLOps · FinOps · Security
  * Off-topic content (finance, sports, general tech news, etc.) is rejected before drafting.
@@ -18,11 +22,22 @@ import type { DiscoveredIdea, Template } from "@shared/schema";
 
 // ─── Posting schedule ────────────────────────────────────────────────────────
 
-const POSTING_SLOTS = [
+// Mon–Fri slots — 3-4 posts/day
+const WEEKDAY_SLOTS = [
   { utcHour: 7,  utcMinute: 30, preferredType: "thread",      tone: "educational",  label: "EU morning" },
   { utcHour: 14, utcMinute: 0,  preferredType: "tweet",       tone: "provocative",  label: "India evening" },
-  { utcHour: 17, utcMinute: 30, preferredType: "thread",      tone: "storytelling", label: "US lunch" },
+  { utcHour: 17, utcMinute: 30, preferredType: "long_thread", tone: "storytelling", label: "US lunch" },
 ] as const;
+
+// Weekend slots — deeper content
+const WEEKEND_SLOTS = {
+  saturday: { utcHour: 9,  utcMinute: 0, preferredType: "article_thread", tone: "educational", label: "Sat deep-dive" },
+  sunday:   { utcHour: 10, utcMinute: 0, preferredType: "weekly_recap",   tone: "reflective",  label: "Sun recap" },
+} as const;
+
+// Unified list used by nextSlots()
+type PostingSlot = { utcHour: number; utcMinute: number; preferredType: string; tone: string; label: string };
+const POSTING_SLOTS: PostingSlot[] = [...WEEKDAY_SLOTS];
 
 // ─── Niche relevance filter ───────────────────────────────────────────────────
 // Only content about these domains passes. Everything else is discarded.
@@ -210,7 +225,13 @@ export async function generateDraftFromIdea(
   const formatPrompt =
     postType === "tweet"
       ? `Write one high-engagement tweet (max 275 chars). Hook in first line.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}], "hashtag_suggestions": ["tag1", "tag2"]}`
-      : `Write a ${postType === "long_thread" ? "8-12" : "4-7"} tweet thread. Tweet 1 = hook (≤275 chars). Each subsequent tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = CTA or bold question.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`;
+      : postType === "article_thread"
+      ? `Write a 15–20 tweet deep-dive article thread. Tweet 1 = scroll-stopping hook with a big claim or number. Tweets 2-18 = structured sections: context → problem → analysis → data/examples → lessons → implications. Each tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = bold prediction + question. This is weekend content — more depth, narrative arc, references to real incidents or papers.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`
+      : postType === "weekly_recap"
+      ? `Write a 12–15 tweet "This week in DevOps/AI" weekly recap thread. Tweet 1 = teaser hook listing 3 big things that happened this week. Tweets 2–13 = one insight per tweet, covering: biggest news, tool releases, incidents/outages, trend shifts, a hot take, and one "what to watch next week". Each tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = question for the community.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`
+      : postType === "long_thread"
+      ? `Write an 8–12 tweet thread. Tweet 1 = hook (≤275 chars). Tweets 2-10 = numbered insights (1/, 2/, ...) with real tool names and metrics. Last tweet = bold question or prediction.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`
+      : `Write a 4–7 tweet thread. Tweet 1 = hook (≤275 chars). Each subsequent tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = CTA or bold question.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`;
 
   try {
     // Optionally inject today's market pulse context
@@ -297,6 +318,13 @@ function rankIdeas(
 
 // ─── Slot calculation ─────────────────────────────────────────────────────────
 
+function getSlotsForDay(date: Date): PostingSlot[] {
+  const dow = date.getUTCDay(); // 0=Sun, 6=Sat
+  if (dow === 6) return [WEEKEND_SLOTS.saturday];
+  if (dow === 0) return [WEEKEND_SLOTS.sunday];
+  return [...WEEKDAY_SLOTS];
+}
+
 function nextSlots(fromDate: Date, count: number): Date[] {
   const slots: Date[] = [];
   const d = new Date(fromDate);
@@ -305,7 +333,7 @@ function nextSlots(fromDate: Date, count: number): Date[] {
   for (let day = 0; slots.length < count; day++) {
     const base = new Date(d);
     base.setUTCDate(base.getUTCDate() + day);
-    for (const slot of POSTING_SLOTS) {
+    for (const slot of getSlotsForDay(base)) {
       if (slots.length >= count) break;
       const t = new Date(base);
       t.setUTCHours(slot.utcHour, slot.utcMinute, 0, 0);
@@ -371,8 +399,11 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
     const idea = ranked[i % ranked.length];
     const slotDef = POSTING_SLOTS[i % POSTING_SLOTS.length];
 
-    const postType =
-      idea.contentTypeSuggestion && ["tweet", "thread", "long_thread"].includes(idea.contentTypeSuggestion)
+    // Weekend slots always use their designated type (article_thread / weekly_recap)
+    const isWeekendSlot = ["article_thread", "weekly_recap"].includes(slotDef.preferredType);
+    const postType = isWeekendSlot
+      ? slotDef.preferredType
+      : idea.contentTypeSuggestion && ["tweet", "thread", "long_thread"].includes(idea.contentTypeSuggestion)
         ? idea.contentTypeSuggestion
         : slotDef.preferredType;
 
@@ -405,6 +436,90 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
   }
 
   return { draftsCreated: draftsCreated.length, slots: freeSlots.slice(0, draftsCreated.length), errors };
+}
+
+// ─── Weekend content generation ───────────────────────────────────────────────
+
+export type WeekendContentResult = {
+  postType: "article_thread" | "weekly_recap";
+  postId: number | null;
+  ideaTitle: string;
+  tweetCount: number;
+  scheduledAt: Date;
+  error?: string;
+};
+
+/**
+ * Generates one weekend deep-dive post.
+ * Called by scheduler on Sat 09:00 UTC (article) and Sun 10:00 UTC (recap).
+ */
+export async function generateWeekendContent(
+  type: "article_thread" | "weekly_recap",
+): Promise<WeekendContentResult> {
+  const slot = type === "article_thread" ? WEEKEND_SLOTS.saturday : WEEKEND_SLOTS.sunday;
+  const scheduledAt = new Date();
+  scheduledAt.setUTCHours(slot.utcHour, slot.utcMinute, 0, 0);
+
+  // For weekly_recap, synthesise across this week's pulse rather than a single idea
+  if (type === "weekly_recap") {
+    const pulse = await getMarketPulse();
+    const summaryIdea: DiscoveredIdea = {
+      id: -1,
+      title: `Weekly Recap: ${pulse.breakingTopics.slice(0, 3).join(", ") || "DevOps & AI this week"}`,
+      description: `Weekly roundup of top trends: ${pulse.trendingKeywords.slice(0, 8).join(", ")}`,
+      summary: "Weekly DevOps/AI recap",
+      sourceInspiration: "Market Pulse",
+      sourceUrl: null,
+      sourceType: "trends",
+      category: "devops",
+      contentTypeSuggestion: "weekly_recap",
+      contentAngles: pulse.breakingTopics.slice(0, 3),
+      pillarId: null,
+      viralScore: "8.0",
+      viralReasoning: "Weekly recaps drive saves and follows",
+      valueProposition: "One thread to stay current",
+      uniqueAngle: pulse.xAlgorithmContext.substring(0, 100),
+      timeliness: "trending_now",
+      targetAudience: "DevOps and AI engineers",
+      suggestedHook: `This week in DevOps/AI: ${pulse.breakingTopics[0] || "big things happened"}`,
+      hashtagSuggestions: ["DevOps", "AI", "Kubernetes"],
+      batchId: `weekend_${Date.now()}`,
+      status: "new",
+      isBookmarked: false,
+      discoveredAt: new Date(),
+      updatedAt: new Date(),
+    } as any;
+
+    const draft = await generateDraftFromIdea(summaryIdea, "weekly_recap", "reflective", null);
+    if (!draft) return { postType: type, postId: null, ideaTitle: summaryIdea.title, tweetCount: 0, scheduledAt, error: "Draft generation failed" };
+
+    draft.scheduledAt = scheduledAt;
+    const post = await storage.createPost(
+      { pillarId: null, postType: "weekly_recap", tone: "reflective", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
+      draft.tweets as any,
+    );
+    return { postType: type, postId: (post as any)?.id ?? null, ideaTitle: summaryIdea.title, tweetCount: draft.tweets.length, scheduledAt };
+  }
+
+  // For article_thread: pick the top niche idea of the week
+  const ideas = await storage.getDiscoveredIdeas();
+  const pillars = await storage.getPillars();
+  const pulse = await getMarketPulse();
+  const ranked = rankIdeas(ideas.filter((i) => i.status !== "used"), pillars, pulse);
+
+  if (!ranked.length) return { postType: type, postId: null, ideaTitle: "(none)", tweetCount: 0, scheduledAt, error: "No ideas available" };
+
+  const best = ranked[0];
+  const draft = await generateDraftFromIdea(best, "article_thread", slot.tone, best.pillarId ?? null);
+  if (!draft) return { postType: type, postId: null, ideaTitle: best.title, tweetCount: 0, scheduledAt, error: "Draft generation failed" };
+
+  draft.scheduledAt = scheduledAt;
+  const post = await storage.createPost(
+    { pillarId: best.pillarId, postType: "article_thread", tone: slot.tone, targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
+    draft.tweets as any,
+  );
+  await storage.updateDiscoveredIdeaStatus(best.id, "used");
+  return { postType: type, postId: (post as any)?.id ?? null, ideaTitle: best.title, tweetCount: draft.tweets.length, scheduledAt };
 }
 
 // ─── Morning briefing ─────────────────────────────────────────────────────────
