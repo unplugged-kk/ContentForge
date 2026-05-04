@@ -54,6 +54,8 @@ Port **5433** avoids clashing with **`docker-compose.yml`** (dev DB on **5432**)
 
 Crons are disabled during E2E (`DISABLE_CRON=1` via `npm run e2e:serve`). Session cookies use `SESSION_COOKIE_SECURE=0` for `http://127.0.0.1`.
 
+**OpenAI:** GitHub Actions sets `CI=true`, and Playwright’s webServer sets `CONTENTFORGE_E2E_SERVER=1`, so the server can start **without** `OPENAI_API_KEY`. E2E smoke tests do not call the real AI; production and `npm run dev` still require a real key.
+
 ## CI (GitHub Actions)
 
 Workflow: **`.github/workflows/e2e.yml`** (job name **“E2E Tests”**).

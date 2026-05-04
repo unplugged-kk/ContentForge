@@ -1,6 +1,31 @@
 import OpenAI from "openai";
 
 /**
+ * Resolve API key for the OpenAI client constructor.
+ * The SDK throws at construct time if no key is passed — that breaks CI/E2E
+ * where we boot the real server without calling AI. Use a non-billing placeholder
+ * only when explicitly allowed (GitHub `CI=true`, or Playwright sets
+ * `CONTENTFORGE_E2E_SERVER=1` on the webServer process).
+ */
+function resolveOpenAiApiKey(): string {
+  const fromEnv =
+    process.env.AI_API_KEY ??
+    process.env.OPENAI_API_KEY ??
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+  if (fromEnv) return fromEnv;
+
+  const allowPlaceholder =
+    process.env.CI === "true" || process.env.CONTENTFORGE_E2E_SERVER === "1";
+  if (allowPlaceholder) {
+    return "sk-cf-e2e-placeholder-not-for-production";
+  }
+
+  throw new Error(
+    "Missing OpenAI credentials: set OPENAI_API_KEY (or AI_API_KEY / AI_INTEGRATIONS_OPENAI_API_KEY).",
+  );
+}
+
+/**
  * Single OpenAI-compatible client for all AI calls.
  *
  * Provider switching is env-driven — no code changes required:
@@ -9,10 +34,7 @@ import OpenAI from "openai";
  *   • Ollama (local):      AI_BASE_URL=http://localhost:11434/v1
  */
 export const ai = new OpenAI({
-  apiKey:
-    process.env.AI_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  apiKey: resolveOpenAiApiKey(),
   baseURL:
     process.env.AI_BASE_URL ??
     process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ??

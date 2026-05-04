@@ -65,6 +65,8 @@ export default defineConfig({
       PORT: port,
       DISABLE_CRON: "1",
       SESSION_COOKIE_SECURE: "0",
+      /** Lets server/ai/config.ts boot without OPENAI_API_KEY (E2E does not call AI). */
+      CONTENTFORGE_E2E_SERVER: "1",
     },
   },
 });
