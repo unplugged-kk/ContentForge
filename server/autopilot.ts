@@ -1,55 +1,171 @@
 /**
- * Autopilot engine — discover → rank → draft → schedule, fully unattended.
- * Manual flow (Discover page, Generate page) still works independently.
+ * Autopilot engine — discover → rank → template-match → draft → schedule.
+ * Manual flow (Discover page, Generate page) works independently alongside this.
  *
  * Posting slots (UTC):
  *   07:30 — EU morning commute  → thread/educational
  *   14:00 — India evening       → tweet/hot_take
  *   17:30 — US lunch scroll     → thread/long_thread
+ *
+ * Niche filter: only DevOps · AI · Kubernetes · Platform Engineering · SRE · MLOps · FinOps · Security
+ * Off-topic content (finance, sports, general tech news, etc.) is rejected before drafting.
  */
 import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
-import type { DiscoveredIdea } from "@shared/schema";
+import type { DiscoveredIdea, Template } from "@shared/schema";
 
-const POSTING_SLOTS: { utcHour: number; utcMinute: number; preferredType: string; tone: string }[] = [
-  { utcHour: 7, utcMinute: 30, preferredType: "thread", tone: "educational" },
-  { utcHour: 14, utcMinute: 0, preferredType: "tweet", tone: "provocative" },
-  { utcHour: 17, utcMinute: 30, preferredType: "thread", tone: "storytelling" },
+// ─── Posting schedule ────────────────────────────────────────────────────────
+
+const POSTING_SLOTS = [
+  { utcHour: 7,  utcMinute: 30, preferredType: "thread",      tone: "educational",  label: "EU morning" },
+  { utcHour: 14, utcMinute: 0,  preferredType: "tweet",       tone: "provocative",  label: "India evening" },
+  { utcHour: 17, utcMinute: 30, preferredType: "thread",      tone: "storytelling", label: "US lunch" },
+] as const;
+
+// ─── Niche relevance filter ───────────────────────────────────────────────────
+// Only content about these domains passes. Everything else is discarded.
+
+const NICHE_KEYWORDS = [
+  "kubernetes", "k8s", "devops", "sre", "platform engineering", "mlops", "aiops",
+  "ai agent", "llm", "large language model", "rag", "machine learning", "ml ",
+  "data pipeline", "feature store", "data mesh", "lakehouse", "kafka", "spark",
+  "terraform", "crossplane", "pulumi", "gitops", "argocd", "flux",
+  "observability", "incident", "on-call", "slo", "error budget",
+  "cloud cost", "finops", "rightsizing", "spot instance",
+  "container", "docker", "helm", "operator", "crd", "cncf",
+  "aws", "gcp", "azure", "cloud native", "microservice",
+  "security", "devsecops", "supply chain", "sbom", "slsa",
+  "infrastructure", "infra", "engineer", "platform team",
+  "backstage", "internal developer", "golden path",
+  "ai infrastructure", "gpu", "model serving", "vector database",
+  "langchain", "openai", "anthropic", "mcp", "agentic",
 ];
 
-/** All 14 content pillars with hot-topic priority weighting for AI/DevOps niche */
-const PILLAR_WEIGHTS: Record<string, number> = {
-  "AI Agents & Agentic Workflows": 1.4,
-  "AIOps & AI-Assisted DevOps": 1.3,
-  "Data Infrastructure & MLOps": 1.2,
-  "Kubernetes Deep Dives": 1.1,
-  "Platform Engineering & DevEx": 1.1,
-  "SRE & Reliability Engineering": 1.0,
-  "Cloud-Native Data Platforms": 1.0,
-  "Infrastructure as Code": 0.9,
-  "FinOps & Cloud Cost Engineering": 0.9,
-  "Security & DevSecOps": 0.9,
-  "Technical Leadership & Eng Management": 0.8,
-  "Open Source & CNCF Ecosystem": 0.8,
-  "Career & Leadership": 0.7,
-  "Hot Takes & Trends": 1.2,
+function isNicheRelevant(idea: DiscoveredIdea): boolean {
+  const text = `${idea.title} ${idea.description || ""} ${idea.category || ""}`.toLowerCase();
+  return NICHE_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+// ─── Pillar weights ───────────────────────────────────────────────────────────
+// AI+DevOps intersection gets the highest boost — that's where Kishore's
+// audience engages most. Weights multiply the AI-assigned viral score.
+
+export const PILLAR_WEIGHTS: Record<string, number> = {
+  "AI Agents & Agentic Workflows":          1.40,  // hottest topic in 2025-26
+  "AIOps & AI-Assisted DevOps":             1.35,  // AI+DevOps = Kishore's sweet spot
+  "Hot Takes & Trends":                     1.20,  // controversy drives engagement
+  "Data Infrastructure & MLOps":            1.20,
+  "Kubernetes Deep Dives":                  1.15,  // core audience
+  "Platform Engineering & DevEx":           1.10,
+  "SRE & Reliability Engineering":          1.05,
+  "Cloud-Native Data Platforms":            1.00,
+  "Infrastructure as Code":                 0.95,
+  "Security & DevSecOps":                   0.90,
+  "FinOps & Cloud Cost Engineering":        0.90,
+  "Open Source & CNCF Ecosystem":           0.85,
+  "Technical Leadership & Eng Management":  0.80,
+  "Career & Leadership":                    0.75,
+  // old pillar names from DB (backwards-compat)
+  "AI for DevOps / AIOps":                  1.35,
+  "Infrastructure as Code for Data":        0.95,
 };
 
-const KISHORE_VOICE = `You are ghostwriting for Kishore Kumar Behera — Infrastructure Engineering Lead (11+ yrs), deep expertise in Kubernetes, Kafka, Spark, Terraform, data platforms, and AI-assisted DevOps. He has shipped:
-- Saved $500K at Salesforce via cloud cost optimisation
-- Ran multi-region K8s platforms at Maersk scale
-- Built ML feature stores, AIOps observability pipelines, IaC-driven data platforms at SAP Labs
+// ─── Template matching ────────────────────────────────────────────────────────
+// Each idea is matched to the best template from the DB based on:
+//   1. Pillar match (same pillar = strong signal)
+//   2. Content type match (idea's contentTypeSuggestion vs template's postType)
+//   3. Keyword affinity (template pattern keywords in idea title/description)
 
-Voice rules:
-1. First 2 lines must stop the scroll — specific number, bold claim, or story hook
-2. Technical but conversational — how an engineer talks in Slack, not documentation
-3. Specific tools, real metrics, actual scenarios (not generic advice)
-4. Short punchy sentences for tweets (≤280 chars). Threads: hook tweet + numbered insights
-5. End with a question or bold prediction that invites debate
-6. Never use hashtags in body — they go in hashtag_suggestions only
-7. Contrarian where possible — challenge conventional wisdom with evidence
-8. AI + DevOps intersection content gets 30% engagement boost — prioritise that angle`;
+export function matchTemplate(idea: DiscoveredIdea, templates: Template[]): Template | null {
+  if (!templates.length) return null;
+
+  const text = `${idea.title} ${idea.description || ""}`.toLowerCase();
+  const ideaType = idea.contentTypeSuggestion || "thread";
+
+  // Score each template
+  const scored = templates.map((t) => {
+    let score = 0;
+
+    // Pillar match — highest weight
+    if (t.pillarId && t.pillarId === idea.pillarId) score += 10;
+
+    // Post type alignment
+    if (t.postType === ideaType) score += 5;
+    if (ideaType === "hot_take" && t.postType === "tweet") score += 3;
+    if (ideaType === "long_thread" && t.postType === "thread") score += 3;
+
+    // Pattern keyword affinity
+    const patternWords = t.pattern.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+    for (const w of patternWords) {
+      if (text.includes(w)) score += 2;
+    }
+
+    // Prefer templates that match the idea's timeliness
+    if (idea.timeliness === "trending_now" && t.pattern.toLowerCase().includes("hot take")) score += 3;
+    if (idea.timeliness === "evergreen" && t.pattern.toLowerCase().includes("lesson")) score += 2;
+
+    return { template: t, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].score > 0 ? scored[0].template : null;
+}
+
+// ─── Engagement score ─────────────────────────────────────────────────────────
+// Composite score shown in API responses. Combines viral_score × pillar_weight
+// with bonus signals from timeliness and content type.
+
+export function computeEngagementScore(idea: DiscoveredIdea, pillarName: string): {
+  score: number;
+  breakdown: Record<string, number>;
+} {
+  const viral = parseFloat(String(idea.viralScore || "5"));
+  const pillarWeight = PILLAR_WEIGHTS[pillarName] ?? 1.0;
+
+  const timelinessBonus =
+    idea.timeliness === "trending_now" ? 0.8 :
+    idea.timeliness === "this_week"    ? 0.4 : 0;
+
+  const typeBonus =
+    idea.contentTypeSuggestion === "thread"      ? 0.3 :
+    idea.contentTypeSuggestion === "long_thread" ? 0.5 :
+    idea.contentTypeSuggestion === "hot_take"    ? 0.6 : 0;
+
+  const nicheBonus = isNicheRelevant(idea) ? 0.5 : -2.0;
+
+  const score = parseFloat(((viral * pillarWeight) + timelinessBonus + typeBonus + nicheBonus).toFixed(2));
+
+  return {
+    score,
+    breakdown: {
+      viral_score: viral,
+      pillar_weight: pillarWeight,
+      timeliness_bonus: timelinessBonus,
+      content_type_bonus: typeBonus,
+      niche_bonus: nicheBonus,
+    },
+  };
+}
+
+// ─── Voice and prompt ─────────────────────────────────────────────────────────
+
+const KISHORE_VOICE = `You are ghostwriting for Kishore Kumar Behera — Infrastructure Engineering Lead (11+ yrs).
+Credentials: Saved $500K at Salesforce via cloud cost optimisation. Ran multi-region K8s platforms at Maersk. Built ML feature stores and AIOps observability pipelines at SAP Labs.
+
+NICHE: DevOps · AI/MLOps · Kubernetes · Platform Engineering · SRE · FinOps · IaC. Do NOT write about anything outside this niche.
+
+Voice rules — apply every single one:
+1. Hook: first line must stop the scroll with a specific number, bold claim, or story moment. No generic intros.
+2. Specific > Generic: real tool names, real metrics, real scenarios. Never say "many teams" — say "we did X at Maersk".
+3. Contrarian: challenge the mainstream view WITH evidence.
+4. Conversational: how an engineer talks in Slack, NOT how documentation reads.
+5. Short sentences for tweets (max 275 chars). Threads: hook tweet + numbered insights (1/, 2/, ...).
+6. End every piece with a question or bold prediction that invites debate.
+7. No hashtags in post body — add them to hashtag_suggestions only.
+8. AI+DevOps intersection angle always gets higher engagement — look for that angle first.`;
+
+// ─── Core: generate draft from idea ──────────────────────────────────────────
 
 export type AutopilotDraft = {
   postType: string;
@@ -58,26 +174,34 @@ export type AutopilotDraft = {
   pillarId: number | null;
   pillarName: string;
   ideaTitle: string;
+  templateUsed: string | null;
   hashtagSuggestions: string[];
+  engagementScore: number;
   scheduledAt: Date;
   autopilot: true;
 };
 
-/** Generate tweet/thread content from a discovered idea */
 export async function generateDraftFromIdea(
   idea: DiscoveredIdea,
   postType: string,
   tone: string,
   pillarId: number | null,
 ): Promise<AutopilotDraft | null> {
-  const pillars = await storage.getPillars();
+  const [pillars, templates] = await Promise.all([storage.getPillars(), storage.getTemplates()]);
   const pillar = pillars.find((p) => p.id === pillarId);
-  const pillarName = pillar?.name || idea.category || "Tech";
+  const pillarName = pillar?.name || idea.category || "DevOps";
 
-  const prompt =
+  const matchedTemplate = matchTemplate(idea, templates);
+  const { score: engagementScore } = computeEngagementScore(idea, pillarName);
+
+  const templateGuidance = matchedTemplate
+    ? `\nUse this template pattern as the structural backbone (adapt, don't copy verbatim):\n"${matchedTemplate.pattern}"`
+    : "";
+
+  const formatPrompt =
     postType === "tweet"
-      ? `Write a single high-engagement tweet (max 275 chars) about this topic. Return JSON: {"tweets": [{"content": "...", "position": 0}], "hashtag_suggestions": ["tag1", "tag2"]}`
-      : `Write a ${postType === "long_thread" ? "8-12" : "4-7"} tweet thread. First tweet is the hook (≤275 chars). Subsequent tweets add depth (each ≤275 chars). Return JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2"]}`;
+      ? `Write one high-engagement tweet (max 275 chars). Hook in first line.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}], "hashtag_suggestions": ["tag1", "tag2"]}`
+      : `Write a ${postType === "long_thread" ? "8-12" : "4-7"} tweet thread. Tweet 1 = hook (≤275 chars). Each subsequent tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = CTA or bold question.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`;
 
   try {
     const { content, usage, latency } = await aiCall(
@@ -89,10 +213,12 @@ export async function generateDraftFromIdea(
 Description: ${idea.description || ""}
 Pillar: ${pillarName}
 Tone: ${tone}
-Suggested hook: ${idea.suggestedHook || ""}
-Content angles: ${(idea.contentAngles || []).join("; ")}
+Engagement score: ${engagementScore} (higher = more likely to go viral)
+Suggested hook: ${idea.suggestedHook || "none"}
+Content angles: ${(idea.contentAngles || []).join(" | ")}
+${templateGuidance}
 
-${prompt}`,
+${formatPrompt}`,
         },
       ],
       true,
@@ -104,7 +230,7 @@ ${prompt}`,
 
     const tweets = parsed.tweets.map((t: any) => ({
       content: String(t.content || "").slice(0, 280),
-      position: t.position ?? 0,
+      position: Number(t.position ?? 0),
       charCount: String(t.content || "").length,
     }));
 
@@ -115,8 +241,10 @@ ${prompt}`,
       pillarId,
       pillarName,
       ideaTitle: idea.title,
+      templateUsed: matchedTemplate?.name || null,
       hashtagSuggestions: parsed.hashtag_suggestions || [],
-      scheduledAt: new Date(), // caller sets the actual time
+      engagementScore,
+      scheduledAt: new Date(),
       autopilot: true,
     };
   } catch (e) {
@@ -125,7 +253,23 @@ ${prompt}`,
   }
 }
 
-/** Pick the next N posting slot DateTimes starting from a given base date */
+// ─── Idea ranking ─────────────────────────────────────────────────────────────
+
+function rankIdeas(ideas: DiscoveredIdea[], pillars: { id: number; name: string }[]): DiscoveredIdea[] {
+  return ideas
+    .filter(isNicheRelevant)                          // hard niche filter first
+    .filter((i) => parseFloat(String(i.viralScore || "0")) >= 5.5)
+    .map((i) => {
+      const pillarName = pillars.find((p) => p.id === i.pillarId)?.name || "";
+      const { score } = computeEngagementScore(i, pillarName);
+      return { idea: i, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map(({ idea }) => idea);
+}
+
+// ─── Slot calculation ─────────────────────────────────────────────────────────
+
 function nextSlots(fromDate: Date, count: number): Date[] {
   const slots: Date[] = [];
   const d = new Date(fromDate);
@@ -144,20 +288,7 @@ function nextSlots(fromDate: Date, count: number): Date[] {
   return slots;
 }
 
-/** Return ideas filtered by viral score, weighted by pillar priority */
-function rankIdeas(ideas: DiscoveredIdea[], pillars: { id: number; name: string }[]): DiscoveredIdea[] {
-  return ideas
-    .filter((i) => parseFloat(String(i.viralScore || "0")) >= 6.0)
-    .sort((a, b) => {
-      const pillarA = pillars.find((p) => p.id === a.pillarId)?.name || "";
-      const pillarB = pillars.find((p) => p.id === b.pillarId)?.name || "";
-      const weightA = PILLAR_WEIGHTS[pillarA] ?? 1.0;
-      const weightB = PILLAR_WEIGHTS[pillarB] ?? 1.0;
-      const scoreA = parseFloat(String(a.viralScore || "5")) * weightA;
-      const scoreB = parseFloat(String(b.viralScore || "5")) * weightB;
-      return scoreB - scoreA;
-    });
-}
+// ─── Autofill calendar ────────────────────────────────────────────────────────
 
 export type AutofillResult = {
   draftsCreated: number;
@@ -166,9 +297,8 @@ export type AutofillResult = {
 };
 
 /**
- * Fill the calendar for the next `days` days with autopilot-generated posts.
- * Skips slots that already have a scheduled post.
- * Both this and manual scheduling can coexist — autopilot only fills empty slots.
+ * Fill the next `days` days of the calendar with autopilot posts.
+ * Only fills empty time slots — manual posts are never touched.
  */
 export async function autofillCalendar(days = 7): Promise<AutofillResult> {
   const now = new Date();
@@ -202,7 +332,7 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
       await runDiscoverRefresh();
       return autofillCalendar(days);
     } catch {
-      return { draftsCreated: 0, slots: freeSlots, errors: ["No ideas available and discover refresh failed"] };
+      return { draftsCreated: 0, slots: freeSlots, errors: ["No niche-relevant ideas available"] };
     }
   }
 
@@ -221,7 +351,7 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
 
     const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
     if (!draft) {
-      errors.push(`Failed to generate draft for: ${idea.title.substring(0, 60)}`);
+      errors.push(`Draft gen failed: ${idea.title.substring(0, 60)}`);
       continue;
     }
 
@@ -240,7 +370,6 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
         } as any,
         draft.tweets as any,
       );
-      // Mark idea as used
       await storage.updateDiscoveredIdeaStatus(idea.id, "used");
       draftsCreated.push(idea.id);
     } catch (e: any) {
@@ -251,25 +380,38 @@ export async function autofillCalendar(days = 7): Promise<AutofillResult> {
   return { draftsCreated: draftsCreated.length, slots: freeSlots.slice(0, draftsCreated.length), errors };
 }
 
+// ─── Morning briefing ─────────────────────────────────────────────────────────
+
 export type MorningBriefingResult = {
   discoverBatchId: string;
   newIdeas: number;
   draftsGenerated: number;
-  topIdeas: { title: string; viralScore: string; pillar: string; hook: string }[];
+  topIdeas: {
+    title: string;
+    viralScore: string;
+    engagementScore: number;
+    pillar: string;
+    templateUsed: string | null;
+    hook: string;
+    breakdown: Record<string, number>;
+  }[];
   errors: string[];
 };
 
 /**
- * Morning briefing: runs every day at 05:00 UTC.
- * 1. Runs discover refresh (HN, Reddit, RSS, GitHub, Google Trends, ArXiv)
- * 2. Picks top 5 ideas
- * 3. Auto-generates draft posts for each (status = "ready" not "scheduled" — Kishore reviews before publishing)
+ * Runs every day at 05:00 UTC.
+ * 1. Discovers from all sources (HN, Reddit × 11, RSS × 14, GitHub, ArXiv, Google Trends)
+ * 2. Niche-filters to DevOps/AI/K8s only
+ * 3. Ranks by engagement score (viral × pillar weight + bonuses)
+ * 4. Template-matches each top idea
+ * 5. Generates 5 drafts with status="ready" — Kishore reviews before publishing
+ *    (autofillCalendar separately handles auto-scheduled posts)
  */
 export async function runMorningBriefing(): Promise<MorningBriefingResult> {
   const errors: string[] = [];
 
   const refreshResult = await runDiscoverRefresh();
-  const pillars = await storage.getPillars();
+  const [pillars, templates] = await Promise.all([storage.getPillars(), storage.getTemplates()]);
   const allIdeas = await storage.getDiscoveredIdeas(refreshResult.batchId);
   const ranked = rankIdeas(allIdeas, pillars).slice(0, 5);
 
@@ -278,11 +420,18 @@ export async function runMorningBriefing(): Promise<MorningBriefingResult> {
 
   for (const idea of ranked) {
     const pillar = pillars.find((p) => p.id === idea.pillarId);
+    const pillarName = pillar?.name || idea.category || "Unknown";
+    const { score: engagementScore, breakdown } = computeEngagementScore(idea, pillarName);
+    const matchedTemplate = matchTemplate(idea, templates);
+
     topIdeas.push({
       title: idea.title,
       viralScore: String(idea.viralScore || "?"),
-      pillar: pillar?.name || idea.category || "Unknown",
+      engagementScore,
+      pillar: pillarName,
+      templateUsed: matchedTemplate?.name || null,
       hook: idea.suggestedHook || "",
+      breakdown,
     });
 
     const postType = idea.contentTypeSuggestion === "tweet" ? "tweet" : "thread";
@@ -299,7 +448,7 @@ export async function runMorningBriefing(): Promise<MorningBriefingResult> {
           postType: draft.postType,
           tone: draft.tone,
           targetPlatform: "x",
-          status: "ready", // NOT auto-scheduled — Kishore reviews these
+          status: "ready",
           autopilot: true,
         } as any,
         draft.tweets as any,
