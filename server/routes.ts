@@ -328,6 +328,160 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // ── AI USAGE DASHBOARD ────────────────────────────────────────────────────────
+  app.get("/api/ai-usage/dashboard", async (req, res) => {
+    try {
+      const days = Number(req.query.days ?? 30);
+      const logs = await storage.getAiUsageLogsAll(days);
+
+      // Cost per 1M tokens by model (input, output) — covers both direct OpenAI and OpenRouter pricing
+      const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+        // OpenAI direct
+        "gpt-4o-mini":                         { input: 0.15,   output: 0.60   },
+        "gpt-4o":                              { input: 2.50,   output: 10.00  },
+        "gpt-4o-mini-transcribe":              { input: 3.00,   output: 0      },
+        "gpt-image-1":                         { input: 0,      output: 0      },
+        // Anthropic (via OpenRouter)
+        "claude-opus-4-7":                     { input: 15.00,  output: 75.00  },
+        "anthropic/claude-opus-4-7":           { input: 15.00,  output: 75.00  },
+        "claude-sonnet-4-6":                   { input: 3.00,   output: 15.00  },
+        "anthropic/claude-sonnet-4-5":         { input: 3.00,   output: 15.00  },
+        "claude-haiku-4-5-20251001":           { input: 0.80,   output: 4.00   },
+        "anthropic/claude-haiku-4-5":          { input: 0.80,   output: 4.00   },
+        // Meta Llama (via OpenRouter — free tier models = $0)
+        "meta-llama/llama-3.1-8b-instruct":    { input: 0.00,   output: 0.00   }, // free on OR
+        "meta-llama/llama-3.3-70b-instruct":   { input: 0.12,   output: 0.30   },
+        "meta-llama/llama-4-maverick":         { input: 0.20,   output: 0.60   },
+        // Google (via OpenRouter)
+        "google/gemini-flash-1.5":             { input: 0.075,  output: 0.30   },
+        "google/gemini-pro-1.5":               { input: 1.25,   output: 5.00   },
+        "google/gemini-2.0-flash-exp:free":    { input: 0.00,   output: 0.00   },
+        "google/gemini-2.0-flash-001":         { input: 0.10,   output: 0.40   },
+        "google/gemini-2.0-flash-lite-001":    { input: 0.075,  output: 0.30   },
+        "google/gemini-2.5-pro-preview":       { input: 1.25,   output: 10.00  },
+        // Mistral (via OpenRouter)
+        "mistralai/mistral-7b-instruct":       { input: 0.055,  output: 0.055  },
+        "mistralai/mixtral-8x7b-instruct":     { input: 0.24,   output: 0.24   },
+        // DeepSeek (via OpenRouter)
+        "deepseek/deepseek-chat":              { input: 0.27,   output: 1.10   },
+        "deepseek/deepseek-r1":                { input: 0.55,   output: 2.19   },
+        // Qwen (via OpenRouter)
+        "qwen/qwen-2.5-72b-instruct":          { input: 0.35,   output: 0.40   },
+      };
+
+      // Detect provider from env
+      const isOpenRouter = !!(process.env.AI_BASE_URL?.includes("openrouter"));
+      const activeModel = process.env.AI_TEXT_MODEL ?? "gpt-4o-mini";
+
+      const estimateCost = (log: { model: string; inputTokens?: number | null; outputTokens?: number | null }): number => {
+        const pricing = MODEL_PRICING[log.model] ?? { input: 0.15, output: 0.60 };
+        const inCost  = ((log.inputTokens  || 0) / 1_000_000) * pricing.input;
+        const outCost = ((log.outputTokens || 0) / 1_000_000) * pricing.output;
+        return parseFloat((inCost + outCost).toFixed(6));
+      };
+
+      // Daily buckets
+      const dailyMap: Record<string, { date: string; tokens: number; cost: number; calls: number }> = {};
+      const featureMap: Record<string, { tokens: number; cost: number; calls: number }> = {};
+      const modelMap:   Record<string, { tokens: number; cost: number; calls: number }> = {};
+
+      let totalTokens = 0;
+      let totalCost   = 0;
+      const now = new Date();
+
+      for (const log of logs) {
+        const cost    = estimateCost(log);
+        const tokens  = log.totalTokens || 0;
+        const dateKey = new Date(log.createdAt).toISOString().split("T")[0];
+        const feature = log.feature || "unknown";
+        const model   = log.model || "unknown";
+
+        totalTokens += tokens;
+        totalCost   += cost;
+
+        if (!dailyMap[dateKey]) dailyMap[dateKey] = { date: dateKey, tokens: 0, cost: 0, calls: 0 };
+        dailyMap[dateKey].tokens += tokens;
+        dailyMap[dateKey].cost   += cost;
+        dailyMap[dateKey].calls  += 1;
+
+        if (!featureMap[feature]) featureMap[feature] = { tokens: 0, cost: 0, calls: 0 };
+        featureMap[feature].tokens += tokens;
+        featureMap[feature].cost   += cost;
+        featureMap[feature].calls  += 1;
+
+        if (!modelMap[model]) modelMap[model] = { tokens: 0, cost: 0, calls: 0 };
+        modelMap[model].tokens += tokens;
+        modelMap[model].cost   += cost;
+        modelMap[model].calls  += 1;
+      }
+
+      // Time window totals
+      const todayKey  = now.toISOString().split("T")[0];
+      const weekAgo   = new Date(now.getTime() - 7  * 86400000).toISOString().split("T")[0];
+      const monthAgo  = new Date(now.getTime() - 30 * 86400000).toISOString().split("T")[0];
+
+      const todayCost  = dailyMap[todayKey]?.cost  ?? 0;
+      const weekCost   = Object.entries(dailyMap).filter(([d]) => d >= weekAgo ).reduce((s, [, v]) => s + v.cost, 0);
+      const monthCost  = Object.entries(dailyMap).filter(([d]) => d >= monthAgo).reduce((s, [, v]) => s + v.cost, 0);
+      const todayCalls = dailyMap[todayKey]?.calls ?? 0;
+
+      // Fill in missing days with zero so chart has continuous x-axis
+      const daily = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 86400000).toISOString().split("T")[0];
+        const entry = dailyMap[d] || { date: d, tokens: 0, cost: 0, calls: 0 };
+        daily.push({ ...entry, cost: parseFloat(entry.cost.toFixed(4)) });
+      }
+
+      const byFeature = Object.entries(featureMap).map(([feature, v]) => ({
+        feature, ...v, cost: parseFloat(v.cost.toFixed(4)),
+      })).sort((a, b) => b.cost - a.cost);
+
+      const byModel = Object.entries(modelMap).map(([model, v]) => ({
+        model, ...v, cost: parseFloat(v.cost.toFixed(4)),
+      })).sort((a, b) => b.cost - a.cost);
+
+      const recent = logs.slice(0, 20).map((log) => ({
+        id:          log.id,
+        model:       log.model,
+        feature:     log.feature,
+        totalTokens: log.totalTokens,
+        inputTokens: log.inputTokens,
+        outputTokens:log.outputTokens,
+        latencyMs:   log.latencyMs,
+        estimatedCost: estimateCost(log),
+        createdAt:   log.createdAt,
+      }));
+
+      res.json({
+        summary: {
+          todayCost:   parseFloat(todayCost.toFixed(4)),
+          weekCost:    parseFloat(weekCost.toFixed(4)),
+          monthCost:   parseFloat(monthCost.toFixed(4)),
+          totalCost:   parseFloat(totalCost.toFixed(4)),
+          totalTokens,
+          totalCalls:  logs.length,
+          todayCalls,
+        },
+        provider: {
+          name:        isOpenRouter ? "OpenRouter" : "OpenAI",
+          activeModel,
+          pricing:     MODEL_PRICING[activeModel] ?? { input: 0.15, output: 0.60 },
+          note:        isOpenRouter
+            ? "OpenRouter pricing — free-tier models ($0) or paid as shown"
+            : "OpenAI direct pricing",
+        },
+        daily,
+        byFeature,
+        byModel,
+        recent,
+        daysWindow: days,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // ==================== ARTICLES ====================
   app.get("/api/articles", async (_req, res) => {
     try { res.json(await storage.getArticles()); }

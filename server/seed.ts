@@ -22,6 +22,8 @@ export async function seedDatabase() {
       { name: "AWS What's New", feedUrl: "https://aws.amazon.com/about-aws/whats-new/recent/feed/", category: "tech" },
       { name: "Google Cloud Blog", feedUrl: "https://cloudblog.withgoogle.com/rss/", category: "tech" },
       { name: "AI Snake Oil (Substack)", feedUrl: "https://aisnakeoil.substack.com/feed", category: "ai" },
+      { name: "The Hacker News", feedUrl: "https://feeds.feedburner.com/TheHackersNews", category: "security" },
+      { name: "Hacker News (HN native RSS)", feedUrl: "https://hnrss.org/newest?q=AI+OR+kubernetes+OR+devops+OR+platform+engineering&points=50", category: "tech" },
     ]);
     const existingAccounts = await db.select().from(monitoredAccounts);
     if (existingAccounts.length === 0) {

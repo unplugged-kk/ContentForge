@@ -49,6 +49,7 @@ export interface IStorage {
 
   createAiUsageLog(log: InsertAiUsageLog): Promise<AiUsageLog>;
   getAiUsageLogs(): Promise<AiUsageLog[]>;
+  getAiUsageLogsAll(days?: number): Promise<AiUsageLog[]>;
 
   getArticles(): Promise<Article[]>;
   getArticle(id: number): Promise<Article | undefined>;
@@ -259,6 +260,13 @@ export class DatabaseStorage implements IStorage {
 
   async getAiUsageLogs(): Promise<AiUsageLog[]> {
     return db.select().from(aiUsageLog).orderBy(desc(aiUsageLog.createdAt)).limit(50);
+  }
+
+  async getAiUsageLogsAll(days = 30): Promise<AiUsageLog[]> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    return db.select().from(aiUsageLog)
+      .where(sql`${aiUsageLog.createdAt} >= ${since}`)
+      .orderBy(desc(aiUsageLog.createdAt));
   }
 
   async getArticles(): Promise<Article[]> {

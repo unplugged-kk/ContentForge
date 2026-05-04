@@ -40,6 +40,7 @@ const NICHE_KEYWORDS = [
   "backstage", "internal developer", "golden path",
   "ai infrastructure", "gpu", "model serving", "vector database",
   "langchain", "openai", "anthropic", "mcp", "agentic",
+  "vulnerability", "exploit", "zero-day", "cve", "patch", "breach", "ransomware",
 ];
 
 function isNicheRelevant(idea: DiscoveredIdea): boolean {
