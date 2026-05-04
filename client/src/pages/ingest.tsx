@@ -13,10 +13,12 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Globe, FileText, User, Image, Loader2, ExternalLink, Bookmark, BookmarkCheck,
   Trash2, Wand2, ArrowRight, MessageSquare, Repeat2, Zap, Scale, Swords,
-  Save, Star, Copy, Upload, Link2, Calendar, Eye, Edit3, CheckCircle2
+  Save, Star, Copy, Upload, Link2, Calendar, Eye, Edit3, CheckCircle2, ShieldCheck
 } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Reference, StyleProfile, Post } from "@shared/schema";
+import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const ACTION_LABELS: Record<string, { label: string; icon: any; description: string }> = {
   "my-take": { label: "My Take", icon: MessageSquare, description: "Share Kishore's perspective" },
@@ -223,6 +225,18 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-ingest-title">Ingest Content</h1>
         <p className="text-sm text-muted-foreground">Paste any URL, text, or screenshot — we'll analyze it and help you create content.</p>
+        <Alert className="mt-3 max-w-3xl" data-testid="alert-ingest-compliance">
+          <ShieldCheck className="h-4 w-4" />
+          <AlertTitle className="text-sm">Ingest from anywhere — X is a special case</AlertTitle>
+          <AlertDescription className="text-xs leading-relaxed">
+            URLs and pasted text from across the internet feed analysis and AI synthesis for stronger hooks and drafts.{" "}
+            <strong className="text-foreground">Only for x.com/twitter.com:</strong> post links use the official X API when configured; otherwise paste text; profile pages use the X Account tab or paste — no scraping. See{" "}
+            <a href={X_OFFICIAL_DOCS.developerGuidelines} target="_blank" rel="noopener noreferrer" className="underline font-medium text-foreground">
+              X developer guidelines
+            </a>{" "}
+            and <code className="rounded bg-muted px-1">docs/X_API_COMPLIANCE_AND_RISK.md</code>.
+          </AlertDescription>
+        </Alert>
       </div>
 
       <Card>
@@ -237,7 +251,13 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
 
             <TabsContent value="url" className="space-y-3 mt-3">
               <div className="flex gap-2">
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste any URL — Reddit, GitHub, ArXiv, blogs, X threads..." className="flex-1" data-testid="input-ingest-url" />
+                <Input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="Reddit, GitHub, ArXiv, blogs… X post URLs need server X API keys, or paste text"
+                  className="flex-1"
+                  data-testid="input-ingest-url"
+                />
                 <Button onClick={() => ingestMutation.mutate({ url })} disabled={!url || ingestMutation.isPending} data-testid="button-ingest-url">
                   {ingestMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
                   <span className="ml-1">Analyze</span>

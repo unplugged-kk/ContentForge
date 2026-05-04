@@ -24,6 +24,7 @@ import VaultPage from "@/pages/vault";
 import HooksPage from "@/pages/hooks";
 import CarouselPage from "@/pages/carousel";
 import ChatPage from "@/pages/chat";
+import QueuePage from "@/pages/queue";
 import { QuickCapture } from "@/components/quick-capture";
 
 function Router() {
@@ -44,6 +45,7 @@ function Router() {
       <Route path="/hooks" component={HooksPage} />
       <Route path="/carousel" component={CarouselPage} />
       <Route path="/chat" component={ChatPage} />
+      <Route path="/queue" component={QueuePage} />
       <Route component={NotFound} />
     </Switch>
   );

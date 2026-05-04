@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark, BookmarkCheck, Sparkles, ArrowUpRight, Filter, Zap, Flame, Star, Rss, Clock } from "lucide-react";
+import { Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark, BookmarkCheck, Sparkles, ArrowUpRight, Filter, Zap, Flame, Star, Rss, Clock, ShieldCheck } from "lucide-react";
 import type { DiscoveredIdea, RssSource, MonitoredAccount } from "@shared/schema";
+import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const categoryLabels: Record<string, string> = {
   ai: "AI / ML",
@@ -88,6 +90,18 @@ export default function DiscoverPage() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-discover-title">Idea Discovery</h1>
           <p className="text-sm text-muted-foreground">AI-powered scanning of HN, Reddit, RSS feeds & more. Ranked by viral potential.</p>
+          <Alert className="mt-3 max-w-2xl" data-testid="alert-discover-compliance">
+            <ShieldCheck className="h-4 w-4" />
+            <AlertTitle className="text-sm">Multi-source research</AlertTitle>
+            <AlertDescription className="text-xs leading-relaxed">
+              This feed pulls from many places (RSS, HN, Reddit, GitHub, ArXiv, …) — not just X. You use it to spot topics, then AI and your edits shape posts for reach and engagement.{" "}
+              <strong className="text-foreground">When content lives on X,</strong> we use the{" "}
+              <a href={X_OFFICIAL_DOCS.developerGuidelines} target="_blank" rel="noopener noreferrer" className="underline font-medium text-foreground">
+                official X API
+              </a>{" "}
+              (never scraping x.com). Details: <code className="rounded bg-muted px-1">docs/X_API_COMPLIANCE_AND_RISK.md</code>.
+            </AlertDescription>
+          </Alert>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={() => setShowSources(!showSources)} data-testid="button-toggle-sources">

@@ -10,42 +10,90 @@
 **Primary Goal:** X (Twitter) + Threads monetization via automated content posting  
 **Revenue Target:** X Revenue Share → 5M impressions / 90 days + 500 followers  
 **Time constraint:** Full-time job. Max 5 min/day of manual effort after setup.  
-**Last updated:** 2026-05-01 by Claude (planning phase)
+**Last updated:** 2026-05-04 — Autopilot engine, 14 pillars, 3-4x/day scheduling, enhanced discover
 
 ---
 
-## Current Status: PLANNING COMPLETE — AWAITING ACCOUNT SETUP
+## Current Status: ACTIVE BUILD — DISCOVER + X POSTING PATH
 
-**Kishore is setting up:** Neon DB, Railway, X Developer App (see Sprint 0).  
-**No code changes yet.** Sprint 0 requires credentials before any code can be tested.
+**Architecture:** Neon + Railway + OpenRouter decided; in-process scheduling (`node-cron` planned); PWA first; Apify on hold 30 days; X research via twitterapi.io (not signed up).
+
+**In progress:** Autopilot engine live — 3-4 posts/day, discover → auto-draft → schedule pipeline. Both manual and auto flows work side-by-side.
+
+**Posting frequency target:** 3–4 posts/day (not week) across 3 global time slots: 07:30 UTC (EU), 14:00 UTC (India), 17:30 UTC (US).
 
 ---
 
 ## Last Checkpoint (update this every session)
 
 ```
-Date: 2026-05-01
-Agent: Claude Sonnet 4.6
+Date: 2026-05-04
+Agent: Claude Code
 What was done this session:
-  - Full codebase review via code-review-graph MCP + manual file reads
-  - Reviewed HANDOFF.md, replit.md, schema.ts, routes.ts, seed.ts, auth.ts
-  - Analyzed CannerAI (cannerai.com) for feature inspiration
-  - Answered all of Kishore's questions about Apify, X API, home server, mobile, pillars
-  - Created this PLAN.md tracking file
+  - server/autopilot.ts (NEW): core autopilot engine — generateDraftFromIdea(), autofillCalendar(), runMorningBriefing()
+  - server/discoverRefresh.ts: added Google Trends RSS, 6 more Reddit subreddits (sre/platformengineering/cloudnative/aws/googlecloud/finops), URL+title dedupe against existing ideas, stronger AI/DevOps intersection prompt
+  - server/scheduler.ts: morning briefing cron (05:00 UTC), calendar autofill cron (Sun 18:00 UTC), exponential backoff retry (3x: 5/30/120 min), retry count tracking
+  - shared/schema.ts: posts.retry_count (integer), posts.last_retry_at (timestamp)
+  - server/seed.ts: expanded 6 → 14 pillars (idempotent), added 8 new RSS sources, expanded templates to 30+
+  - server/routes.ts: POST /api/autopilot/morning-briefing, POST /api/autopilot/autofill, GET /api/autopilot/status, GET /api/autopilot/content-gaps
+  - PLAN.md: fixed stale sprint tracker, added Sprint S4.5, updated to 3-4x/day posting model
 
 What is NOT done yet:
-  - No code has been written in this session
-  - Sprint 0 accounts not set up yet (waiting for Kishore)
-  - No env vars updated
+  - X credentials still needed (S0-4) — scheduler and autopilot code is complete but posting requires keys
+  - E2E test with live X API: POST /api/autopilot/morning-briefing → review drafts → /queue → Post to X
+  - Threads OAuth (Sprint 3)
+  - PWA / vite-plugin-pwa (Sprint 0)
 
-Blocking items (Kishore must do):
-  - Create Neon account → copy DATABASE_URL
-  - Create Railway account → deploy app → copy public URL
-  - Register X Developer App → copy 4 credentials
-  - OpenRouter signup → copy API key (optional, for AI cost saving)
-
-Next agent should start at: Sprint 1 (after Kishore provides the above credentials)
+Next steps:
+  1) Configure X: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET in Railway + local .env
+  2) Run npm run db:push to apply retry_count / last_retry_at schema changes
+  3) Trigger POST /api/autopilot/morning-briefing manually to generate first batch of drafts
+  4) Review /queue → approve and post first tweet
 ```
+
+---
+
+## Weekly cadence & global posting (playbook)
+
+**Goal:** 3–4 posts/day to X, timed for **US / Europe / India**, with **off-X research** (RSS, Reddit, GitHub, blogs, Substack, etc.) → AI hooks & synthesis → **you approve** → **X API only to publish**. One heavier “weekend read” piece (often **Friday**).
+
+### Suggested publish windows (store as UTC in `scheduled_at`)
+
+| Audience | Local window (rule of thumb) | UTC-ish |
+|----------|-------------------------------|---------|
+| **US / English** | Lunch scroll | ~**17:00–19:00 UTC** (12–2pm US Eastern) |
+| **Europe** | Morning commute | ~**07:30–09:30 UTC** (8:30–10:30 London winter) |
+| **India** | Evening | ~**14:00–16:00 UTC** (7:30–9:30pm IST) |
+
+Rotate which post hits which band across the week (e.g. Mon US, Wed EU, Fri India + long read). **Cron compares `scheduled_at` to wall clock in UTC inside JS** — pick the exact instant in Calendar so each post fires in the right global window (set Railway to UTC or keep `CRON_TZ` consistent; the timestamp is what matters).
+
+### Example week (3–4 posts + Fri anchor)
+
+| Day | Format | Notes |
+|-----|--------|--------|
+| **Mon** | Tweet | One strong hook + one insight |
+| **Tue** | Thread | Tutorial / list / story |
+| **Wed** | Tweet | Hot take or data point from research |
+| **Thu** | (rest or light tweet) | Optional 4th slot |
+| **Fri** | Long / article | Thread teaser + link, or native thread — timed so **Saturday** opens in target TZ |
+
+### Morning “research stack” (automated + minimal you)
+
+1. **Curated allowlist** — RSS + Discover sources (blogs, Substack, eng portals); **round-robin** emphasis (e.g. Mon Reddit-heavy, Tue RSS-heavy) until we add code rotation.
+2. **Daily discover job** — `DISCOVER_CRON` (e.g. `30 5 * * *` in `CRON_TZ`) runs ingest/rank pipeline.
+3. **Rank** — viral score + your 5‑min pass: pick top ideas with hooks.
+4. **Dedupe** — skip if same URL/title already in `ideas` / `posts` (**not built yet** — priority backlog).
+5. **Generate → Ready** — Calendar schedule to the **band** above; Queue or auto-publish when due.
+
+### Google Trends
+
+Use **official** Trends data (CSV export, Trends UI, or API where allowed) as **input to ideas**, not scraping. Optional later: small job that writes ranked topics into `discovered_ideas` or `ideas`.
+
+### Gaps vs app today
+
+- Dedupe / “already covered”
+- Calendar labels for **target region** per slot
+- Optional cadence presets (tweet vs thread vs Fri long)
 
 ---
 
@@ -173,21 +221,21 @@ Next agent should start at: Sprint 1 (after Kishore provides the above credentia
 ### SPRINT 1 — X Posting (THE revenue unlock)
 
 **Goal:** Can post to X manually and on schedule. This starts the revenue clock.  
-**Status:** ⬜ NOT STARTED  
-**Blocked by:** S0-4 (X credentials)
+**Status:** 🔄 IN PROGRESS — code complete, blocked on X credentials  
+**Blocked by:** S0-4 (X credentials from Kishore)
 
 | # | Task | Who | Status | Notes |
 |---|---|---|---|---|
-| S1-1 | Add `externalIds jsonb`, `externalUrls jsonb`, `errorMessage text` to `posts` table in `shared/schema.ts` → `npm run db:push` | Agent | ⬜ | Small schema change |
-| S1-2 | `npm install twitter-api-v2` | Agent | ⬜ | |
-| S1-3 | Create `server/social/x.ts` with `postSingleToX(token, content)` and `postThreadToX(token, tweets[])` | Agent | ⬜ | Core posting logic |
-| S1-4 | Add `GET /api/social/x/start` + `GET /api/social/x/callback` OAuth 2.0 PKCE routes | Agent | ⬜ | OAuth flow for X |
-| S1-5 | Add `POST /api/posts/:id/publish` endpoint → calls x.ts → updates status to `posted` + saves externalUrls | Agent | ⬜ | Manual "Post Now" |
-| S1-6 | `npm install node-cron` → create `server/scheduler.ts` → check every minute for `status=scheduled AND scheduled_at <= now()` → auto-publish | Agent | ⬜ | Free scheduling |
-| S1-7 | Wire scheduler into `server/index.ts` on startup | Agent | ⬜ | |
-| S1-8 | Add "Post Now" button + "Schedule" datetime picker to Generate page UI | Agent | ⬜ | Frontend work |
-| S1-9 | Add "Connect X" OAuth button + connection status badge to Settings page | Agent | ⬜ | Settings UI |
-| S1-10 | End-to-end test: Generate post → Post Now → verify tweet appears on x.com | Kishore + Agent | ⬜ | THE milestone |
+| S1-1 | Add `externalIds jsonb`, `externalUrls jsonb`, `errorMessage text` to `posts` table | Agent | ✅ | Done in prior session |
+| S1-2 | `npm install twitter-api-v2` | Agent | ✅ | Done in prior session |
+| S1-3 | `server/social/x.ts` — OAuth1 + OAuth2 + DB token fallback, thread posting | Agent | ✅ | Done in prior session |
+| S1-4 | `GET /api/social/x/start` + `GET /api/social/x/callback` OAuth routes | Agent | ✅ | Done in prior session |
+| S1-5 | `POST /api/posts/:id/publish` → x.ts → sets `posted` + externalUrls | Agent | ✅ | Done in prior session |
+| S1-6 | `node-cron` + `server/scheduler.ts` — every-minute publish check + retry backoff | Agent | ✅ | Enhanced in this session (retry logic added) |
+| S1-7 | Wire scheduler into `server/index.ts` on startup | Agent | ✅ | Done in prior session |
+| S1-8 | `/queue` page + "Post Now" + sidebar nav | Agent | ✅ | Done in prior session |
+| S1-9 | "Connect X" OAuth button + connection status in Settings | Agent | ⬜ | Still needed |
+| S1-10 | End-to-end test: morning briefing → review → Post Now → verify tweet on x.com | Kishore + Agent | 🚫 BLOCKED | Needs X credentials |
 
 ---
 
@@ -223,6 +271,33 @@ Next agent should start at: Sprint 1 (after Kishore provides the above credentia
 | S3-4 | Add Threads to publish endpoint (posts to both X and Threads simultaneously) | Agent | ⬜ | |
 | S3-5 | Add "Connect Threads" button to Settings page | Agent | ⬜ | |
 | S3-6 | Test: post to Threads → verify it appears | Kishore + Agent | ⬜ | |
+
+---
+
+### SPRINT 4.5 — Autopilot Intelligence (3-4x/day, both manual + auto)
+
+**Goal:** Full autopilot — research all sources, auto-draft, auto-schedule 3-4x/day. Manual flow still available for Kishore to override or add custom posts.  
+**Status:** ✅ DONE (this session)
+
+| # | Task | Who | Status | Notes |
+|---|---|---|---|---|
+| S4.5-1 | `server/autopilot.ts` — `generateDraftFromIdea()`, `autofillCalendar()`, `runMorningBriefing()` | Agent | ✅ | Core engine |
+| S4.5-2 | Morning briefing cron (05:00 UTC) — discover + auto-generate 5 ready drafts | Agent | ✅ | Wired in scheduler |
+| S4.5-3 | Calendar autofill cron (Sun 18:00 UTC) — fills next 7 days × 3 slots/day | Agent | ✅ | 07:30/14:00/17:30 UTC slots |
+| S4.5-4 | Exponential retry: failed posts retry at 5m/30m/120m, max 3 attempts | Agent | ✅ | retry_count + last_retry_at on posts |
+| S4.5-5 | Google Trends RSS + 6 new Reddit subreddits + URL dedupe in discover | Agent | ✅ | sre/platformengineering/cloudnative/aws/gcp/finops |
+| S4.5-6 | 14 pillars seeded (expanded from 6) — idempotent | Agent | ✅ | SRE, Platform Eng, K8s, AI Agents, Security, FinOps, CNCF added |
+| S4.5-7 | 30+ templates seeded (expanded from 7) | Agent | ✅ | |
+| S4.5-8 | `GET /api/autopilot/content-gaps` — pillars not posted in N days | Agent | ✅ | |
+| S4.5-9 | `GET /api/autopilot/status` — pipeline health dashboard endpoint | Agent | ✅ | |
+| S4.5-10 | Manual override: Discover page still works for manual research + pick-and-generate | Agent | ✅ | Both flows coexist |
+
+**Posting slots (UTC, stored in `scheduled_at`):**
+| Slot | UTC | Audience | Content type rotation |
+|------|-----|----------|----------------------|
+| Morning | 07:30 | EU commute | Thread (educational) |
+| Afternoon | 14:00 | India evening | Tweet or Hot Take |
+| Evening | 17:30 | US lunch | Thread or Long Thread |
 
 ---
 

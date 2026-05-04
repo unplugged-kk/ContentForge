@@ -8,8 +8,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Loader2, ExternalLink, Bookmark, BookmarkCheck, Trash2, Wand2, Globe, FileText, Eye } from "lucide-react";
+import { Search, Loader2, ExternalLink, Bookmark, BookmarkCheck, Trash2, Wand2, Globe, FileText, Eye, ShieldCheck } from "lucide-react";
 import type { Reference, Pillar } from "@shared/schema";
+import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 export default function ReferencesPage() {
   const { toast } = useToast();
@@ -99,6 +101,19 @@ export default function ReferencesPage() {
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-references-title">Source Analysis</h1>
         <p className="text-sm text-muted-foreground">Analyze any content source, then generate original content inspired by it</p>
+        <Alert className="mt-3 max-w-3xl" data-testid="alert-references-compliance">
+          <ShieldCheck className="h-4 w-4" />
+          <AlertTitle className="text-sm">Sources across the web</AlertTitle>
+          <AlertDescription className="text-xs leading-relaxed">
+            Analyze blogs, GitHub, Reddit, papers, newsletters — then synthesize with AI into original posts you control.{" "}
+            <strong className="text-foreground">For X post links only:</strong> we load text via the official X API when credentials exist, or you paste it; profile pages use the username path or paste — no x.com HTML scraping. Engagement comes from your ideas and edits, not bots.{" "}
+            <a href={X_OFFICIAL_DOCS.developerGuidelines} target="_blank" rel="noopener noreferrer" className="underline font-medium text-foreground">
+              X guidelines
+            </a>
+            {" · "}
+            <code className="rounded bg-muted px-1">docs/X_API_COMPLIANCE_AND_RISK.md</code>
+          </AlertDescription>
+        </Alert>
       </div>
 
       <Card>
@@ -115,7 +130,13 @@ export default function ReferencesPage() {
         <CardContent className="space-y-3">
           {inputMode === "url" ? (
             <div className="flex gap-2">
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste any URL — blog post, tweet, newsletter, GitHub, YouTube..." className="flex-1" data-testid="input-reference-url" />
+              <Input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="URL: blog, GitHub, Reddit, ArXiv… X post links need API keys or paste the post text"
+                className="flex-1"
+                data-testid="input-reference-url"
+              />
               <Button onClick={() => analyzeMutation.mutate({ url })} disabled={!url || analyzeMutation.isPending} data-testid="button-analyze">
                 {analyzeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
                 Analyze

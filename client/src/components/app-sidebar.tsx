@@ -1,4 +1,4 @@
-import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube } from "lucide-react";
+import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube, ListChecks } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -36,6 +36,7 @@ const discoverItems = [
 ];
 
 const manageItems = [
+  { title: "Today's queue", url: "/queue", icon: ListChecks },
   { title: "Calendar", url: "/calendar", icon: Calendar },
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Settings", url: "/settings", icon: Settings },

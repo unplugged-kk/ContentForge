@@ -6,15 +6,16 @@ import { discoveredIdeas } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import * as cheerio from "cheerio";
-import Parser from "rss-parser";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { ai, MODELS } from "./ai/config";
-
-const rssParser = new Parser();
+import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
+import { runDiscoverRefresh } from "./discoverRefresh";
+import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, tryPublishPostById } from "./social/x";
+import { isToday } from "date-fns";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -58,49 +59,6 @@ const CONTENT_PILLARS_DATA = [
   { id: 5, name: "Career & Leadership" },
   { id: 6, name: "Hot Takes & Trends" },
 ];
-
-function safeJsonParse(str: string): any {
-  try {
-    return JSON.parse(str);
-  } catch {
-    const match = str.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch { return null; }
-    }
-    return null;
-  }
-}
-
-async function aiCall(messages: any[], jsonMode = false, model = MODELS.TEXT) {
-  const msgs = jsonMode
-    ? messages.map((m: any, i: number) =>
-        i === 0 && m.role === "system"
-          ? { ...m, content: m.content + "\nRespond in JSON format." }
-          : m
-      )
-    : messages;
-  const opts: any = { model, messages: msgs, max_completion_tokens: 8192 };
-  if (jsonMode) opts.response_format = { type: "json_object" };
-  const startTime = Date.now();
-  const response = await ai.chat.completions.create(opts);
-  return {
-    content: response.choices[0]?.message?.content || "",
-    usage: response.usage,
-    latency: Date.now() - startTime,
-    model,
-  };
-}
-
-async function logAiUsage(usage: any, latency: number, feature: string, model = MODELS.TEXT) {
-  await storage.createAiUsageLog({
-    model,
-    inputTokens: usage?.prompt_tokens || 0,
-    outputTokens: usage?.completion_tokens || 0,
-    totalTokens: usage?.total_tokens || 0,
-    latencyMs: latency,
-    feature,
-  });
-}
 
 const createPostBody = z.object({
   pillarId: z.union([z.number(), z.string().transform(Number), z.null()]).optional(),
@@ -153,6 +111,23 @@ export async function registerRoutes(
   app.get("/api/posts", async (_req, res) => {
     try { res.json(await storage.getPosts()); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  /** Ready + today's scheduled — approval / daily queue. */
+  app.get("/api/posts/queue/today", async (_req, res) => {
+    try {
+      const all = await storage.getPosts();
+      const queue = all.filter((p) => {
+        if (p.status === "ready") return true;
+        if (p.status === "scheduled" && p.scheduledAt) {
+          return isToday(new Date(p.scheduledAt));
+        }
+        return false;
+      });
+      res.json(queue);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.get("/api/posts/:id", async (req, res) => {
@@ -209,6 +184,17 @@ export async function registerRoutes(
   app.delete("/api/posts/:id", async (req, res) => {
     try { await storage.deletePost(parseInt(req.params.id)); res.status(204).send(); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/posts/:id/publish", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
+      const result = await tryPublishPostById(id);
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to publish to X" });
+    }
   });
 
   // ==================== IDEAS ====================
@@ -597,7 +583,9 @@ export async function registerRoutes(
   function detectSourceType(url: string): { sourceType: string; sourcePlatform: string } {
     const u = url.toLowerCase();
     if (u.includes("x.com/") || u.includes("twitter.com/")) {
-      if (/\/status\/\d+/.test(u)) return { sourceType: "x_tweet", sourcePlatform: "x" };
+      if (/(?:status|statuses)\/(\d+)/.test(u) || /\/i\/(?:web\/)?status\/(\d+)/.test(u)) {
+        return { sourceType: "x_tweet", sourcePlatform: "x" };
+      }
       return { sourceType: "x_account", sourcePlatform: "x" };
     }
     if (u.includes("reddit.com/r/") && u.includes("/comments/")) return { sourceType: "reddit_thread", sourcePlatform: "reddit" };
@@ -701,7 +689,23 @@ export async function registerRoutes(
     };
   }
 
+  function extractXTweetIdFromUrl(url: string): string | null {
+    const m = url.match(/(?:status|statuses)\/(\d+)/i) || url.match(/\/i\/(?:web\/)?status\/(\d+)/i);
+    return m?.[1] ?? null;
+  }
+
   async function extractGenericWebpage(url: string) {
+    let host = "";
+    try {
+      host = new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+    } catch {
+      /* invalid URL — fall through; fetch will fail */
+    }
+    if (host === "x.com" || host === "twitter.com") {
+      throw new Error(
+        "Fetching x.com or twitter.com HTML is disabled to comply with X Developer Guidelines. Use an X post URL with configured X API credentials (we load the post via the official API), paste the text instead, or use the X username analysis option.",
+      );
+    }
     const response = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; ContentForge/1.0)" },
       signal: AbortSignal.timeout(10000),
@@ -811,9 +815,61 @@ Kishore's unique expertise (DevOps, multi-cloud, Kubernetes, platform engineerin
       let engagementMetrics: any = null;
       let analysisPrompt = "";
 
+      if (url && sourceType === "x_account") {
+        return res.status(400).json({
+          message:
+            "X profile URLs cannot be fetched via web scraping (X Developer Guidelines). Use the X username field above for AI-assisted style notes from public signals, paste post text manually, or add timeline support via the official X API later.",
+        });
+      }
+
       if (url) {
         try {
           switch (sourceType) {
+            case "x_tweet": {
+              const tweetId = extractXTweetIdFromUrl(url);
+              if (!tweetId) {
+                return res.status(400).json({ message: "Could not parse the post ID from this X URL." });
+              }
+              const tweetText = await fetchTweetTextByIdViaOfficialApi(tweetId);
+              if (!tweetText) {
+                return res.status(400).json({
+                  message:
+                    "Could not load this post via the official X API. Configure X OAuth credentials (same as posting), or paste the post text instead. HTML scraping of x.com is disabled for policy compliance.",
+                });
+              }
+              rawContent = tweetText;
+              title = `X post ${tweetId}`;
+              author = "";
+              engagementMetrics = { tweetId };
+              analysisPrompt = `Analyze the following post from X (text retrieved via official API only):
+
+POST TEXT:
+${tweetText}
+
+Return JSON:
+{
+  "summary": "2-3 sentence summary of the core message",
+  "key_points": ["5-10 main arguments or insights"],
+  "writing_style": {
+    "tone": "technical/casual/provocative/storytelling/academic/humorous",
+    "sentence_structure": "short_punchy/long_flowing/mixed",
+    "vocabulary_level": "beginner/intermediate/advanced/expert",
+    "hook_technique": "question/bold_claim/statistic/story/controversy",
+    "cta_technique": "question/call_to_action/summary/open_ended"
+  },
+  "engagement_signals": {
+    "why_it_works": "why this content might resonate",
+    "emotional_triggers": ["curiosity", "contrarian", etc.],
+    "structural_patterns": ["numbered list", "problem/solution", etc.]
+  },
+  "content_ideas": [{"idea": "Original content idea inspired by this (do not copy)", "format": "thread/tweet/article/hot_take", "hook": "Opening line", "angle": "Kishore's DevOps/Infra perspective"}],
+  "data_points": ["statistics or numbers mentioned"],
+  "quotes_worth_referencing": ["short fair-use quotes only if appropriate"],
+  "gaps_and_angles": ["things the source missed or where Kishore could add unique value"],
+  "topic_tags": ["relevant topics"]
+}`;
+              break;
+            }
             case "reddit_thread": {
               const reddit = await extractRedditThread(url);
               rawContent = `POST: ${reddit.title}\n\n${reddit.selftext}\n\nTOP COMMENTS:\n${reddit.comments.map((c: any) => `[${c.score}pts] ${c.author}: ${c.body}`).join("\n\n")}`;
@@ -1353,6 +1409,17 @@ Each tweet under ${charLimit} characters.` },
 
   // ==================== CONNECTED ACCOUNTS ====================
 
+  app.get("/api/social/x/status", async (_req, res) => {
+    try {
+      res.json({
+        ...(await getXPostingConfigSummary()),
+        hint: "Posting needs OAuth 1.0a user keys (API key/secret + access token/secret) or an OAuth 2.0 user access token with tweet.write. X_CLIENT_ID / X_CLIENT_SECRET alone only identify the app.",
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/accounts", async (_req, res) => {
     try {
       const accounts = await storage.getConnectedAccounts();
@@ -1466,165 +1533,13 @@ Each tweet under ${charLimit} characters.` },
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/discover/refresh", async (req, res) => {
+  app.post("/api/discover/refresh", async (_req, res) => {
     try {
-      const batchId = `batch_${Date.now()}`;
-
-      // ── Fetch all sources in parallel with timeouts ─────────────────────────
-      const hnPromise = (async () => {
-        try {
-          const r = await fetch("https://hn.algolia.com/api/v1/search?query=AI+OR+kubernetes+OR+devops+OR+MLOps+OR+data+engineering&tags=story&hitsPerPage=10", { signal: AbortSignal.timeout(8000) });
-          const d = await r.json() as any;
-          return (d.hits || []).slice(0, 10).map((h: any) => ({
-            source: "Hacker News", sourceType: "hackernews", category: "tech",
-            title: h.title, url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
-            points: h.points, comments: h.num_comments,
-          }));
-        } catch (e) { console.error("[discover] HN error:", e); return []; }
-      })();
-
-      const redditPromise = (async () => {
-        const subreddits = ["dataengineering", "devops", "kubernetes", "MachineLearning", "mlops"];
-        const results = await Promise.all(subreddits.map(async (sub) => {
-          try {
-            const r = await fetch(`https://www.reddit.com/r/${sub}/top.json?t=week&limit=3`, {
-              headers: { "User-Agent": "ContentForge/1.0" },
-              signal: AbortSignal.timeout(6000),
-            });
-            const d = await r.json() as any;
-            return (d?.data?.children || []).slice(0, 3).map((c: any) => ({
-              source: `Reddit r/${sub}`, sourceType: "reddit",
-              category: sub === "MachineLearning" || sub === "mlops" ? "mlops" : sub === "kubernetes" ? "devops" : "tech",
-              title: c.data.title, url: `https://reddit.com${c.data.permalink}`,
-              points: c.data.score, comments: c.data.num_comments,
-            }));
-          } catch (e) { return []; }
-        }));
-        return results.flat();
-      })();
-
-      const rssPromise = (async () => {
-        try {
-          const feeds = (await storage.getRssSources()).filter((f) => f.isActive).slice(0, 6);
-          const results = await Promise.all(feeds.map(async (feed) => {
-            try {
-              const parsed = await rssParser.parseURL(feed.feedUrl);
-              return (parsed.items || []).slice(0, 2).map((item) => ({
-                source: feed.name, sourceType: "rss", category: feed.category || "tech",
-                title: item.title || "", url: item.link || "",
-                summary: item.contentSnippet?.substring(0, 150) || "",
-              }));
-            } catch (e) { return []; }
-          }));
-          return results.flat();
-        } catch (e) { return []; }
-      })();
-
-      const githubPromise = (async () => {
-        try {
-          const r = await fetch("https://api.github.com/search/repositories?q=AI+OR+kubernetes+OR+devops+OR+mlops+created:>2026-02-01&sort=stars&order=desc&per_page=8", {
-            headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "ContentForge/1.0" },
-            signal: AbortSignal.timeout(8000),
-          });
-          const d = await r.json() as any;
-          return (d?.items || []).slice(0, 8).map((repo: any) => ({
-            source: "GitHub", sourceType: "github", category: "tech",
-            title: `${repo.full_name}: ${repo.description || ""}`.substring(0, 180),
-            url: repo.html_url, points: repo.stargazers_count,
-            summary: `Stars: ${repo.stargazers_count}, Lang: ${repo.language || "N/A"}`.substring(0, 150),
-          }));
-        } catch (e) { console.error("[discover] GitHub error:", e); return []; }
-      })();
-
-      const arxivPromise = (async () => {
-        try {
-          const r = await fetch("http://export.arxiv.org/api/query?search_query=all:AI+infrastructure+OR+all:MLOps+OR+all:kubernetes+machine+learning&start=0&max_results=5&sortBy=submittedDate&sortOrder=descending", { signal: AbortSignal.timeout(8000) });
-          const text = await r.text();
-          const entries = text.match(/<entry>([\s\S]*?)<\/entry>/g) || [];
-          return entries.slice(0, 5).map((entry) => {
-            const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
-            const summaryMatch = entry.match(/<summary>([\s\S]*?)<\/summary>/);
-            const linkMatch = entry.match(/<id>([\s\S]*?)<\/id>/);
-            if (!titleMatch) return null;
-            return {
-              source: "ArXiv", sourceType: "arxiv", category: "ai_research",
-              title: titleMatch[1].replace(/\s+/g, " ").trim().substring(0, 180),
-              url: linkMatch?.[1]?.trim() || "",
-              summary: summaryMatch?.[1]?.replace(/\s+/g, " ").trim().substring(0, 150) || "",
-            };
-          }).filter(Boolean);
-        } catch (e) { console.error("[discover] ArXiv error:", e); return []; }
-      })();
-
-      // Wait for all fetches concurrently
-      const [hnData, redditData, rssData, githubData, arxivData] = await Promise.all([
-        hnPromise, redditPromise, rssPromise, githubPromise, arxivPromise,
-      ]);
-
-      const rawData = [...hnData, ...redditData, ...rssData, ...githubData, ...arxivData];
-
-      // Fallback if all sources failed
-      if (rawData.length === 0) {
-        rawData.push(
-          { source: "Hacker News", sourceType: "hackernews", category: "tech", title: "The rise of AI agents in infrastructure automation", url: "" },
-          { source: "Reddit r/devops", sourceType: "reddit", category: "devops", title: "Platform engineering is replacing DevOps teams", url: "" },
-          { source: "Newsletter", sourceType: "rss", category: "ai", title: "Kubernetes 1.30 brings AI workload scheduling improvements", url: "" },
-        );
-      }
-
-      const allPillars = await storage.getPillars();
-      const pillarNames = allPillars.map((p) => p.name).join(", ");
-
-      // Send top 20 items to AI (reduced from 30 for speed + cost)
-      const { content, usage, latency } = await aiCall([
-        { role: "system", content: `You are a content strategist for Kishore Kumar Behera, a DevOps/Infrastructure engineering leader building a brand on X and Threads at the intersection of Data & AI and Platform Engineering.` },
-        { role: "user", content: `Here are raw trending topics from various sources this week:
-
-${JSON.stringify(rawData.slice(0, 20))}
-
-Analyze these and return exactly 20 content ideas ranked by viral potential. For each idea, provide:
-
-{"ideas": [{"rank": 1, "title": "Compelling content idea title", "description": "2-3 sentences explaining the angle", "summary": "One-line summary", "source_inspiration": "What source inspired this", "source_url": "URL if applicable", "source_type": "hackernews|reddit|rss|github|arxiv", "category": "ai|devops|mlops|tech|leadership|system_design|ai_research", "content_type_suggestion": "thread|tweet|article|hot_take", "content_angles": ["angle 1", "angle 2", "angle 3"], "pillar": "Which pillar from: ${pillarNames}", "viral_score": 8.5, "viral_reasoning": "Why this has viral potential", "value_proposition": "What value the audience gets", "unique_angle": "How Kishore's background makes this unique", "timeliness": "evergreen|trending_now|this_week", "target_audience": "Who would engage", "suggested_hook": "Draft opening line", "hashtag_suggestions": ["2-3 hashtags"]}]}
-
-Rank by: Value Density > Unique Angle > Emotional Trigger > Timeliness > Discussion Potential` },
-      ], true);
-
-      await logAiUsage(usage, latency, "discover_ideas");
-      const parsed = safeJsonParse(content);
-      if (!parsed?.ideas) return res.status(500).json({ message: "AI returned invalid response." });
-
-      const ideaRecords = parsed.ideas.map((idea: any, i: number) => {
-        const matchedPillar = allPillars.find((p) => p.name.toLowerCase().includes(String(idea.pillar || "").toLowerCase().split(" ")[0]));
-        return {
-          rank: idea.rank || i + 1,
-          title: String(idea.title || "").substring(0, 500),
-          description: idea.description,
-          summary: idea.summary || null,
-          sourceInspiration: idea.source_inspiration,
-          sourceUrl: idea.source_url || null,
-          sourceType: idea.source_type || "rss",
-          category: idea.category || null,
-          contentTypeSuggestion: idea.content_type_suggestion,
-          contentAngles: idea.content_angles || [],
-          pillarId: matchedPillar?.id || null,
-          viralScore: String(idea.viral_score || "5.0"),
-          viralReasoning: idea.viral_reasoning,
-          valueProposition: idea.value_proposition,
-          uniqueAngle: idea.unique_angle,
-          timeliness: idea.timeliness,
-          targetAudience: idea.target_audience,
-          suggestedHook: idea.suggested_hook,
-          hashtagSuggestions: idea.hashtag_suggestions || [],
-          batchId,
-          status: "new",
-        };
-      });
-
-      const saved = await storage.createDiscoveredIdeas(ideaRecords);
-      res.json({ batchId, ideas: saved, newIdeasCount: saved.length, sourcesScanned: rawData.length });
+      const result = await runDiscoverRefresh();
+      res.json(result);
     } catch (err: any) {
       console.error("Discover refresh error:", err);
-      res.status(500).json({ message: "Failed to discover ideas. Please try again." });
+      res.status(500).json({ message: err?.message || "Failed to discover ideas. Please try again." });
     }
   });
 
@@ -2511,6 +2426,87 @@ Return only the refined post content, no explanation.` },
       await logAiUsage(usage, latency, "chat_refine");
       res.json({ content: content.trim() });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // ── AUTOPILOT ─────────────────────────────────────────────────────────────────
+
+  // GET /api/autopilot/status — pipeline health at a glance
+  app.get("/api/autopilot/status", async (req, res) => {
+    try {
+      const { runMorningBriefing: _mb, autofillCalendar: _af, ...ap } = await import("./autopilot");
+      const posts = await storage.getPosts();
+      const now = new Date();
+      const today = posts.filter((p) => {
+        if (!p.scheduledAt) return false;
+        const d = new Date(p.scheduledAt as Date);
+        return d.toDateString() === now.toDateString();
+      });
+      const failed = posts.filter((p) => p.status === "failed");
+      const scheduled = posts.filter((p) => p.status === "scheduled" && new Date(p.scheduledAt as Date) > now);
+      const ideas = await storage.getDiscoveredIdeas();
+      const unusedIdeas = ideas.filter((i) => i.status === "new" || i.status === "briefing_drafted");
+      const pillars = await storage.getPillars();
+
+      // Content gap: pillars not posted in 7+ days
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const recentPosts = posts.filter((p) => p.postedAt && new Date(p.postedAt) > sevenDaysAgo);
+      const activePillarIds = new Set(recentPosts.map((p) => p.pillarId));
+      const gaps = pillars.filter((p) => !activePillarIds.has(p.id)).map((p) => p.name);
+
+      res.json({
+        ok: true,
+        todaySlots: today.length,
+        scheduledAhead: scheduled.length,
+        failedPosts: failed.length,
+        unusedIdeas: unusedIdeas.length,
+        contentGaps: gaps,
+        lastUpdated: now.toISOString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/autopilot/morning-briefing — trigger manually (also runs on cron at 05:00 UTC)
+  app.post("/api/autopilot/morning-briefing", async (req, res) => {
+    try {
+      const { runMorningBriefing } = await import("./autopilot");
+      const result = await runMorningBriefing();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/autopilot/autofill — fill next N days (default 7) with 3 posts/day
+  app.post("/api/autopilot/autofill", async (req, res) => {
+    try {
+      const { autofillCalendar } = await import("./autopilot");
+      const days = Number(req.body?.days ?? 7);
+      const result = await autofillCalendar(Math.min(days, 14));
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/autopilot/content-gaps — pillars not posted in N days (default 7)
+  app.get("/api/autopilot/content-gaps", async (req, res) => {
+    try {
+      const days = Number(req.query.days ?? 7);
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const posts = await storage.getPosts();
+      const pillars = await storage.getPillars();
+      const recentPillarIds = new Set(
+        posts.filter((p) => p.postedAt && new Date(p.postedAt) > cutoff).map((p) => p.pillarId),
+      );
+      const gaps = pillars
+        .filter((p) => !recentPillarIds.has(p.id))
+        .map((p) => ({ id: p.id, name: p.name, color: p.color }));
+      res.json({ gaps, daysWindow: days });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.get("/api/schedule/best-times", async (req, res) => {

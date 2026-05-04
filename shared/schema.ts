@@ -20,6 +20,12 @@ export const posts = pgTable("posts", {
   scheduledAt: timestamp("scheduled_at"),
   postedAt: timestamp("posted_at"),
   aiModel: varchar("ai_model", { length: 100 }),
+  externalIds: jsonb("external_ids").$type<Record<string, string | string[]>>(),
+  externalUrls: jsonb("external_urls").$type<Record<string, string | string[]>>(),
+  errorMessage: text("error_message"),
+  retryCount: integer("retry_count").default(0),
+  lastRetryAt: timestamp("last_retry_at"),
+  autopilot: boolean("autopilot").default(false),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
