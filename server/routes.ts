@@ -2621,6 +2621,17 @@ Return only the refined post content, no explanation.` },
     }
   });
 
+  // GET /api/autopilot/market-pulse — today's breaking news + X algorithm context
+  app.get("/api/autopilot/market-pulse", async (_req, res) => {
+    try {
+      const { getMarketPulse } = await import("./marketPulse");
+      const pulse = await getMarketPulse();
+      res.json(pulse);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/autopilot/morning-briefing — trigger manually (also runs on cron at 05:00 UTC)
   app.post("/api/autopilot/morning-briefing", async (req, res) => {
     try {

@@ -13,6 +13,7 @@
 import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
+import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "./marketPulse";
 import type { DiscoveredIdea, Template } from "@shared/schema";
 
 // ─── Posting schedule ────────────────────────────────────────────────────────
@@ -41,6 +42,13 @@ const NICHE_KEYWORDS = [
   "ai infrastructure", "gpu", "model serving", "vector database",
   "langchain", "openai", "anthropic", "mcp", "agentic",
   "vulnerability", "exploit", "zero-day", "cve", "patch", "breach", "ransomware",
+  "incident", "outage", "downtime", "mttr", "postmortem", "runbook", "on-call",
+  "chaos engineering", "reliability", "resilience", "slo", "sla", "error budget",
+  "terraform", "pulumi", "crossplane", "argocd", "flux", "gitops",
+  "backstage", "idp", "internal developer platform", "golden path",
+  "llmops", "model deployment", "model serving", "inference", "fine-tuning",
+  "nvidia", "gpu", "tpu", "accelerator", "cuda", "triton",
+  "opentelemetry", "otel", "tracing", "metrics", "logs", "grafana", "prometheus",
 ];
 
 function isNicheRelevant(idea: DiscoveredIdea): boolean {
@@ -205,6 +213,15 @@ export async function generateDraftFromIdea(
       : `Write a ${postType === "long_thread" ? "8-12" : "4-7"} tweet thread. Tweet 1 = hook (≤275 chars). Each subsequent tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = CTA or bold question.\nReturn JSON: {"tweets": [{"content": "...", "position": 0}, ...], "hashtag_suggestions": ["tag1", "tag2", "tag3"]}`;
 
   try {
+    // Optionally inject today's market pulse context
+    let pulseContext = "";
+    try {
+      const pulse = await getMarketPulse();
+      if (pulse.breakingTopics.length) {
+        pulseContext = `\nTODAY'S BREAKING CONTEXT: ${pulse.breakingTopics.slice(0, 4).join(" | ")}\nIf this topic connects to any of the above, reference it for maximum timeliness boost.`;
+      }
+    } catch { /* non-critical */ }
+
     const { content, usage, latency } = await aiCall(
       [
         { role: "system", content: KISHORE_VOICE },
@@ -214,10 +231,11 @@ export async function generateDraftFromIdea(
 Description: ${idea.description || ""}
 Pillar: ${pillarName}
 Tone: ${tone}
-Engagement score: ${engagementScore} (higher = more likely to go viral)
+Engagement score: ${engagementScore} (higher = more likely to go viral for Kishore's audience)
 Suggested hook: ${idea.suggestedHook || "none"}
 Content angles: ${(idea.contentAngles || []).join(" | ")}
 ${templateGuidance}
+${pulseContext}
 
 ${formatPrompt}`,
         },
@@ -256,14 +274,22 @@ ${formatPrompt}`,
 
 // ─── Idea ranking ─────────────────────────────────────────────────────────────
 
-function rankIdeas(ideas: DiscoveredIdea[], pillars: { id: number; name: string }[]): DiscoveredIdea[] {
+function rankIdeas(
+  ideas: DiscoveredIdea[],
+  pillars: { id: number; name: string }[],
+  pulse?: MarketPulseResult,
+): DiscoveredIdea[] {
   return ideas
-    .filter(isNicheRelevant)                          // hard niche filter first
+    .filter(isNicheRelevant)
     .filter((i) => parseFloat(String(i.viralScore || "0")) >= 5.5)
     .map((i) => {
       const pillarName = pillars.find((p) => p.id === i.pillarId)?.name || "";
-      const { score } = computeEngagementScore(i, pillarName);
-      return { idea: i, score };
+      const { score: baseScore } = computeEngagementScore(i, pillarName);
+      const ideaText = `${i.title} ${i.description || ""}`;
+      const boostedScore = pulse
+        ? applyBreakingNewsBoost(baseScore, ideaText, pulse.boostTopics)
+        : baseScore;
+      return { idea: i, score: boostedScore };
     })
     .sort((a, b) => b.score - a.score)
     .map(({ idea }) => idea);
@@ -396,6 +422,11 @@ export type MorningBriefingResult = {
     hook: string;
     breakdown: Record<string, number>;
   }[];
+  marketPulse: {
+    breakingTopics: string[];
+    trendingKeywords: string[];
+    boostTopics: string[];
+  };
   errors: string[];
 };
 
@@ -411,10 +442,15 @@ export type MorningBriefingResult = {
 export async function runMorningBriefing(): Promise<MorningBriefingResult> {
   const errors: string[] = [];
 
-  const refreshResult = await runDiscoverRefresh();
+  // Run discover refresh and market pulse in parallel
+  const [refreshResult, pulse] = await Promise.all([
+    runDiscoverRefresh(),
+    getMarketPulse(),
+  ]);
+
   const [pillars, templates] = await Promise.all([storage.getPillars(), storage.getTemplates()]);
   const allIdeas = await storage.getDiscoveredIdeas(refreshResult.batchId);
-  const ranked = rankIdeas(allIdeas, pillars).slice(0, 5);
+  const ranked = rankIdeas(allIdeas, pillars, pulse).slice(0, 5);
 
   const topIdeas: MorningBriefingResult["topIdeas"] = [];
   let draftsGenerated = 0;
@@ -466,6 +502,11 @@ export async function runMorningBriefing(): Promise<MorningBriefingResult> {
     newIdeas: refreshResult.newIdeasCount,
     draftsGenerated,
     topIdeas,
+    marketPulse: {
+      breakingTopics: pulse.breakingTopics,
+      trendingKeywords: pulse.trendingKeywords,
+      boostTopics: pulse.boostTopics,
+    },
     errors,
   };
 }

@@ -66,17 +66,25 @@ export async function runDiscoverRefresh(): Promise<DiscoverRefreshResult> {
 
   const redditPromise = (async () => {
     const subreddits = [
-      { name: "dataengineering", cat: "mlops" },
-      { name: "devops", cat: "devops" },
-      { name: "kubernetes", cat: "devops" },
-      { name: "MachineLearning", cat: "mlops" },
-      { name: "mlops", cat: "mlops" },
-      { name: "sre", cat: "devops" },
-      { name: "platformengineering", cat: "devops" },
-      { name: "cloudnative", cat: "devops" },
-      { name: "aws", cat: "tech" },
-      { name: "googlecloud", cat: "tech" },
-      { name: "FinancialIndependence", cat: "tech" },
+      // MLOps / Data / AI
+      { name: "dataengineering",      cat: "mlops" },
+      { name: "MachineLearning",      cat: "mlops" },
+      { name: "mlops",                cat: "mlops" },
+      { name: "LocalLLaMA",           cat: "ai" },
+      { name: "artificial",           cat: "ai" },
+      // DevOps / K8s / Platform
+      { name: "devops",               cat: "devops" },
+      { name: "kubernetes",           cat: "kubernetes" },
+      { name: "sre",                  cat: "sre" },
+      { name: "platformengineering",  cat: "platform_engineering" },
+      { name: "cloudnative",          cat: "devops" },
+      // IaC / Cloud
+      { name: "Terraform",            cat: "iac" },
+      { name: "aws",                  cat: "tech" },
+      { name: "googlecloud",          cat: "tech" },
+      // Security
+      { name: "devsecops",            cat: "security" },
+      { name: "netsec",               cat: "security" },
     ];
     const results = await Promise.all(
       subreddits.map(async ({ name: sub, cat }) => {
@@ -108,7 +116,13 @@ export async function runDiscoverRefresh(): Promise<DiscoverRefreshResult> {
 
   const rssPromise = (async () => {
     try {
-      const feeds = (await storage.getRssSources()).filter((f) => f.isActive).slice(0, 6);
+      // Pull from up to 20 active feeds, rotating based on day-of-week so every
+      // feed gets coverage over the week without hammering all 47 sources at once
+      const allFeeds = (await storage.getRssSources()).filter((f) => f.isActive);
+      const dayIndex = new Date().getDay(); // 0-6
+      const chunkSize = 20;
+      const start = (dayIndex * chunkSize) % Math.max(allFeeds.length, 1);
+      const feeds = [...allFeeds.slice(start), ...allFeeds.slice(0, start)].slice(0, chunkSize);
       const results = await Promise.all(
         feeds.map(async (feed) => {
           try {

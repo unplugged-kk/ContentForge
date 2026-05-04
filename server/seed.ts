@@ -3,38 +3,90 @@ import { pillars, templates, posts, tweets, ideas, analytics, rssSources, monito
 import { eq } from "drizzle-orm";
 import { MODELS } from "./ai/config";
 
+// All RSS sources — idempotent: only inserts sources not already present (matched by feedUrl)
+const ALL_RSS_SOURCES = [
+  // ── Newsletters (high signal-to-noise) ──────────────────────────────────────
+  { name: "TLDR AI",                  feedUrl: "https://tldr.tech/ai/rss",                                                     category: "ai" },
+  { name: "TLDR DevOps",             feedUrl: "https://tldr.tech/devops/rss",                                                  category: "devops" },
+  { name: "The Pragmatic Engineer",  feedUrl: "https://newsletter.pragmaticengineer.com/feed",                                 category: "leadership" },
+  { name: "ByteByteGo",              feedUrl: "https://blog.bytebytego.com/feed",                                              category: "system_design" },
+  { name: "Last Week in AI",         feedUrl: "https://lastweekin.ai/feed",                                                    category: "ai" },
+  { name: "Import AI (Jack Clark)",  feedUrl: "https://jack-clark.net/feed/",                                                  category: "ai" },
+  { name: "The AI Edge",             feedUrl: "https://newsletter.theaiedge.io/feed",                                         category: "ai" },
+  { name: "SRE Weekly",              feedUrl: "https://sreweekly.com/feed/",                                                   category: "sre" },
+  { name: "Reliability Engineering", feedUrl: "https://reliabilityengineering.substack.com/feed",                             category: "sre" },
+  { name: "AI Snake Oil",            feedUrl: "https://aisnakeoil.substack.com/feed",                                         category: "ai" },
+
+  // ── AI / ML / LLMOps ────────────────────────────────────────────────────────
+  { name: "Hugging Face Blog",       feedUrl: "https://huggingface.co/blog/feed.xml",                                         category: "ai" },
+  { name: "LangChain Blog",          feedUrl: "https://blog.langchain.dev/rss/",                                              category: "llmops" },
+  { name: "Weights & Biases Blog",   feedUrl: "https://wandb.ai/fully-connected/feed",                                       category: "mlops" },
+  { name: "Gradient Flow",           feedUrl: "https://gradientflow.com/feed/",                                               category: "mlops" },
+  { name: "The Gradient",            feedUrl: "https://thegradient.pub/rss/",                                                 category: "ai" },
+  { name: "SemiAnalysis",            feedUrl: "https://www.semianalysis.com/feed",                                            category: "ai" },
+  { name: "Sebastian Raschka",       feedUrl: "https://sebastianraschka.com/rss_feed.xml",                                   category: "mlops" },
+  { name: "Eugene Yan (ML Systems)", feedUrl: "https://eugeneyan.com/rss/",                                                   category: "mlops" },
+  { name: "Lilian Weng (OpenAI)",    feedUrl: "https://lilianweng.github.io/index.xml",                                      category: "ai" },
+  { name: "MarktechPost",            feedUrl: "https://www.marktechpost.com/feed/",                                          category: "ai" },
+  { name: "Google Research Blog",    feedUrl: "https://research.google/blog/rss/",                                           category: "ai" },
+  { name: "Google Cloud AI Blog",    feedUrl: "https://cloudblog.withgoogle.com/products/ai-machine-learning/rss/",          category: "ai" },
+  { name: "AWS ML Blog",             feedUrl: "https://aws.amazon.com/blogs/machine-learning/feed/",                         category: "mlops" },
+
+  // ── Kubernetes / Cloud Native ────────────────────────────────────────────────
+  { name: "Kubernetes Blog",         feedUrl: "https://kubernetes.io/feed.xml",                                              category: "kubernetes" },
+  { name: "CNCF Blog",              feedUrl: "https://www.cncf.io/blog/feed/",                                               category: "kubernetes" },
+  { name: "The New Stack: K8s",     feedUrl: "https://thenewstack.io/category/kubernetes/feed/",                            category: "kubernetes" },
+  { name: "The New Stack: Platform",feedUrl: "https://thenewstack.io/category/platform-engineering/feed/",                  category: "platform_engineering" },
+  { name: "The New Stack",          feedUrl: "https://thenewstack.io/feed/",                                                 category: "devops" },
+
+  // ── DevOps / Platform Engineering / IaC ─────────────────────────────────────
+  { name: "DevOpsCube",             feedUrl: "https://devopscube.com/rss/",                                                  category: "devops" },
+  { name: "HashiCorp Blog",         feedUrl: "https://www.hashicorp.com/blog/feed.xml",                                     category: "iac" },
+  { name: "Terraform Blog",         feedUrl: "https://www.terraform.io/blog.rss",                                           category: "iac" },
+  { name: "Platform Engineering",   feedUrl: "https://platformengineering.org/blog/rss.xml",                                category: "platform_engineering" },
+  { name: "GitHub Blog",            feedUrl: "https://github.blog/feed/",                                                   category: "devops" },
+  { name: "GitLab Blog",            feedUrl: "https://about.gitlab.com/atom.xml",                                           category: "devops" },
+  { name: "AWS DevOps Blog",        feedUrl: "https://aws.amazon.com/blogs/devops/feed/",                                   category: "devops" },
+  { name: "AWS What's New",         feedUrl: "https://aws.amazon.com/about-aws/whats-new/recent/feed/",                     category: "tech" },
+  { name: "Google Cloud Blog",      feedUrl: "https://cloudblog.withgoogle.com/rss/",                                       category: "tech" },
+  { name: "InfoQ",                  feedUrl: "https://www.infoq.com/feed/",                                                 category: "tech" },
+  { name: "Martin Fowler",          feedUrl: "https://feeds.feedburner.com/martinfowler",                                   category: "architecture" },
+
+  // ── SRE / Observability / Incident Response / MTTR ──────────────────────────
+  { name: "Grafana Blog",           feedUrl: "https://grafana.com/blog/index.xml",                                          category: "observability" },
+  { name: "Netflix Tech Blog",      feedUrl: "https://netflixtechblog.com/feed",                                            category: "sre" },
+  { name: "Meta Engineering",       feedUrl: "https://engineering.fb.com/feed/",                                            category: "sre" },
+  { name: "Software Eng Daily",     feedUrl: "https://softwareengineeringdaily.com/feed/",                                  category: "tech" },
+
+  // ── DevSecOps / Security ─────────────────────────────────────────────────────
+  { name: "The Hacker News",        feedUrl: "https://feeds.feedburner.com/TheHackersNews",                                 category: "security" },
+  { name: "Snyk Blog",              feedUrl: "https://snyk.io/blog/feed/",                                                  category: "security" },
+  { name: "The New Stack: Security",feedUrl: "https://thenewstack.io/category/security/feed/",                             category: "security" },
+
+  // ── Hacker News targeted feeds ───────────────────────────────────────────────
+  { name: "HN Best (AI/K8s/DevOps)",feedUrl: "https://hnrss.org/best?q=AI+OR+kubernetes+OR+devops+OR+mlops",              category: "tech" },
+  { name: "HN: Platform/SRE/IaC",  feedUrl: "https://hnrss.org/newest?q=platform+engineering+OR+SRE+OR+terraform+OR+incident&points=50", category: "devops" },
+] as const;
+
 export async function seedDatabase() {
+  // Idempotent RSS seed — insert only sources not already present
   const existingRss = await db.select().from(rssSources);
-  if (existingRss.length === 0) {
-    console.log("Seeding RSS sources and monitored accounts...");
-    await db.insert(rssSources).values([
-      { name: "TLDR AI", feedUrl: "https://tldr.tech/ai/rss", category: "ai" },
-      { name: "TLDR DevOps", feedUrl: "https://tldr.tech/devops/rss", category: "devops" },
-      { name: "Hacker News Best (AI/K8s/DevOps)", feedUrl: "https://hnrss.org/best?q=AI+OR+kubernetes+OR+devops+OR+mlops", category: "tech" },
-      { name: "The Pragmatic Engineer", feedUrl: "https://newsletter.pragmaticengineer.com/feed", category: "leadership" },
-      { name: "ByteByteGo", feedUrl: "https://blog.bytebytego.com/feed", category: "system_design" },
-      { name: "Last Week in AI", feedUrl: "https://lastweekin.ai/feed", category: "ai" },
-      { name: "Kubernetes Blog", feedUrl: "https://kubernetes.io/feed.xml", category: "devops" },
-      { name: "CNCF Blog", feedUrl: "https://www.cncf.io/feed/", category: "devops" },
-      { name: "The New Stack", feedUrl: "https://thenewstack.io/feed/", category: "devops" },
-      { name: "InfoQ DevOps", feedUrl: "https://feed.infoq.com/devops/", category: "devops" },
-      { name: "SRE Weekly", feedUrl: "https://sreweekly.com/feed/", category: "devops" },
-      { name: "AWS What's New", feedUrl: "https://aws.amazon.com/about-aws/whats-new/recent/feed/", category: "tech" },
-      { name: "Google Cloud Blog", feedUrl: "https://cloudblog.withgoogle.com/rss/", category: "tech" },
-      { name: "AI Snake Oil (Substack)", feedUrl: "https://aisnakeoil.substack.com/feed", category: "ai" },
-      { name: "The Hacker News", feedUrl: "https://feeds.feedburner.com/TheHackersNews", category: "security" },
-      { name: "Hacker News (HN native RSS)", feedUrl: "https://hnrss.org/newest?q=AI+OR+kubernetes+OR+devops+OR+platform+engineering&points=50", category: "tech" },
+  const existingUrls = new Set(existingRss.map((r) => r.feedUrl));
+  const newSources = ALL_RSS_SOURCES.filter((s) => !existingUrls.has(s.feedUrl));
+  if (newSources.length > 0) {
+    console.log(`Seeding ${newSources.length} new RSS sources...`);
+    await db.insert(rssSources).values(newSources.map((s) => ({ ...s })));
+  }
+
+  const existingAccounts = await db.select().from(monitoredAccounts);
+  if (existingAccounts.length === 0) {
+    await db.insert(monitoredAccounts).values([
+      { platform: "x", username: "kelseyhightower", displayName: "Kelsey Hightower", category: "devops" },
+      { platform: "x", username: "chiphuyen", displayName: "Chip Huyen", category: "mlops" },
+      { platform: "x", username: "GergelyOrosz", displayName: "Gergely Orosz", category: "leadership" },
+      { platform: "x", username: "AndrewYNg", displayName: "Andrew Ng", category: "ai_research" },
+      { platform: "x", username: "karpathy", displayName: "Andrej Karpathy", category: "ai_research" },
     ]);
-    const existingAccounts = await db.select().from(monitoredAccounts);
-    if (existingAccounts.length === 0) {
-      await db.insert(monitoredAccounts).values([
-        { platform: "x", username: "kelseyhightower", displayName: "Kelsey Hightower", category: "devops" },
-        { platform: "x", username: "chiphuyen", displayName: "Chip Huyen", category: "mlops" },
-        { platform: "x", username: "GergelyOrosz", displayName: "Gergely Orosz", category: "leadership" },
-        { platform: "x", username: "AndrewYNg", displayName: "Andrew Ng", category: "ai_research" },
-        { platform: "x", username: "karpathy", displayName: "Andrej Karpathy", category: "ai_research" },
-      ]);
-    }
   }
 
   const existingPillars = await db.select().from(pillars);
