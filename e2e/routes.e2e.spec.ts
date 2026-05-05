@@ -35,8 +35,9 @@ test("sidebar navigation: Discover link works", async ({ page }) => {
   await expect(page.locator('[data-testid="text-discover-title"]')).toBeVisible();
 });
 
-test("auth page shows when logged out (fresh context)", async ({ browser }) => {
-  const ctx = await browser.newContext();
+test("auth page shows when logged out (fresh context)", async ({ browser, baseURL }) => {
+  // Create a context with no storageState (no session cookies) but with the correct baseURL.
+  const ctx = await browser.newContext({ baseURL: baseURL ?? "http://127.0.0.1:4173" });
   const page = await ctx.newPage();
   await page.goto("/");
   await expect(page.locator('[data-testid="text-auth-title"]')).toBeVisible({ timeout: 30_000 });
