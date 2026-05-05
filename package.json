@@ -12,6 +12,8 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
     "e2e:serve": "node --input-type=module -e \"import fs from 'fs'; fs.accessSync('dist/index.cjs');\" && npm start",
     "test:e2e": "playwright test",
     "build:verify": "npm run check && npm run build && playwright test",

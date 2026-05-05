@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, cp } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -59,6 +59,10 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  // Copy migration SQL files so migrate() can find them at dist/migrations/ at runtime.
+  console.log("copying migrations...");
+  await cp("migrations", "dist/migrations", { recursive: true });
 }
 
 buildAll().catch((err) => {
