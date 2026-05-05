@@ -116,6 +116,7 @@ app.use((req, res, next) => {
   await pool.query(`
     ALTER TABLE posts
       ADD COLUMN IF NOT EXISTS external_ids   jsonb,
+      ADD COLUMN IF NOT EXISTS external_urls  jsonb,
       ADD COLUMN IF NOT EXISTS retry_count    integer NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS last_retry_at  timestamp,
       ADD COLUMN IF NOT EXISTS autopilot      boolean NOT NULL DEFAULT false
