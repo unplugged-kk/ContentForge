@@ -3,6 +3,32 @@ import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
 
+/**
+ * Translate raw X API error text into a human-readable message.
+ * Copied and adapted from postiz-app/x.provider.ts handleErrors().
+ */
+export function translateXError(body: string): string {
+  if (body.includes("usage-capped"))
+    return "X API usage cap reached. Try again later.";
+  if (body.includes("duplicate-rules") || body.includes("duplicate content"))
+    return "Duplicate post — X requires unique content. Edit your tweet and try again.";
+  if (body.includes("Unsupported Authentication"))
+    return "X credentials expired or invalid. Reconnect X in Settings.";
+  if (body.includes("You are not permitted to perform this action"))
+    return "X rejected this post — check character count and media attachments.";
+  if (body.includes("maximum of one cashtag"))
+    return "Maximum one cashtag ($SYMBOL) allowed per post.";
+  if (body.includes("The Tweet contains an invalid URL"))
+    return "Post contains a URL that X does not allow.";
+  if (body.includes("not allowed to post a video longer than 2 minutes"))
+    return "Video exceeds the 2-minute limit for this account type.";
+  if (body.includes("maximum of 4 items"))
+    return "Maximum 4 media attachments per post.";
+  if (body.includes("Authorization"))
+    return "X authorization failed. Check your API credentials in Settings.";
+  return body;
+}
+
 /** Non-secret wiring status for Settings / debugging */
 export async function getXPostingConfigSummary(): Promise<{
   hasOAuth1UserContext: boolean;
@@ -179,12 +205,82 @@ export async function tryPublishPostById(
       externalUrls: { ...(post.externalUrls ?? {}), x: result.urls },
       errorMessage: null,
     });
+    // Fire-and-forget analytics sync — don't block publish on it
+    syncPostAnalyticsFromX(postId).catch((e) =>
+      console.error(`[x analytics] sync failed post=${postId}:`, e)
+    );
     return result;
   } catch (e: any) {
+    const friendly = translateXError(e?.message || String(e));
     await storage.updatePost(postId, {
       status: "failed",
-      errorMessage: e?.message || String(e),
+      errorMessage: friendly,
     });
-    throw e;
+    const err = new Error(friendly);
+    throw err;
   }
+}
+
+/**
+ * Fetch public_metrics from X API for a posted post and upsert into the analytics table.
+ * Adapted from postiz-app/x.provider.ts postAnalytics() + analytics().
+ */
+export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
+  const post = await storage.getPost(postId);
+  if (!post) return;
+
+  const tweetIds = (post.externalIds as any)?.x as string[] | undefined;
+  if (!tweetIds || tweetIds.length === 0) return;
+
+  const rw = await createRwClientFromDb();
+  if (!rw) return;
+
+  try {
+    const data = await rw.v2.tweets(tweetIds, {
+      "tweet.fields": ["public_metrics"],
+    });
+
+    // Aggregate metrics across all tweets in the thread
+    const totals = (data.data ?? []).reduce(
+      (acc, t) => {
+        const m = t.public_metrics;
+        if (!m) return acc;
+        acc.impressions += m.impression_count ?? 0;
+        acc.likes += m.like_count ?? 0;
+        acc.retweets += m.retweet_count ?? 0;
+        acc.replies += m.reply_count ?? 0;
+        acc.quotes += m.quote_count ?? 0;
+        acc.bookmarks += m.bookmark_count ?? 0;
+        acc.views += m.impression_count ?? 0;
+        return acc;
+      },
+      { impressions: 0, likes: 0, retweets: 0, replies: 0, quotes: 0, bookmarks: 0, views: 0 },
+    );
+
+    await storage.upsertAnalytics(postId, "x", totals);
+  } catch (e) {
+    console.error(`[x analytics] fetch failed post=${postId}:`, e);
+  }
+}
+
+/**
+ * Refresh analytics for all X-posted posts in the last N days.
+ * Called by the daily analytics cron. Adapted from postiz-app analytics() flow.
+ */
+export async function refreshXAnalytics(days = 30): Promise<void> {
+  const all = await storage.getPosts();
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+
+  const targets = all.filter(
+    (p) =>
+      p.status === "posted" &&
+      (p.externalIds as any)?.x?.length > 0 &&
+      p.postedAt &&
+      new Date(p.postedAt).getTime() > cutoff,
+  );
+
+  for (const p of targets) {
+    await syncPostAnalyticsFromX(p.id).catch(() => null);
+  }
+  console.log(`[x analytics] refreshed ${targets.length} posts`);
 }

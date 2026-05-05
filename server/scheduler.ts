@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { storage } from "./storage";
-import { tryPublishPostById } from "./social/x";
+import { tryPublishPostById, refreshXAnalytics } from "./social/x";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { runMorningBriefing, autofillCalendar, generateWeekendContent } from "./autopilot";
 
@@ -156,5 +156,20 @@ export function startSchedulers() {
     );
   }
 
-  console.log(`[scheduler] Started — publish/retry * * * * *, morning briefing 0 5 UTC, sat article 0 9 Sat UTC, sun recap 0 10 Sun UTC, autofill Sun 18:00 UTC`);
+  // Daily 02:00 UTC — refresh X analytics for all posts in last 30 days
+  if (process.env.DISABLE_X_ANALYTICS !== "1") {
+    cron.schedule(
+      "0 2 * * *",
+      async () => {
+        try {
+          await refreshXAnalytics(30);
+        } catch (e) {
+          console.error("[scheduler] X analytics refresh failed:", e);
+        }
+      },
+      { timezone: "UTC" },
+    );
+  }
+
+  console.log(`[scheduler] Started — publish/retry * * * * *, morning briefing 0 5 UTC, x analytics 02:00 UTC, sat article 0 9 Sat UTC, sun recap 0 10 Sun UTC, autofill Sun 18:00 UTC`);
 }

@@ -14,7 +14,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
-import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, tryPublishPostById } from "./social/x";
+import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX } from "./social/x";
 import { isToday } from "date-fns";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
@@ -331,6 +331,26 @@ export async function registerRoutes(
   app.post("/api/analytics", async (req, res) => {
     try { res.status(201).json(await storage.createAnalytics(req.body)); }
     catch (err: any) { res.status(400).json({ message: err.message }); }
+  });
+
+  // Manual trigger: refresh X analytics for all posted posts in last 30 days
+  app.post("/api/analytics/sync/x", async (_req, res) => {
+    try {
+      await refreshXAnalytics(30);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Manual trigger: sync analytics for one post by id
+  app.post("/api/analytics/sync/x/:id", async (req, res) => {
+    try {
+      await syncPostAnalyticsFromX(Number(req.params.id));
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.get("/api/usage", async (_req, res) => {

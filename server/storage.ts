@@ -46,6 +46,7 @@ export interface IStorage {
 
   getAnalyticsSummary(): Promise<any>;
   createAnalytics(entry: InsertAnalytics): Promise<Analytics>;
+  upsertAnalytics(postId: number, platform: string, data: { impressions: number; likes: number; retweets: number; replies: number; quotes: number; bookmarks: number; views: number }): Promise<void>;
 
   createAiUsageLog(log: InsertAiUsageLog): Promise<AiUsageLog>;
   getAiUsageLogs(): Promise<AiUsageLog[]>;
@@ -251,6 +252,23 @@ export class DatabaseStorage implements IStorage {
   async createAnalytics(entry: InsertAnalytics): Promise<Analytics> {
     const [result] = await db.insert(analytics).values(entry).returning();
     return result;
+  }
+
+  async upsertAnalytics(
+    postId: number,
+    platform: string,
+    data: { impressions: number; likes: number; retweets: number; replies: number; quotes: number; bookmarks: number; views: number },
+  ): Promise<void> {
+    // Delete existing x_api record for this post+platform, then insert fresh
+    await db.delete(analytics).where(
+      and(eq(analytics.postId, postId), eq(analytics.platform, platform), eq(analytics.source, "x_api"))
+    );
+    await db.insert(analytics).values({
+      postId,
+      platform,
+      source: "x_api",
+      ...data,
+    });
   }
 
   async createAiUsageLog(log: InsertAiUsageLog): Promise<AiUsageLog> {
