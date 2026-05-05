@@ -98,9 +98,14 @@ export default function QueuePage() {
     }
   }
 
-  async function publishNow(postId: number) {
+  async function publishNow(post: PostWithTweets) {
+    const postId = post.id;
     setPublishingIds((prev) => new Set(prev).add(postId));
     try {
+      // Auto-promote draft → ready so the server accepts it
+      if (post.status === "draft") {
+        await apiRequest("PATCH", `/api/posts/${postId}/status`, { status: "ready" });
+      }
       const res = await apiRequest("POST", `/api/posts/${postId}/publish`, {});
       const data = await res.json();
       if (data.tweetUrl) {
@@ -254,7 +259,7 @@ export default function QueuePage() {
               <Button
                 size="sm"
                 disabled={isPublishing}
-                onClick={() => publishNow(post.id)}
+                onClick={() => publishNow(post)}
                 data-testid={`button-publish-x-${post.id}`}
               >
                 {isPublishing
