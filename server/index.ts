@@ -112,6 +112,15 @@ app.use((req, res, next) => {
     })
   );
 
+  // Add columns introduced after initial deploy — safe to re-run (IF NOT EXISTS).
+  await pool.query(`
+    ALTER TABLE posts
+      ADD COLUMN IF NOT EXISTS external_ids   jsonb,
+      ADD COLUMN IF NOT EXISTS retry_count    integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS last_retry_at  timestamp,
+      ADD COLUMN IF NOT EXISTS autopilot      boolean NOT NULL DEFAULT false
+  `).catch((err) => console.error("[startup] posts migration warning:", err));
+
   const { seedDatabase } = await import("./seed");
   await seedDatabase().catch((err) => console.error("Seed error:", err));
 
