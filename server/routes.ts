@@ -118,11 +118,21 @@ export async function registerRoutes(
     try {
       const all = await storage.getPosts();
       const queue = all.filter((p) => {
+        if (p.status === "draft") return true;       // drafts always visible
         if (p.status === "ready") return true;
+        if (p.status === "failed") return true;      // failed posts need attention
         if (p.status === "scheduled" && p.scheduledAt) {
           return isToday(new Date(p.scheduledAt));
         }
         return false;
+      });
+      // Sort: drafts first, then by scheduledAt
+      queue.sort((a, b) => {
+        const order: Record<string, number> = { draft: 0, ready: 1, scheduled: 2, failed: 3 };
+        const ao = a.status ? (order[a.status] ?? 99) : 99;
+        const bo = b.status ? (order[b.status] ?? 99) : 99;
+        if (ao !== bo) return ao - bo;
+        return new Date(a.scheduledAt ?? 0).getTime() - new Date(b.scheduledAt ?? 0).getTime();
       });
       res.json(queue);
     } catch (err: any) {
