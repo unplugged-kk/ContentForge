@@ -144,6 +144,14 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
   const trimmed = texts.map((t) => t.trim()).filter(Boolean);
   if (trimmed.length === 0) throw new Error("No tweet text to post.");
 
+  // Thread finisher: append a follow/CTA tweet to threads when X_THREAD_FINISHER is set.
+  // Only added to multi-tweet threads (not single tweets), max 275 chars.
+  // Example: "Follow @DevOpsByte for daily DevOps & AI threads ↑"
+  const finisher = process.env.X_THREAD_FINISHER?.trim();
+  if (finisher && trimmed.length > 1 && finisher.length <= 275) {
+    trimmed.push(finisher);
+  }
+
   // Use env var if set to avoid a paid API call on every post.
   // Falls back to v2.me() only if X_USERNAME is not configured.
   let username: string | null = process.env.X_USERNAME || null;
