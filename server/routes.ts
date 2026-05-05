@@ -1783,24 +1783,41 @@ Each tweet under ${charLimit} characters.` },
   app.post("/api/discover/ideas/:id/expand", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const postType: string = req.body?.postType || "thread";
       const [idea] = await db.select().from(discoveredIdeas).where(eq(discoveredIdeas.id, id));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
-      const response = await ai.chat.completions.create({
-        model: MODELS.TEXT,
-        messages: [
-          { role: "system", content: "You are an expert social media content writer specializing in Data & AI infrastructure topics. Convert this discovered idea into a ready-to-post thread." },
-          { role: "user", content: `Turn this idea into a compelling Twitter/X thread (5-7 tweets, each under 280 characters):\n\nTitle: ${idea.title}\nDescription: ${idea.description || idea.summary || ""}\nUnique Angle: ${idea.uniqueAngle || ""}\nSuggested Hook: ${idea.suggestedHook || ""}\n\nReturn JSON: { "tweets": [{ "content": "tweet text", "position": 0 }] }` }
-        ],
-        temperature: 0.8,
-        response_format: { type: "json_object" },
-      });
-      const result = JSON.parse(response.choices[0]?.message?.content || "{}");
+
+      const tweetCountHint =
+        postType === "tweet"         ? "exactly 1 tweet (max 275 chars)"
+        : postType === "long_thread" ? "8-12 tweets"
+        : postType === "article_thread" ? "15-20 tweets — deep narrative with sections: context → problem → analysis → data/examples → lessons → implications"
+        : "5-7 tweets";
+
+      const formatNote =
+        postType === "tweet"
+          ? "Return JSON: { \"tweets\": [{\"content\": \"...\", \"position\": 0}], \"hashtag_suggestions\": [\"tag1\"] }"
+          : "Tweet 1 = scroll-stopping hook. Each subsequent tweet ≤275 chars, numbered (1/, 2/, ...). Last tweet = CTA or bold question. Return JSON: { \"tweets\": [{\"content\": \"...\", \"position\": 0}], \"hashtag_suggestions\": [\"tag1\",\"tag2\",\"tag3\"] }";
+
+      const { content, usage, latency } = await aiCall([
+        { role: "system", content: "You are ghostwriting for Kishore Kumar Behera — Infrastructure Engineering Lead (11+ yrs). Credentials: Saved $500K at Salesforce via cloud cost optimisation. Ran multi-region K8s at Maersk. Built ML feature stores at SAP Labs. Niche: DevOps · AI/MLOps · Kubernetes · Platform Engineering. Voice: specific tool names, real metrics, contrarian angles, conversational. No generic advice." },
+        { role: "user", content: `Turn this idea into ${tweetCountHint}:\n\nTitle: ${idea.title}\nDescription: ${idea.description || idea.summary || ""}\nUnique Angle: ${idea.uniqueAngle || ""}\nSuggested Hook: ${idea.suggestedHook || ""}\nContent Angles: ${(idea.contentAngles as string[] || []).join(" | ")}\n\n${formatNote}` }
+      ], true);
+      await logAiUsage(usage, latency, "expand_idea");
+
+      const result = safeJsonParse(content) || {};
+      const tweets = (result.tweets || []).map((t: any, i: number) => ({
+        content: String(t.content || "").slice(0, 280),
+        position: i,
+        charCount: String(t.content || "").length,
+        postId: 0,
+      }));
+
       const post = await storage.createPost(
-        { postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: MODELS.TEXT } as any,
-        result.tweets?.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 })) || []
+        { postType, tone: "conversational", targetPlatform: "x", status: "draft", aiModel: MODELS.TEXT } as any,
+        tweets,
       );
       await db.update(discoveredIdeas).set({ status: "used" }).where(eq(discoveredIdeas.id, id));
-      res.json({ postId: post.id, tweets: result.tweets });
+      res.json({ postId: (post as any).id, postType, tweetCount: tweets.length, hashtags: result.hashtag_suggestions || [] });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
