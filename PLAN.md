@@ -10,7 +10,43 @@
 **Primary Goal:** X (Twitter) + Threads monetization via automated content posting  
 **Revenue Target:** X Revenue Share → 5M impressions / 90 days + 500 followers  
 **Time constraint:** Full-time job. Max 5 min/day of manual effort after setup.  
-**Last updated:** 2026-05-04 — Autopilot engine, 14 pillars, 3-4x/day scheduling, enhanced discover
+**Last updated:** 2026-05-05 — DB auto-migrate, X analytics sync, postiz-app audit, publishing fixes
+
+---
+
+## Postiz-App Audit Findings (2026-05-05)
+
+> Audited `/Users/kishore/git/postiz-app`. Goal: copy what works, skip complexity.
+> **Bottom line: replace Postiz SaaS cost by building same patterns into ContentForge.**
+
+### What Postiz does that we are copying
+
+| Feature | Postiz file | ContentForge status |
+|---------|-------------|---------------------|
+| Human-readable X error messages | `x.provider.ts handleErrors()` | ✅ Done — `translateXError()` |
+| Auto-sync analytics after posting | `x.provider.ts postAnalytics()` | ✅ Done — fires after every publish |
+| Daily analytics refresh | analytics scheduler | ✅ Done — 02:00 UTC cron |
+| Threads OAuth2 + publish | `threads.provider.ts` | 🔄 Next — needs THREADS_APP_ID |
+| Instagram OAuth2 via Facebook | `instagram.provider.ts` | 🔄 Planned — needs FACEBOOK_APP_ID |
+| Per-account token storage | Prisma Integration model | ✅ Already have connected_accounts table |
+
+### What Postiz does that we are NOT copying (too heavy)
+
+| Skipped | Why |
+|---------|-----|
+| Temporal.io workflows | Our node-cron handles the volume fine |
+| NestJS provider abstractions | ContentForge is single-user, not multi-tenant SaaS |
+| Image/media upload via sharp | Text threads are the priority; add later if needed |
+| Auto-repost plugin | Nice-to-have, not needed yet |
+
+### Cost impact
+
+| Item | Before | After |
+|------|--------|-------|
+| Postiz SaaS subscription | Paying | Cancel — ContentForge replaces it |
+| X API tier | Check if on paid tier | Free tier (1,500 tweets/month) covers ~400/month volume |
+| Threads API | Not implemented | Free (Meta Threads Graph API) |
+| Instagram API | Not implemented | Free (Meta Graph API, 25 posts/day) |
 
 ---
 
@@ -27,31 +63,41 @@
 ## Last Checkpoint (update this every session)
 
 ```
-Date: 2026-05-04 (resume)
-Agent: Cursor
-What was done this session (resume):
-  - server/marketPulse.ts: Google Trends RSS merged for US + IN + GB (deduped); still HN front page + niche filter
-  - client/discover.tsx: "Today's market pulse" panel (GET /api/autopilot/market-pulse), refresh + data-testids; trends source label
-What was done earlier (same branch):
-  - server/autopilot.ts (NEW): core autopilot engine — generateDraftFromIdea(), autofillCalendar(), runMorningBriefing()
-  - server/discoverRefresh.ts: added Google Trends RSS, 6 more Reddit subreddits (sre/platformengineering/cloudnative/aws/googlecloud/finops), URL+title dedupe against existing ideas, stronger AI/DevOps intersection prompt
-  - server/scheduler.ts: morning briefing cron (05:00 UTC), calendar autofill cron (Sun 18:00 UTC), exponential backoff retry (3x: 5/30/120 min), retry count tracking
-  - shared/schema.ts: posts.retry_count (integer), posts.last_retry_at (timestamp)
-  - server/seed.ts: expanded 6 → 14 pillars (idempotent), added 8 new RSS sources, expanded templates to 30+
-  - server/routes.ts: POST /api/autopilot/morning-briefing, POST /api/autopilot/autofill, GET /api/autopilot/status, GET /api/autopilot/content-gaps
-  - PLAN.md: fixed stale sprint tracker, added Sprint S4.5, updated to 3-4x/day posting model
+Date: 2026-05-05
+Agent: Claude Sonnet 4.6
+
+What was done this session:
+  DB MIGRATIONS (CRITICAL FIX):
+  - server/index.ts: replaced manual ALTER TABLE with drizzle-orm migrate() on startup
+  - migrations/0000_init.sql: full schema baseline (CREATE TABLE IF NOT EXISTS — safe on existing Railway DB)
+  - script/build.ts: copies migrations/ to dist/migrations/ so migrate() finds them at runtime
+  - package.json: added db:generate script
+  → Going forward: edit schema.ts → npm run db:generate → commit → Railway auto-migrates
+
+  PUBLISHING FIXES:
+  - Queue page: "Post to X" on a draft auto-promotes to ready before publishing (no more 500 error)
+  - Fixed missing external_urls + error_message columns in startup migration
+
+  POSTIZ-APP AUDIT + X IMPROVEMENTS (copied from postiz-app):
+  - server/social/x.ts: translateXError() — human-readable X API error messages
+    (usage-cap, duplicate post, auth expired, invalid URL, video too long, etc.)
+  - server/social/x.ts: syncPostAnalyticsFromX(postId) — after posting, fetches
+    public_metrics from X API and upserts into analytics table
+  - server/social/x.ts: refreshXAnalytics(days) — bulk refresh for all posted X posts
+  - server/storage.ts: upsertAnalytics() — delete+insert for x_api source analytics
+  - server/scheduler.ts: daily 02:00 UTC analytics refresh cron
+  - server/routes.ts: POST /api/analytics/sync/x and /api/analytics/sync/x/:id
 
 What is NOT done yet:
-  - X credentials still needed (S0-4) — scheduler and autopilot code is complete but posting requires keys
-  - E2E test with live X API: POST /api/autopilot/morning-briefing → review drafts → /queue → Post to X
-  - Threads OAuth (Sprint 3)
-  - PWA / vite-plugin-pwa (Sprint 0)
+  - "Sync from X" button on Analytics page (30 min UI — endpoint exists)
+  - Threads publisher (needs THREADS_APP_ID from Kishore first)
+  - Instagram publisher (needs FACEBOOK_APP_ID + Business accounts from Kishore)
+  - Account selector in draft creation (after Threads/Instagram wired up)
 
-Next steps:
-  1) Configure X: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET in Railway + local .env
-  2) Run npm run db:push to apply retry_count / last_retry_at schema changes
-  3) Trigger POST /api/autopilot/morning-briefing manually to generate first batch of drafts
-  4) Review /queue → approve and post first tweet
+Next steps (in order):
+  1) Add "Sync from X" button to analytics page (quick win, 30 min)
+  2) When Kishore has THREADS_APP_ID → implement Threads publisher (Sprint 3)
+  3) When Kishore has FACEBOOK_APP_ID → implement Instagram publisher
 ```
 
 ---
@@ -313,7 +359,7 @@ Use **official** Trends data (CSV export, Trends UI, or API where allowed) as **
 |---|---|---|---|---|
 | S4-1 | `GET /api/discover/morning-briefing` — pre-compute top 5 ideas + 3 draft variations each at 5 AM via cron | Agent | ⬜ | Killer feature |
 | S4-2 | `POST /api/calendar/autofill` — fills next 7 days with posts at 8 AM / 12 PM / 5 PM EST | Agent | ⬜ | True automation |
-| S4-3 | Daily cron: for all posted tweets, call X API to fetch impressions/likes → update `analytics` table | Agent | ⬜ | After S1 complete |
+| S4-3 | Daily cron: for all posted tweets, call X API to fetch impressions/likes → update `analytics` table | Agent | ✅ | Done — 02:00 UTC, syncPostAnalyticsFromX() |
 | S4-4 | Analytics dashboard: "Revenue Share Progress" widget — impressions last 90 days vs 5M goal + projected date | Agent | ⬜ | Motivation tracker |
 | S4-5 | YouTube channel monitoring — subscribe to channel URLs, cron checks for new videos, auto-adds to ideas | Agent | ⬜ | Inspired by CannerAI |
 | S4-6 | Comment/discussion mining — for a given viral tweet URL, extract comments as post idea seeds | Agent | ⬜ | Inspired by CannerAI |
