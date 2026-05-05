@@ -113,10 +113,14 @@ app.use((req, res, next) => {
   );
 
   // Add columns introduced after initial deploy — safe to re-run (IF NOT EXISTS).
+  // Add any columns that may be missing (safe to re-run — IF NOT EXISTS).
+  // We cannot run drizzle-kit in production, so schema drift is fixed here.
   await pool.query(`
     ALTER TABLE posts
+      ADD COLUMN IF NOT EXISTS ai_model       varchar(100),
       ADD COLUMN IF NOT EXISTS external_ids   jsonb,
       ADD COLUMN IF NOT EXISTS external_urls  jsonb,
+      ADD COLUMN IF NOT EXISTS error_message  text,
       ADD COLUMN IF NOT EXISTS retry_count    integer NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS last_retry_at  timestamp,
       ADD COLUMN IF NOT EXISTS autopilot      boolean NOT NULL DEFAULT false
