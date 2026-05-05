@@ -35,13 +35,3 @@ test("sidebar navigation: Discover link works", async ({ page }) => {
   await expect(page.locator('[data-testid="text-discover-title"]')).toBeVisible();
 });
 
-// Override storageState to empty for this group — Playwright's official way to test unauthenticated views.
-// Using browser.newContext() is unreliable in a project that already has storageState configured.
-test.describe("unauthenticated", () => {
-  test.use({ storageState: { cookies: [], origins: [] } });
-
-  test("auth page shows when logged out", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.locator('[data-testid="text-auth-title"]')).toBeVisible({ timeout: 30_000 });
-  });
-});

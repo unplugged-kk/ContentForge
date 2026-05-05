@@ -42,7 +42,7 @@ export default defineConfig({
     {
       name: "chromium",
       dependencies: ["setup"],
-      testIgnore: [/auth\.setup\.ts$/, /api\.e2e\.spec\.ts$/],
+      testIgnore: [/auth\.setup\.ts$/, /api\.e2e\.spec\.ts$/, /auth-page\.e2e\.spec\.ts$/],
       use: {
         ...devices["Desktop Chrome"],
         storageState: "e2e/.auth/user.json",
@@ -51,6 +51,12 @@ export default defineConfig({
     {
       name: "api",
       testMatch: /api\.e2e\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    // Runs WITHOUT auth setup — used for testing the unauthenticated login page.
+    {
+      name: "no-auth",
+      testMatch: /auth-page\.e2e\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"] },
     },
   ],
