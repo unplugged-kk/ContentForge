@@ -156,13 +156,15 @@ export function startSchedulers() {
     );
   }
 
-  // Daily 02:00 UTC — refresh X analytics for all posts in last 30 days
+  // Weekly Sunday 03:00 UTC — refresh X analytics for posts in last 14 days only.
+  // Deliberately NOT daily — each refresh costs ~$0.01/post in X API credits.
+  // Manual refresh available at POST /api/analytics/sync/x
   if (process.env.DISABLE_X_ANALYTICS !== "1") {
     cron.schedule(
-      "0 2 * * *",
+      "0 3 * * 0",
       async () => {
         try {
-          await refreshXAnalytics(30);
+          await refreshXAnalytics(14);
         } catch (e) {
           console.error("[scheduler] X analytics refresh failed:", e);
         }

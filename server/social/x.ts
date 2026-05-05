@@ -144,12 +144,16 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
   const trimmed = texts.map((t) => t.trim()).filter(Boolean);
   if (trimmed.length === 0) throw new Error("No tweet text to post.");
 
+  // Use env var if set to avoid a paid API call on every post.
+  // Falls back to v2.me() only if X_USERNAME is not configured.
   let username: string | null = process.env.X_USERNAME || null;
-  try {
-    const me = await rw.v2.me();
-    username = me.data.username ?? username;
-  } catch {
-    /* optional */
+  if (!username) {
+    try {
+      const me = await rw.v2.me();
+      username = me.data.username ?? null;
+    } catch {
+      /* optional — URL will use 'i' as fallback handle */
+    }
   }
 
   const tweetIds: string[] = [];
