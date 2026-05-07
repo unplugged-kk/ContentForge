@@ -23,7 +23,8 @@ export function startSchedulers() {
     return;
   }
 
-  const tz = process.env.CRON_TZ || "UTC";
+  // Use IST for all scheduling
+  const tz = process.env.CRON_TZ || "Asia/Kolkata";
 
   // Every minute: publish scheduled posts + retry failed posts with backoff
   cron.schedule(
@@ -70,26 +71,43 @@ export function startSchedulers() {
     { timezone: tz },
   );
 
-  // 05:00 UTC daily — morning briefing: discover + auto-generate 5 ready drafts for review
+  // 05:30 IST (00:00 UTC) — daily auto-post: discover + generate + schedule 3 posts for today
   if (process.env.DISABLE_MORNING_BRIEFING !== "1") {
     cron.schedule(
-      "0 5 * * *",
+      "30 5 * * *",
       async () => {
-        console.log("[scheduler] Morning briefing starting...");
+        console.log("[scheduler] Daily auto-post starting...");
         try {
           const result = await runMorningBriefing();
           console.log(
-            `[scheduler] Morning briefing done: ideas=${result.newIdeas} drafts=${result.draftsGenerated} errors=${result.errors.length}`,
+            `[scheduler] Daily auto-post done: ideas=${result.newIdeas} posts=${result.postsScheduled} errors=${result.errors.length}`,
           );
         } catch (e) {
-          console.error("[scheduler] Morning briefing failed:", e);
+          console.error("[scheduler] Daily auto-post failed:", e);
         }
       },
-      { timezone: "UTC" },
+      { timezone: tz },
     );
   }
 
-  // Daily discover refresh (separate from morning briefing — just ideas, no auto-draft)
+  // 06:30 IST (01:00 UTC) — daily autofill: fill any empty slots for today
+  if (process.env.DISABLE_AUTOFILL !== "1") {
+    cron.schedule(
+      "30 6 * * *",
+      async () => {
+        console.log("[scheduler] Daily autofill starting...");
+        try {
+          const r = await autofillCalendar(1);
+          console.log(`[scheduler] Daily autofill done: drafts=${r.draftsCreated} errors=${r.errors.length}`);
+        } catch (e) {
+          console.error("[scheduler] Daily autofill failed:", e);
+        }
+      },
+      { timezone: tz },
+    );
+  }
+
+  // Daily discover refresh at 06:00 IST (00:30 UTC)
   if (process.env.DISABLE_DISCOVER_CRON !== "1") {
     const discoverCron = process.env.DISCOVER_CRON || "0 6 * * *";
     cron.schedule(
@@ -107,10 +125,10 @@ export function startSchedulers() {
     console.log(`[scheduler] Discover cron: ${discoverCron}`);
   }
 
-  // Saturday 09:00 UTC — deep-dive article thread (15-20 tweets)
+  // Saturday 13:00 IST — deep-dive article thread
   if (process.env.DISABLE_WEEKEND_CONTENT !== "1") {
     cron.schedule(
-      "0 9 * * 6",
+      "0 13 * * 6",
       async () => {
         console.log("[scheduler] Saturday article thread generating...");
         try {
@@ -120,12 +138,12 @@ export function startSchedulers() {
           console.error("[scheduler] Saturday article failed:", e);
         }
       },
-      { timezone: "UTC" },
+      { timezone: tz },
     );
 
-    // Sunday 10:00 UTC — weekly recap thread (12-15 tweets)
+    // Sunday 19:30 IST — weekly recap thread
     cron.schedule(
-      "0 10 * * 0",
+      "30 19 * * 0",
       async () => {
         console.log("[scheduler] Sunday weekly recap generating...");
         try {
@@ -135,33 +153,14 @@ export function startSchedulers() {
           console.error("[scheduler] Sunday recap failed:", e);
         }
       },
-      { timezone: "UTC" },
+      { timezone: tz },
     );
   }
 
-  // Sunday 18:00 UTC — autofill calendar for the coming week (skips slots already filled)
-  if (process.env.DISABLE_AUTOFILL !== "1") {
-    cron.schedule(
-      "0 18 * * 0",
-      async () => {
-        console.log("[scheduler] Weekly autofill starting...");
-        try {
-          const r = await autofillCalendar(7);
-          console.log(`[scheduler] Autofill done: drafts=${r.draftsCreated} errors=${r.errors.length}`);
-        } catch (e) {
-          console.error("[scheduler] Autofill failed:", e);
-        }
-      },
-      { timezone: "UTC" },
-    );
-  }
-
-  // Weekly Sunday 03:00 UTC — refresh X analytics for posts in last 14 days only.
-  // Deliberately NOT daily — each refresh costs ~$0.01/post in X API credits.
-  // Manual refresh available at POST /api/analytics/sync/x
+  // Weekly Sunday 08:30 IST — refresh X analytics for posts in last 14 days
   if (process.env.DISABLE_X_ANALYTICS !== "1") {
     cron.schedule(
-      "0 3 * * 0",
+      "30 8 * * 0",
       async () => {
         try {
           await refreshXAnalytics(14);
@@ -169,9 +168,9 @@ export function startSchedulers() {
           console.error("[scheduler] X analytics refresh failed:", e);
         }
       },
-      { timezone: "UTC" },
+      { timezone: tz },
     );
   }
 
-  console.log(`[scheduler] Started — publish/retry * * * * *, morning briefing 0 5 UTC, x analytics 02:00 UTC, sat article 0 9 Sat UTC, sun recap 0 10 Sun UTC, autofill Sun 18:00 UTC`);
+  console.log(`[scheduler] Started — publish/retry * * * * *, auto-post 05:30 IST, autofill 06:30 IST, discover 06:00 IST, sat article 13:00 IST, sun recap 19:30 IST, analytics 08:30 IST (timezone: ${tz})`);
 }

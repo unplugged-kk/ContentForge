@@ -2741,5 +2741,49 @@ Return only the refined post content, no explanation.` },
     res.json(bestTimes);
   });
 
+  // ── MANUAL SCHEDULING ──────────────────────────────────────────────────────────
+
+  // POST /api/posts/schedule — manually schedule a post at any time
+  app.post("/api/posts/schedule", async (req, res) => {
+    try {
+      const { ideaId, scheduledAt, postType, imageUrl } = req.body;
+      if (!ideaId || !scheduledAt) {
+        return res.status(400).json({ message: "ideaId and scheduledAt are required" });
+      }
+      const scheduleTime = new Date(scheduledAt);
+      if (Number.isNaN(scheduleTime.getTime()) || scheduleTime <= new Date()) {
+        return res.status(400).json({ message: "scheduledAt must be a valid future datetime" });
+      }
+
+      const { scheduleManualPost } = await import("./autopilot");
+      const result = await scheduleManualPost(Number(ideaId), scheduleTime, postType);
+      if (result.error) {
+        return res.status(500).json({ message: result.error });
+      }
+      res.json({ success: true, postId: result.postId, scheduledAt: scheduleTime });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/autopilot/smoke-test — trigger immediate pipeline run for testing
+  app.post("/api/autopilot/smoke-test", async (req, res) => {
+    try {
+      const { runDailyAutoPost } = await import("./autopilot");
+      console.log("[smoke-test] Triggering immediate auto-post pipeline...");
+      const result = await runDailyAutoPost();
+      res.json({
+        success: true,
+        message: `Smoke test complete. Scheduled ${result.postsScheduled} posts for today.`,
+        newIdeas: result.newIdeas,
+        postsScheduled: result.postsScheduled,
+        errors: result.errors,
+        topIdeas: result.topIdeas.slice(0, 3),
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   return httpServer;
 }

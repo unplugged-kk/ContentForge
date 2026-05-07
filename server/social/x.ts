@@ -149,7 +149,12 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
   // Example: "Follow @DevOpsByte for daily DevOps & AI threads ↑"
   const finisher = process.env.X_THREAD_FINISHER?.trim();
   if (finisher && trimmed.length > 1 && finisher.length <= 275) {
-    trimmed.push(finisher);
+    // Only add finisher if the last tweet isn't already a CTA
+    const lastTweet = trimmed[trimmed.length - 1].toLowerCase();
+    const isAlreadyCTA = lastTweet.includes("follow") || lastTweet.includes("subscribe") || lastTweet.includes("rt this");
+    if (!isAlreadyCTA) {
+      trimmed.push(finisher);
+    }
   }
 
   // Use env var if set to avoid a paid API call on every post.

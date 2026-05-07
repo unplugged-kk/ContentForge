@@ -26,6 +26,7 @@ export const posts = pgTable("posts", {
   retryCount: integer("retry_count").default(0),
   lastRetryAt: timestamp("last_retry_at"),
   autopilot: boolean("autopilot").default(false),
+  imageUrl: text("image_url"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
