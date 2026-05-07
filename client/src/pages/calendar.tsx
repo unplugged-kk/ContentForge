@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS } from "@/lib/constants";
-import { ChevronLeft, ChevronRight, Clock, Sparkles, Loader2, TrendingUp, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Sparkles, Loader2, TrendingUp, X, Trash2 } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek } from "date-fns";
 import type { Post, Tweet } from "@shared/schema";
@@ -70,6 +70,35 @@ export default function CalendarPage() {
     },
   });
 
+  const unscheduleMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/posts/${id}/unschedule`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Removed from calendar" });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      setSelectedPost(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to remove schedule", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/posts/${id}`, {});
+    },
+    onSuccess: () => {
+      toast({ title: "Post deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      setSelectedPost(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
   const calendarStart = startOfWeek(monthStart);
@@ -105,6 +134,13 @@ export default function CalendarPage() {
   };
 
   const currentBestTimes = bestTimes?.[bestTimesPlatform] || [];
+
+  function openPostDialog(post: PostWithTweets) {
+    setSelectedPost(post);
+    const base = post.scheduledAt ? new Date(post.scheduledAt) : new Date(Date.now() + 10 * 60 * 1000);
+    setScheduleDate(base.toISOString().slice(0, 10));
+    setScheduleTime(`${String(base.getHours()).padStart(2, "0")}:${String(base.getMinutes()).padStart(2, "0")}`);
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -232,7 +268,7 @@ export default function CalendarPage() {
                       {dayPosts.slice(0, 3).map((post) => (
                         <button
                           key={post.id}
-                          onClick={() => setSelectedPost(post)}
+                          onClick={() => openPostDialog(post)}
                           className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate ${getStatusStyle(post.status)}`}
                           style={{ borderLeft: `2px solid ${getPillarColor(post.pillarId)}` }}
                           data-testid={`button-calendar-post-${post.id}`}
@@ -278,9 +314,11 @@ export default function CalendarPage() {
                   </Card>
                 ))}
               </div>
-              {selectedPost.status === "ready" && (
+              {(selectedPost.status === "ready" || selectedPost.status === "scheduled") && (
                 <div className="space-y-2 pt-2 border-t">
-                  <p className="text-xs font-medium">Schedule this post</p>
+                  <p className="text-xs font-medium">
+                    {selectedPost.status === "scheduled" ? "Reschedule this post" : "Schedule this post"}
+                  </p>
                   <div className="flex gap-2">
                     <Input
                       type="date"
@@ -301,9 +339,14 @@ export default function CalendarPage() {
                     className="w-full"
                     onClick={() => {
                       if (scheduleDate) {
+                        const localDateTime = new Date(`${scheduleDate}T${scheduleTime}:00`);
+                        if (Number.isNaN(localDateTime.getTime()) || localDateTime.getTime() <= Date.now()) {
+                          toast({ title: "Pick a future date and time", variant: "destructive" });
+                          return;
+                        }
                         scheduleMutation.mutate({
                           id: selectedPost.id,
-                          scheduledAt: `${scheduleDate}T${scheduleTime}:00`,
+                          scheduledAt: localDateTime.toISOString(),
                         });
                       }
                     }}
@@ -311,8 +354,30 @@ export default function CalendarPage() {
                     data-testid="button-schedule"
                   >
                     <Clock className="h-4 w-4 mr-2" />
-                    Schedule
+                    {selectedPost.status === "scheduled" ? "Save New Time" : "Schedule"}
                   </Button>
+                  {selectedPost.status === "scheduled" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => unscheduleMutation.mutate(selectedPost.id)}
+                        disabled={unscheduleMutation.isPending}
+                        data-testid="button-remove-from-calendar"
+                      >
+                        {unscheduleMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <X className="h-4 w-4 mr-2" />}
+                        Remove from Calendar
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={() => deleteMutation.mutate(selectedPost.id)}
+                        disabled={deleteMutation.isPending}
+                        data-testid="button-delete-scheduled-post"
+                      >
+                        {deleteMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                        Delete Post
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

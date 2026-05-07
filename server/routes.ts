@@ -207,6 +207,18 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/posts/:id/unschedule", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
+      const result = await storage.updatePost(id, { status: "ready", scheduledAt: null } as any);
+      if (!result) return res.status(404).json({ message: "Post not found" });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // ==================== IDEAS ====================
   app.get("/api/ideas", async (_req, res) => {
     try { res.json(await storage.getIdeas()); }
@@ -1808,6 +1820,16 @@ Each tweet under ${charLimit} characters.` },
       const [updated] = await db.update(discoveredIdeas).set({ isBookmarked: !idea.isBookmarked }).where(eq(discoveredIdeas.id, id)).returning();
       res.json(updated);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/discover/ideas/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await db.delete(discoveredIdeas).where(eq(discoveredIdeas.id, id));
+      res.status(204).send();
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.post("/api/discover/ideas/:id/expand", async (req, res) => {

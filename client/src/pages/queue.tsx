@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import { format } from "date-fns";
 import {
   Loader2, ListChecks, Send, Clock, ShieldCheck, Pencil, CheckCircle,
-  ChevronDown, ChevronUp, Save, X as XIcon, Calendar,
+  ChevronDown, ChevronUp, Save, X as XIcon, Calendar, Trash2,
 } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import type { Post, Tweet } from "@shared/schema";
@@ -46,14 +48,51 @@ export default function QueuePage() {
   // Per-post loading state
   const [publishingIds, setPublishingIds] = useState<Set<number>>(new Set());
   const [markingReadyIds, setMarkingReadyIds] = useState<Set<number>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
 
   // Inline editing
   const [editingPostId, setEditingPostId] = useState<number | null>(null);
   const [editTweets, setEditTweets] = useState<{ id: number; content: string; position: number }[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [schedulePost, setSchedulePost] = useState<PostWithTweets | null>(null);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("08:00");
 
   const { data: queue = [], isLoading } = useQuery<PostWithTweets[]>({
     queryKey: ["/api/posts/queue/today"],
+  });
+
+  const scheduleMutation = useMutation({
+    mutationFn: async ({ id, scheduledAt }: { id: number; scheduledAt: string }) => {
+      await apiRequest("PATCH", `/api/posts/${id}/status`, {
+        status: "scheduled",
+        scheduledAt,
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Post scheduled successfully" });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts/queue/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      setSchedulePost(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Schedule failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const unscheduleMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("POST", `/api/posts/${id}/unschedule`, {});
+    },
+    onSuccess: () => {
+      toast({ title: "Removed from calendar" });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts/queue/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      setSchedulePost(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to remove schedule", description: err.message, variant: "destructive" });
+    },
   });
 
   const getPillarName = (pillarId: number | null) =>
@@ -123,6 +162,49 @@ export default function QueuePage() {
     }
   }
 
+  async function deletePost(postId: number) {
+    setDeletingIds((prev) => new Set(prev).add(postId));
+    try {
+      await apiRequest("DELETE", `/api/posts/${postId}`, {});
+      toast({ title: "Post deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts/queue/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+    } catch (err: any) {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    } finally {
+      setDeletingIds((prev) => {
+        const n = new Set(prev);
+        n.delete(postId);
+        return n;
+      });
+    }
+  }
+
+  function openSchedule(post: PostWithTweets) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 10);
+    setScheduleDate(now.toISOString().slice(0, 10));
+    setScheduleTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+    setSchedulePost(post);
+  }
+
+  function scheduleAtSelectedTime() {
+    if (!schedulePost || !scheduleDate) return;
+    const localDateTime = new Date(`${scheduleDate}T${scheduleTime}:00`);
+    if (Number.isNaN(localDateTime.getTime())) {
+      toast({ title: "Invalid date or time", variant: "destructive" });
+      return;
+    }
+    if (localDateTime.getTime() <= Date.now()) {
+      toast({ title: "Pick a future time", variant: "destructive" });
+      return;
+    }
+    scheduleMutation.mutate({
+      id: schedulePost.id,
+      scheduledAt: localDateTime.toISOString(),
+    });
+  }
+
   const drafts = queue.filter((p) => p.status === "draft");
   const ready = queue.filter((p) => p.status === "ready");
   const scheduled = queue.filter((p) => p.status === "scheduled");
@@ -137,6 +219,7 @@ export default function QueuePage() {
     const isEditing = editingPostId === post.id;
     const isPublishing = publishingIds.has(post.id);
     const isMarkingReady = markingReadyIds.has(post.id);
+    const isDeleting = deletingIds.has(post.id);
 
     return (
       <Card key={post.id} data-testid={`card-queue-post-${post.id}`}>
@@ -245,10 +328,11 @@ export default function QueuePage() {
             )}
 
             {/* Schedule */}
-            {(post.status === "draft" || post.status === "ready") && (
+            {(post.status === "draft" || post.status === "ready" || post.status === "scheduled") && (
               <Button
                 size="sm" variant="outline"
-                onClick={() => navigate("/calendar")}
+                onClick={() => openSchedule(post)}
+                data-testid={`button-schedule-post-${post.id}`}
               >
                 <Calendar className="h-3 w-3 mr-1" />Schedule
               </Button>
@@ -272,6 +356,16 @@ export default function QueuePage() {
             {post.targetPlatform === "threads" && (
               <p className="text-xs text-muted-foreground self-center">Threads publishing coming soon</p>
             )}
+
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={isDeleting}
+              onClick={() => deletePost(post.id)}
+              data-testid={`button-delete-post-${post.id}`}
+            >
+              {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -350,6 +444,57 @@ export default function QueuePage() {
           </section>
         )}
       </div>
+
+      <Dialog open={!!schedulePost} onOpenChange={() => setSchedulePost(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-sm">Schedule Post</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              {schedulePost?.status === "scheduled"
+                ? "Change the scheduled date/time or remove it from calendar."
+                : "Choose exact date and time for publishing."}
+            </p>
+            <div className="flex gap-2">
+              <Input
+                type="date"
+                value={scheduleDate}
+                onChange={(e) => setScheduleDate(e.target.value)}
+                data-testid="input-queue-schedule-date"
+              />
+              <Input
+                type="time"
+                value={scheduleTime}
+                onChange={(e) => setScheduleTime(e.target.value)}
+                className="w-36"
+                data-testid="input-queue-schedule-time"
+              />
+            </div>
+            <Button
+              className="w-full"
+              onClick={scheduleAtSelectedTime}
+              disabled={scheduleMutation.isPending || !scheduleDate}
+              data-testid="button-confirm-queue-schedule"
+            >
+              {scheduleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Calendar className="h-4 w-4 mr-2" />}
+              {schedulePost?.status === "scheduled" ? "Save New Time" : "Schedule Exactly"}
+            </Button>
+            {schedulePost?.status === "scheduled" && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => unscheduleMutation.mutate(schedulePost.id)}
+                disabled={unscheduleMutation.isPending}
+                data-testid="button-queue-remove-from-calendar"
+              >
+                {unscheduleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <XIcon className="h-4 w-4 mr-2" />}
+                Remove from Calendar
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

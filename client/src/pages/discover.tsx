@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark,
   BookmarkCheck, Sparkles, Filter, Zap, Flame, Star, Rss, ShieldCheck,
-  MessageSquare, AlignLeft, FileText, Newspaper, Send, Calendar, Pencil,
+  MessageSquare, AlignLeft, FileText, Newspaper, Send, Calendar, Pencil, Trash2,
   CheckCircle2, ChevronRight,
 } from "lucide-react";
 import type { DiscoveredIdea, RssSource, MonitoredAccount } from "@shared/schema";
@@ -98,6 +98,9 @@ export default function DiscoverPage() {
   const [dialogIdea, setDialogIdea] = useState<DiscoveredIdea | null>(null);
   const [selectedType, setSelectedType] = useState("thread");
   const [draftResult, setDraftResult] = useState<DraftResult | null>(null);
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("08:00");
 
   const { data: ideas = [], isLoading: ideasLoading } = useQuery<DiscoveredIdea[]>({
     queryKey: ["/api/discover/ideas"],
@@ -132,11 +135,29 @@ export default function DiscoverPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/discover/ideas"] }),
   });
 
+  const deleteIdeaMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/discover/ideas/${id}`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/discover/ideas"] });
+      toast({ title: "Idea deleted" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   function openCreateDialog(idea: DiscoveredIdea) {
     const validTypes = CONTENT_TYPE_OPTIONS.map((o) => o.id);
     const suggested = idea.contentTypeSuggestion || "";
     setSelectedType(validTypes.includes(suggested) ? suggested : "thread");
     setDraftResult(null);
+    setShowScheduleForm(false);
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 10);
+    setScheduleDate(now.toISOString().slice(0, 10));
+    setScheduleTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
     setDialogIdea(idea);
   }
 
@@ -179,6 +200,29 @@ export default function DiscoverPage() {
       setDialogIdea(null);
     } catch (err: any) {
       toast({ title: "Publish failed", description: err.message, variant: "destructive" });
+    }
+  }
+
+  async function handleScheduleDraft() {
+    if (!draftResult) return;
+    if (!scheduleDate) {
+      toast({ title: "Select a date", variant: "destructive" });
+      return;
+    }
+    try {
+      const iso = `${scheduleDate}T${scheduleTime}:00`;
+      await apiRequest("PATCH", `/api/posts/${draftResult.postId}/status`, {
+        status: "scheduled",
+        scheduledAt: iso,
+      });
+      toast({ title: "Post scheduled", description: `Scheduled for ${new Date(iso).toLocaleString()}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/posts/queue/today"] });
+      setDialogIdea(null);
+      setDraftResult(null);
+      setShowScheduleForm(false);
+    } catch (err: any) {
+      toast({ title: "Schedule failed", description: err.message, variant: "destructive" });
     }
   }
 
@@ -464,13 +508,22 @@ export default function DiscoverPage() {
                       <Button
                         variant="outline" size="sm"
                         onClick={() => openCreateDialog(idea)}
-                        disabled={isLoading || idea.status === "used"}
+                        disabled={isLoading}
                         data-testid={`button-expand-idea-${idea.id}`}
                       >
                         {isLoading
                           ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
                           : <Sparkles className="h-3 w-3 mr-1" />}
-                        {idea.status === "used" ? "Used" : "Create Draft"}
+                        {idea.status === "used" ? "Create Again" : "Create Draft"}
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm"
+                        onClick={() => deleteIdeaMutation.mutate(idea.id)}
+                        disabled={deleteIdeaMutation.isPending}
+                        data-testid={`button-delete-idea-${idea.id}`}
+                        title="Delete idea"
+                      >
+                        <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
                   </div>
@@ -579,7 +632,7 @@ export default function DiscoverPage() {
                 </button>
 
                 <button
-                  onClick={() => { setDialogIdea(null); navigate("/calendar"); }}
+                  onClick={() => setShowScheduleForm((s) => !s)}
                   className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-muted/50 transition-colors text-left"
                 >
                   <Calendar className="h-5 w-5 text-blue-400 shrink-0" />
@@ -588,6 +641,30 @@ export default function DiscoverPage() {
                     <p className="text-xs text-muted-foreground">Pick a date and time on the calendar</p>
                   </div>
                 </button>
+
+                {showScheduleForm && (
+                  <div className="p-3 rounded-lg border bg-muted/30 space-y-2">
+                    <p className="text-xs font-medium">Pick date &amp; time</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="date"
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="h-9 rounded-md border bg-background px-2 text-sm flex-1"
+                      />
+                      <input
+                        type="time"
+                        value={scheduleTime}
+                        onChange={(e) => setScheduleTime(e.target.value)}
+                        className="h-9 rounded-md border bg-background px-2 text-sm w-32"
+                      />
+                    </div>
+                    <Button className="w-full" onClick={handleScheduleDraft}>
+                      <Calendar className="h-4 w-4 mr-2" />
+                      Confirm Schedule
+                    </Button>
+                  </div>
+                )}
 
                 <button
                   onClick={() => { setDialogIdea(null); navigate("/queue"); }}
