@@ -30,6 +30,8 @@ This project uses **versioned Drizzle SQL migrations** committed to `migrations/
 - App startup already runs `migrate(...)` in `server/index.ts`.
 - CI and E2E use `db:migrate`, not `db:push`.
 - Deployment should apply migrations before traffic (startup migration or release phase).
+- Optional GitHub automation: `.github/workflows/prod-migrate.yml` runs `db:migrate`
+  on push using `secrets.RAILWAY_DATABASE_URL` (set once in repo secrets).
 
 ## Notes
 

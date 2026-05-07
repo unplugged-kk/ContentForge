@@ -8,6 +8,7 @@ import { createServer } from "http";
 import { pool, db } from "./db";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
+import { existsSync } from "fs";
 
 const app = express();
 const httpServer = createServer(app);
@@ -118,6 +119,9 @@ app.use((req, res, next) => {
   // Migration files live in ./migrations/ (committed to repo, copied to dist/migrations/ by build).
   // drizzle tracks applied migrations in __drizzle_migrations — only new ones run.
   const migrationsFolder = path.join(__dirname, "migrations");
+  if (!existsSync(migrationsFolder)) {
+    throw new Error(`Missing migrations folder at startup: ${migrationsFolder}`);
+  }
   await migrate(db, { migrationsFolder });
   log("database migrations applied", "db");
 
