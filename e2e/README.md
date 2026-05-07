@@ -8,13 +8,13 @@ Use a **throwaway** Postgres so you never point Playwright at Railway or your re
 
 ```bash
 npx playwright install chromium   # once
-npm run build:verify:docker       # Docker DB → db:push → check → build → tests → tear down
+npm run build:verify:docker       # Docker DB → db:migrate → check → build → tests → tear down
 ```
 
 What happens:
 
 1. **`docker-compose.e2e.yml`** starts Postgres on **host port `5433`** (`e2e` / `e2e` / `contentforge_e2e`).
-2. **`npm run db:push`** applies the Drizzle schema to that database.
+2. **`npm run db:migrate`** applies committed Drizzle migration files in order.
 3. **`npm run check`**, **`npm run build`**, **`playwright test`** run with  
    `DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e`  
    (your shell `DATABASE_URL` for Railway/dev is **ignored** during this script so E2E cannot hit prod by mistake).
@@ -25,7 +25,7 @@ Manual lifecycle (same DB URL as above in `DATABASE_URL`):
 | Command | Purpose |
 |--------|---------|
 | `npm run e2e:db:up` | Start E2E Postgres only |
-| `DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e npm run db:push` | Apply schema |
+| `DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e npm run db:migrate` | Apply ordered migrations |
 | `DATABASE_URL=… npm run build:verify` | Build + test against that DB |
 | `npm run e2e:db:down` | Stop and delete volume |
 
@@ -41,7 +41,7 @@ Port **5433** avoids clashing with **`docker-compose.yml`** (dev DB on **5432**)
 ## Without Docker (you manage Postgres yourself)
 
 1. Set `DATABASE_URL` to any disposable Postgres.
-2. `npm run db:push`
+2. `npm run db:migrate`
 3. `npm run build:verify`
 
 ## Other variables
@@ -62,6 +62,7 @@ Workflow: **`.github/workflows/e2e.yml`** (job name **“E2E Tests”**).
 
 - Runs on **every `push`**, **every `pull_request`**, and **`workflow_dispatch`** (manual re-run from the Actions tab).
 - Uses a **GitHub Actions service container** Postgres only (`localhost`); **`DATABASE_URL` is hardcoded** in the workflow so it **never** reads Railway or your laptop `.env`.
+- Applies **versioned migration files** via `db:migrate` (same strategy as production startup).
 - A guard step fails the job if `DATABASE_URL` is not `localhost` / `127.0.0.1`.
 - **Playwright reporters in CI**: `list`, **`github`** (annotations on the run + Files tab), **HTML**, **JUnit** (`test-results/e2e-junit.xml`).
 - After every run (**success or failure**), download artifact **`e2e-report`** for the full HTML report, screenshots, videos, and traces.

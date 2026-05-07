@@ -8,6 +8,13 @@
       "when": 1777975649916,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778166740944,
+      "tag": "0001_shallow_captain_cross",
+      "breakpoints": true
     }
   ]
 }

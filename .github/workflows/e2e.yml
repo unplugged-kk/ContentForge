@@ -63,8 +63,8 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
-      - name: Apply Drizzle schema to CI database
-        run: npm run db:push
+      - name: Apply ordered Drizzle migrations to CI database
+        run: npm run db:migrate
 
       - name: TypeScript check
         run: npm run check
@@ -83,7 +83,7 @@ jobs:
             echo ""
             echo "| Item | Value |"
             echo "|------|--------|"
-            echo "| Database | Ephemeral Postgres **service** on \`localhost:5432\` (schema via \`db:push\`) — **not** Railway |"
+            echo "| Database | Ephemeral Postgres **service** on \`localhost:5432\` (schema via ordered \`db:migrate\`) — **not** Railway |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Ref | \`${{ github.ref }}\` |"
             echo ""

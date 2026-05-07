@@ -1,5 +1,5 @@
 /**
- * Brings up docker-compose.e2e.yml Postgres, runs db:push + check + build + playwright, then tears DB down.
+ * Brings up docker-compose.e2e.yml Postgres, runs db:migrate + check + build + playwright, then tears DB down.
  *
  * Uses DB URL postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e (override with E2E_DATABASE_URL).
  * Your shell DATABASE_URL (e.g. Railway) is ignored for child commands so E2E never touches prod.
@@ -57,7 +57,7 @@ if (skipDocker) {
 }
 
 try {
-  runNpm("db:push");
+  runNpm("db:migrate");
   runNpm("check");
   runNpm("build");
   run("npx", ["playwright", "test", ...process.argv.slice(2)]);
