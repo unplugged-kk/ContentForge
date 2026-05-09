@@ -173,17 +173,17 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
 
   const saveDraftMutation = useMutation({
     mutationFn: async (variation: any) => {
-      if (actionContentType === "article") {
-        const sections = (variation.tweets || []).map((t: any) => String(t.content || "").trim()).filter(Boolean);
-        const contentMarkdown = sections.join("\n\n");
-        const title = contentMarkdown.split("\n")[0]?.slice(0, 200) || "Untitled Article";
+      if (variation.isArticle) {
+        const wordCount = (variation.contentHtml || "").replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length;
         const articleRes = await apiRequest("POST", "/api/articles", {
-          title,
-          subtitle: selectedRef?.title || null,
-          contentMarkdown,
+          title: variation.title || selectedRef?.title || "Untitled Article",
+          subtitle: selectedRef?.sourceUrl ? `Source: ${selectedRef.sourceUrl.substring(0, 200)}` : null,
+          contentHtml: variation.contentHtml,
+          wordCount,
+          estimatedReadMinutes: Math.max(1, Math.ceil(wordCount / 200)),
           status: "draft",
         });
-        return articleRes.json();
+        return { ...(await articleRes.json()), _type: "article" };
       }
       const res = await apiRequest("POST", "/api/posts", {
         postType: actionContentType === "thread" ? "thread" : "tweet",
@@ -199,16 +199,18 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
-      toast({
-        title: actionContentType === "article" ? "Article draft saved!" : "Draft saved!",
-        description:
-          actionContentType === "article"
-            ? "Your article is now saved in Articles."
-            : "Your draft appears in the Saved Drafts section below and on the Calendar page.",
-      });
+      if (data?._type === "article") {
+        toast({ title: "Article draft saved!", description: "Opening article editor…" });
+        navigate(`/articles`);
+      } else {
+        toast({
+          title: "Draft saved!",
+          description: "Your draft appears in the Saved Drafts section below and on the Calendar page.",
+        });
+      }
     },
   });
 
@@ -564,18 +566,32 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
           {generatedContent.variations.map((variation: any, i: number) => (
             <Card key={i}>
               <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                <CardTitle className="text-xs">Variation {i + 1}</CardTitle>
+                <CardTitle className="text-xs">
+                  {variation.isArticle ? (variation.title || `Article ${i + 1}`) : `Variation ${i + 1}`}
+                </CardTitle>
                 <Button variant="outline" size="sm" onClick={() => saveDraftMutation.mutate(variation)} disabled={saveDraftMutation.isPending} data-testid={`button-save-variation-${i}`}>
-                  <Save className="h-3 w-3 mr-1" /> Save Draft
+                  <Save className="h-3 w-3 mr-1" /> {variation.isArticle ? "Save Article" : "Save Draft"}
                 </Button>
               </CardHeader>
               <CardContent>
-                {variation.tweets.map((t: any, j: number) => (
-                  <div key={j} className="p-3 rounded-md border mb-2 last:mb-0">
-                    <p className="text-sm whitespace-pre-wrap">{t.content}</p>
-                    <span className="text-[10px] text-muted-foreground">{t.charCount} chars</span>
+                {variation.isArticle ? (
+                  <div className="space-y-1">
+                    <div
+                      className="text-sm prose prose-sm dark:prose-invert max-w-none line-clamp-6 [&>*]:my-1"
+                      dangerouslySetInnerHTML={{ __html: variation.contentHtml || "" }}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      {(variation.contentHtml || "").replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length} words
+                    </p>
                   </div>
-                ))}
+                ) : (
+                  variation.tweets.map((t: any, j: number) => (
+                    <div key={j} className="p-3 rounded-md border mb-2 last:mb-0">
+                      <p className="text-sm whitespace-pre-wrap">{t.content}</p>
+                      <span className="text-[10px] text-muted-foreground">{t.charCount} chars</span>
+                    </div>
+                  ))
+                )}
               </CardContent>
             </Card>
           ))}

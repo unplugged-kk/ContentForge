@@ -1564,6 +1564,8 @@ Return JSON:
 
       const brandPlat =
         contentType === "threads" ? "threads" : contentType === "article" ? "linkedin" : "x";
+
+      const isArticle = contentType === "article";
       const { content, usage, latency } = await aiCall([
         { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), brandPlat) },
         { role: "user", content: `${promptBase}
@@ -1578,27 +1580,38 @@ INSTRUCTIONS:
 - Create ORIGINAL content — NEVER copy
 - Add Kishore's unique angle: infrastructure engineering, multi-cloud, Kubernetes, platform engineering
 - Generate 3 variations with different angles/hooks
-${contentType === "thread" ? "- Each tweet under 280 characters" : contentType === "article" ? "- Full article up to 25000 characters" : "- Single tweet under 280 characters"}
+${contentType === "thread" ? "- Each tweet under 280 characters" : isArticle ? "- Full long-form article (800-1500 words) in HTML format with h2, h3, p, ul, code tags" : "- Single tweet under 280 characters"}
 
-Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}` },
+${isArticle
+  ? `Return JSON: {"variations": [{"title": "Article title", "contentHtml": "<h2>Section</h2><p>Content...</p>"}]}`
+  : `Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}`}` },
       ], true);
 
       await logAiUsage(usage, latency, `content_action_${action}`);
       const parsed = safeJsonParse(content);
       if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
 
-      const variations = parsed.variations.map((v: any) => {
-        const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
-        const numbered = addThreadNumbering(rawTweets);
-        return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
-      });
+      let variations: any[];
+      if (isArticle) {
+        variations = parsed.variations.map((v: any) => ({
+          title: String(v.title || ref.title || "").trim(),
+          contentHtml: String(v.contentHtml || v.content || "").trim(),
+          isArticle: true,
+        }));
+      } else {
+        variations = parsed.variations.map((v: any) => {
+          const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
+          const numbered = addThreadNumbering(rawTweets);
+          return { tweets: numbered.map((c) => ({ content: c, charCount: c.length })) };
+        });
+      }
 
       await storage.createReferenceContent({
         referenceId: ref.id,
         creationAction: action,
       });
 
-      res.json({ variations, model: MODELS.TEXT, action });
+      res.json({ variations, model: MODELS.TEXT, action, isArticle });
     } catch (err: any) {
       console.error("Content action error:", err);
       res.status(500).json({ message: "Failed to generate content." });

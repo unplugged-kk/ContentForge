@@ -134,7 +134,7 @@ function ArticleEditor({ article, pillars, onBack }: { article: Article; pillars
             {outlineMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ListOrdered className="h-3 w-3" />}
             <span className="ml-1">Outline</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => generateFullMutation.mutate()} disabled={generateFullMutation.isPending || !outline} data-testid="button-generate-full">
+          <Button variant="outline" size="sm" onClick={() => generateFullMutation.mutate()} disabled={generateFullMutation.isPending || !editTitle} data-testid="button-generate-full">
             {generateFullMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
             <span className="ml-1">Generate Full</span>
           </Button>
@@ -175,6 +175,18 @@ function ArticleEditor({ article, pillars, onBack }: { article: Article; pillars
               </Button>
             </CardContent>
           </Card>
+        )}
+
+        {!editorContent && !generateFullMutation.isPending && (
+          <div className="rounded-md border border-dashed p-4 flex items-center justify-between gap-3" data-testid="banner-generate-article">
+            <div>
+              <p className="text-sm font-medium">Article body is empty</p>
+              <p className="text-xs text-muted-foreground">Click "Generate Full" in the toolbar to write the full article from the title, or start typing below.</p>
+            </div>
+            <Button size="sm" onClick={() => generateFullMutation.mutate()} disabled={!editTitle} data-testid="button-generate-full-inline">
+              <Wand2 className="h-3 w-3 mr-1" /> Generate Full
+            </Button>
+          </div>
         )}
 
         <div className="space-y-2">
