@@ -157,6 +157,22 @@ export function startSchedulers() {
     );
   }
 
+  // Every 6 hours — YouTube channel RSS checks
+  if (process.env.DISABLE_YOUTUBE_CONNECTOR_CRON !== "1") {
+    cron.schedule(
+      "0 */6 * * *",
+      async () => {
+        try {
+          const { checkYoutubeChannels } = await import("./youtubeConnector");
+          await checkYoutubeChannels();
+        } catch (e) {
+          console.error("[scheduler] YouTube connector failed:", e);
+        }
+      },
+      { timezone: tz },
+    );
+  }
+
   // Weekly Sunday 08:30 IST — refresh X analytics for posts in last 14 days
   if (process.env.DISABLE_X_ANALYTICS !== "1") {
     cron.schedule(

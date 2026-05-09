@@ -14,12 +14,15 @@ import {
   type ViralScore, type InsertViralScore,
   type MonitoredAccount, type InsertMonitoredAccount,
   type RssSource, type InsertRssSource,
+  type CannedResponse, type InsertCannedResponse,
+  type YoutubeChannel, type InsertYoutubeChannel,
   type DiscoverySettings,
   type ConnectedAccount, type InsertConnectedAccount,
   pillars, posts, tweets, ideas, templates, analytics, aiUsageLog,
   articles, references, referencePosts, referenceContent, styleProfiles,
   discoveredIdeas, discoverySettings,
-  viralScores, monitoredAccounts, rssSources, connectedAccounts,
+  viralScores,   monitoredAccounts, rssSources, connectedAccounts,
+  cannedResponses, youtubeChannels,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, gte } from "drizzle-orm";
@@ -89,8 +92,23 @@ export interface IStorage {
   deleteMonitoredAccount(id: number): Promise<void>;
 
   getRssSources(): Promise<RssSource[]>;
+  getRssSourcesWithAutopost(): Promise<RssSource[]>;
   createRssSource(source: InsertRssSource): Promise<RssSource>;
+  updateRssSource(id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined>;
   deleteRssSource(id: number): Promise<void>;
+
+  getCannedResponses(): Promise<CannedResponse[]>;
+  getCannedResponse(id: number): Promise<CannedResponse | undefined>;
+  createCannedResponse(data: InsertCannedResponse): Promise<CannedResponse>;
+  updateCannedResponse(id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined>;
+  deleteCannedResponse(id: number): Promise<void>;
+  incrementCannedResponseUsage(id: number): Promise<CannedResponse | undefined>;
+
+  getYoutubeChannels(): Promise<YoutubeChannel[]>;
+  getActiveYoutubeChannels(): Promise<YoutubeChannel[]>;
+  createYoutubeChannel(data: InsertYoutubeChannel): Promise<YoutubeChannel>;
+  updateYoutubeChannel(id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined>;
+  deleteYoutubeChannel(id: number): Promise<void>;
 
   getConnectedAccounts(): Promise<ConnectedAccount[]>;
   getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined>;
@@ -441,13 +459,86 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(rssSources).orderBy(rssSources.name);
   }
 
+  async getRssSourcesWithAutopost(): Promise<RssSource[]> {
+    return db
+      .select()
+      .from(rssSources)
+      .where(and(eq(rssSources.autopost, true), eq(rssSources.isActive, true)))
+      .orderBy(rssSources.name);
+  }
+
   async createRssSource(source: InsertRssSource): Promise<RssSource> {
     const [result] = await db.insert(rssSources).values(source).returning();
     return result;
   }
 
+  async updateRssSource(id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined> {
+    const [result] = await db.update(rssSources).set(data).where(eq(rssSources.id, id)).returning();
+    return result;
+  }
+
   async deleteRssSource(id: number): Promise<void> {
     await db.delete(rssSources).where(eq(rssSources.id, id));
+  }
+
+  async getCannedResponses(): Promise<CannedResponse[]> {
+    return db.select().from(cannedResponses).orderBy(desc(cannedResponses.createdAt));
+  }
+
+  async getCannedResponse(id: number): Promise<CannedResponse | undefined> {
+    const [row] = await db.select().from(cannedResponses).where(eq(cannedResponses.id, id));
+    return row;
+  }
+
+  async createCannedResponse(data: InsertCannedResponse): Promise<CannedResponse> {
+    const [row] = await db.insert(cannedResponses).values(data).returning();
+    return row;
+  }
+
+  async updateCannedResponse(id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined> {
+    const [row] = await db.update(cannedResponses).set(data).where(eq(cannedResponses.id, id)).returning();
+    return row;
+  }
+
+  async deleteCannedResponse(id: number): Promise<void> {
+    await db.delete(cannedResponses).where(eq(cannedResponses.id, id));
+  }
+
+  async incrementCannedResponseUsage(id: number): Promise<CannedResponse | undefined> {
+    const cur = await this.getCannedResponse(id);
+    if (!cur) return undefined;
+    const [row] = await db
+      .update(cannedResponses)
+      .set({ usageCount: (cur.usageCount ?? 0) + 1 })
+      .where(eq(cannedResponses.id, id))
+      .returning();
+    return row;
+  }
+
+  async getYoutubeChannels(): Promise<YoutubeChannel[]> {
+    return db.select().from(youtubeChannels).orderBy(desc(youtubeChannels.createdAt));
+  }
+
+  async getActiveYoutubeChannels(): Promise<YoutubeChannel[]> {
+    return db
+      .select()
+      .from(youtubeChannels)
+      .where(eq(youtubeChannels.isActive, true))
+      .orderBy(youtubeChannels.channelName);
+  }
+
+  async createYoutubeChannel(data: InsertYoutubeChannel): Promise<YoutubeChannel> {
+    const [row] = await db.insert(youtubeChannels).values(data).returning();
+    return row;
+  }
+
+  async updateYoutubeChannel(id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined> {
+    const [row] = await db.update(youtubeChannels).set(data).where(eq(youtubeChannels.id, id)).returning();
+    return row;
+  }
+
+  async deleteYoutubeChannel(id: number): Promise<void> {
+    await db.delete(youtubeChannels).where(eq(youtubeChannels.id, id));
   }
 
   async getConnectedAccounts(): Promise<ConnectedAccount[]> {

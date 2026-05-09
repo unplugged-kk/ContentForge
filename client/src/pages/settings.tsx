@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles } from "lucide-react";
+import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles, Eye } from "lucide-react";
 import { SiX, SiThreads, SiLinkedin } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
@@ -24,6 +24,9 @@ export default function SettingsPage() {
   const [audienceDescription, setAudienceDescription] = useState("");
   const [contentGoals, setContentGoals] = useState("");
   const [niche, setNiche] = useState("");
+  const [messagingPillarSlots, setMessagingPillarSlots] = useState(["", "", "", "", ""]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPromptText, setPreviewPromptText] = useState("");
 
   const { data: memoryProfile, isLoading: memoryLoading } = useQuery({
     queryKey: ["/api/profile/memory"],
@@ -37,12 +40,35 @@ export default function SettingsPage() {
       setAudienceDescription(p.audienceDescription || "");
       setContentGoals(p.contentGoals || "");
       setNiche(p.niche || "");
+      const mp = (p.messagingPillars as string[]) || [];
+      const slots = [...mp, "", "", "", "", ""].slice(0, 5);
+      setMessagingPillarSlots(slots);
     }
   }, [memoryProfile]);
 
+  const previewPromptMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("GET", "/api/profile/memory/preview-prompt");
+      return res.json() as Promise<{ prompt: string }>;
+    },
+    onSuccess: (data) => {
+      setPreviewPromptText(data.prompt || "");
+      setPreviewOpen(true);
+    },
+    onError: (err: any) => toast({ title: "Preview failed", description: err.message, variant: "destructive" }),
+  });
+
   const saveMemoryMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("PUT", "/api/profile/memory", { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche });
+      const messagingPillars = messagingPillarSlots.map((s) => s.trim()).filter(Boolean);
+      const res = await apiRequest("PUT", "/api/profile/memory", {
+        brandVoice,
+        writingStyleNotes,
+        audienceDescription,
+        contentGoals,
+        niche,
+        messagingPillars,
+      });
       return res.json();
     },
     onSuccess: () => {
@@ -409,6 +435,37 @@ export default function SettingsPage() {
                     data-testid="input-niche"
                   />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Messaging pillars (max 5)</label>
+                  <div className="grid gap-2">
+                    {messagingPillarSlots.map((val, i) => (
+                      <Input
+                        key={i}
+                        placeholder={`Pillar ${i + 1}`}
+                        value={val}
+                        onChange={(e) => {
+                          const next = [...messagingPillarSlots];
+                          next[i] = e.target.value;
+                          setMessagingPillarSlots(next);
+                        }}
+                        data-testid={`input-pillar-${i}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  data-testid="button-preview-prompt"
+                  onClick={() => previewPromptMutation.mutate()}
+                  disabled={previewPromptMutation.isPending}
+                >
+                  {previewPromptMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+                  Preview Brand Prompt
+                </Button>
               </div>
               <Button
                 onClick={() => saveMemoryMutation.mutate()}
@@ -423,6 +480,16 @@ export default function SettingsPage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Brand system prompt preview</DialogTitle>
+            <DialogDescription>What the AI sees as system instructions (including your profile).</DialogDescription>
+          </DialogHeader>
+          <pre className="text-xs whitespace-pre-wrap bg-muted p-3 rounded-md border">{previewPromptText}</pre>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!connectDialog} onOpenChange={(open) => { if (!open) { setConnectDialog(null); setAccessToken(""); setUsername(""); } }}>
         <DialogContent>

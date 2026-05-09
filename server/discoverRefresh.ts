@@ -7,6 +7,7 @@ import Parser from "rss-parser";
 import type { DiscoveredIdea } from "@shared/schema";
 import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
+import { runRssAutopostForBatch } from "./rssAutopost";
 
 const rssParser = new Parser();
 
@@ -348,6 +349,7 @@ Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technica
   });
 
   const saved = await storage.createDiscoveredIdeas(ideaRecords);
+  await runRssAutopostForBatch(saved).catch((e) => console.error("[discover] RSS autopost:", e));
   return {
     batchId,
     ideas: saved,

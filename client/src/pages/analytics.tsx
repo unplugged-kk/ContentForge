@@ -46,9 +46,19 @@ function StatCard({ label, value, icon: Icon, trend }: {
 
 const CHART_COLORS = ["#3B82F6", "#8B5CF6", "#06B6D4", "#10B981", "#F59E0B", "#EF4444"];
 
+type InsightsPayload = {
+  topPosts: Array<{ postId: number; score: number; preview: string; tweets: string[] }>;
+  bestHours: Array<{ hour: number; avgEngagement: number; posts: number }>;
+  pillarStats: Array<{ pillarId: number; pillarName: string; posts: number; avgEngagement: number }>;
+};
+
 export default function AnalyticsPage() {
   const { data: summary, isLoading } = useQuery<AnalyticsSummary>({
     queryKey: ["/api/analytics/summary"],
+  });
+
+  const { data: insights } = useQuery<InsightsPayload>({
+    queryKey: ["/api/analytics/insights"],
   });
 
   if (isLoading) {
@@ -95,6 +105,55 @@ export default function AnalyticsPage() {
           <StatCard label="Likes" value={stats.totalLikes} icon={Heart} />
           <StatCard label="Replies" value={stats.totalReplies} icon={MessageCircle} />
         </div>
+
+        {insights ? (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <Card className="p-4 xl:col-span-3">
+              <h3 className="text-sm font-medium mb-3">Top performing posts</h3>
+              <ul data-testid="list-top-posts" className="space-y-2 max-h-56 overflow-y-auto">
+                {insights.topPosts.length === 0 ? (
+                  <li className="text-xs text-muted-foreground">No posted content with analytics yet.</li>
+                ) : (
+                  insights.topPosts.map((p) => (
+                    <li key={p.postId} className="text-xs border-b border-border/60 pb-2">
+                      <span className="font-medium mr-2">#{p.postId}</span>
+                      <span className="text-muted-foreground">score {p.score}</span>
+                      <p className="mt-1 line-clamp-2">{p.preview}</p>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </Card>
+            <Card className="p-4 xl:col-span-2">
+              <h3 className="text-sm font-medium mb-3">Best time to post (UTC hour)</h3>
+              <div data-testid="chart-best-hours" className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={insights.bestHours}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} />
+                    <Tooltip />
+                    <Bar dataKey="avgEngagement" fill="#3B82F6" name="Avg engagement" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+            <Card className="p-4 xl:col-span-1">
+              <h3 className="text-sm font-medium mb-3">Pillar performance</h3>
+              <div data-testid="chart-pillar-stats" className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart layout="vertical" data={insights.pillarStats} margin={{ left: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis type="number" tick={{ fontSize: 10 }} />
+                    <YAxis type="category" dataKey="pillarName" width={100} tick={{ fontSize: 9 }} />
+                    <Tooltip />
+                    <Bar dataKey="avgEngagement" fill="#8B5CF6" name="Avg engagement" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          </div>
+        ) : null}
 
         <Tabs defaultValue="pillars">
           <TabsList>

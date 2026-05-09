@@ -24,6 +24,9 @@ import VaultPage from "@/pages/vault";
 import HooksPage from "@/pages/hooks";
 import CarouselPage from "@/pages/carousel";
 import ChatPage from "@/pages/chat";
+import YoutubePage from "@/pages/youtube";
+import FormatterPage from "@/pages/formatter";
+import CannedResponsesPage from "@/pages/canned-responses";
 import QueuePage from "@/pages/queue";
 import AiUsagePage from "@/pages/ai-usage";
 import { QuickCapture } from "@/components/quick-capture";
@@ -46,6 +49,9 @@ function Router() {
       <Route path="/hooks" component={HooksPage} />
       <Route path="/carousel" component={CarouselPage} />
       <Route path="/chat" component={ChatPage} />
+      <Route path="/youtube" component={YoutubePage} />
+      <Route path="/formatter" component={FormatterPage} />
+      <Route path="/canned-responses" component={CannedResponsesPage} />
       <Route path="/queue" component={QueuePage} />
       <Route path="/ai-usage" component={AiUsagePage} />
       <Route component={NotFound} />

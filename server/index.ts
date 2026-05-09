@@ -133,6 +133,12 @@ app.use((req, res, next) => {
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 
+  // Startup validation for X_THREAD_FINISHER
+  const finisher = process.env.X_THREAD_FINISHER?.trim();
+  if (finisher && finisher.length > 275) {
+    console.warn(`[x] X_THREAD_FINISHER is ${finisher.length} chars (max 275). It will be truncated at publish time.`);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

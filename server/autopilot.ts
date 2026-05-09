@@ -17,6 +17,8 @@ import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "./marketPulse";
+import { addThreadNumbering } from "./utils/threadUtils";
+import { getBrandSystemPrompt } from "./brandSystemPrompt";
 import type { DiscoveredIdea, Template } from "@shared/schema";
 
 // ─── IST Timezone helpers ─────────────────────────────────────────────────────
@@ -92,6 +94,7 @@ export function determineContentType(idea: DiscoveredIdea, meta?: SourceMeta): s
   const timeliness = idea.timeliness || "evergreen";
 
   // High-signal overrides
+  if (suggestion === "article") return "article";
   if (suggestion === "hot_take" || timeliness === "trending_now") return "hot_take";
   if (suggestion === "article_thread" || (comments > 200 && angles >= 4)) return "long_thread";
   if (suggestion === "long_thread" || comments > 100 || angles >= 3) return "long_thread";
@@ -236,6 +239,21 @@ export type AutopilotDraft = {
   imageUrl?: string | null;
 };
 
+export type AutopilotArticleDraft = {
+  title: string;
+  subtitle: string | null;
+  contentMarkdown: string;
+  coverImageUrl: string | null;
+  seoDescription: string | null;
+  articleTemplate: string | null;
+  pillarId: number | null;
+  ideaTitle: string;
+};
+
+function estimateReadMinutes(wordCount: number): number {
+  return Math.max(1, Math.ceil(wordCount / 200));
+}
+
 export async function generateDraftFromIdea(
   idea: DiscoveredIdea,
   postType: string,
@@ -275,9 +293,10 @@ export async function generateDraftFromIdea(
       }
     } catch { /* non-critical */ }
 
+    const brand = await getBrandSystemPrompt(1, "x");
     const { content, usage, latency } = await aiCall(
       [
-        { role: "system", content: KISHORE_VOICE },
+        { role: "system", content: `${brand}\n\n--- Autopilot drafting voice (always apply) ---\n${KISHORE_VOICE}` },
         {
           role: "user",
           content: `Topic: ${idea.title}
@@ -300,10 +319,12 @@ ${formatPrompt}`,
     const parsed = safeJsonParse(content);
     if (!parsed?.tweets?.length) return null;
 
-    const tweets = parsed.tweets.map((t: any) => ({
-      content: String(t.content || "").slice(0, 280),
-      position: Number(t.position ?? 0),
-      charCount: String(t.content || "").length,
+    const rawContents = parsed.tweets.map((t: any) => String(t.content || "").slice(0, 280));
+    const numberedContents = addThreadNumbering(rawContents);
+    const tweets = numberedContents.map((content, i) => ({
+      content,
+      position: i,
+      charCount: content.length,
     }));
 
     // Generate cover image for threads
@@ -333,6 +354,79 @@ ${formatPrompt}`,
     };
   } catch (e) {
     console.error("[autopilot] generateDraftFromIdea failed:", e);
+    return null;
+  }
+}
+
+export async function generateArticleDraftFromIdea(
+  idea: DiscoveredIdea,
+  pillarId: number | null,
+): Promise<AutopilotArticleDraft | null> {
+  const pillars = await storage.getPillars();
+  const pillar = pillars.find((p) => p.id === pillarId);
+  const pillarName = pillar?.name || idea.category || "DevOps";
+  const brand = await getBrandSystemPrompt(1, "x");
+
+  try {
+    const { content, usage, latency } = await aiCall(
+      [
+        { role: "system", content: `${brand}\n\n${KISHORE_VOICE}` },
+        {
+          role: "user",
+          content: `Write a high-impact X Article from this source idea.
+
+Topic: ${idea.title}
+Description: ${idea.description || ""}
+Pillar: ${pillarName}
+Suggested hook: ${idea.suggestedHook || "none"}
+Source URL: ${idea.sourceUrl || "N/A"}
+
+Writing rules:
+- Make this read like a human engineer wrote it, not a bot.
+- Start with a strong title + opening hook.
+- Use scannable sections with markdown headings.
+- Use specific examples, tradeoffs, and practical advice.
+- End with exactly one clear CTA.
+- Keep length around 900-1500 words.
+
+Return JSON only:
+{
+  "title": "string <= 200 chars",
+  "subtitle": "string <= 300 chars",
+  "content_markdown": "full markdown article",
+  "seo_description": "string <= 200 chars",
+  "article_template": "opinion|deep_dive|playbook|case_study|trend_analysis"
+}`,
+        },
+      ],
+      true,
+    );
+    await logAiUsage(usage, latency, "autopilot_article_draft");
+
+    const parsed = safeJsonParse(content);
+    const contentMarkdown = String(parsed?.content_markdown || "").trim();
+    const title = String(parsed?.title || idea.title).trim().slice(0, 200);
+    if (!contentMarkdown || !title) return null;
+
+    let coverImageUrl: string | null = null;
+    try {
+      coverImageUrl = await generateCoverImage(title, pillarName);
+    } catch {
+      // non-critical
+    }
+
+    return {
+      title,
+      subtitle: parsed?.subtitle ? String(parsed.subtitle).slice(0, 300) : null,
+      contentMarkdown,
+      coverImageUrl,
+      seoDescription: parsed?.seo_description ? String(parsed.seo_description).slice(0, 200) : null,
+      articleTemplate: parsed?.article_template ? String(parsed.article_template).slice(0, 50) : null,
+      pillarId,
+      ideaTitle: idea.title,
+    };
+  } catch (e) {
+    console.error("[autopilot] generateArticleDraftFromIdea failed:", e);
     return null;
   }
 }
@@ -463,28 +557,47 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
       contentAngles: idea.contentAngles || [],
     });
 
-    const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
-    if (!draft) {
-      errors.push(`Draft gen failed: ${idea.title.substring(0, 60)}`);
-      continue;
-    }
-
-    draft.scheduledAt = slot;
-
     try {
-      await storage.createPost(
-        {
-          pillarId: draft.pillarId,
-          postType: draft.postType,
-          tone: draft.tone,
-          targetPlatform: "x",
-          status: "scheduled",
-          scheduledAt: draft.scheduledAt,
-          autopilot: true,
-          imageUrl: draft.imageUrl,
-        } as any,
-        draft.tweets as any,
-      );
+      if (postType === "article") {
+        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null);
+        if (!articleDraft) {
+          errors.push(`Article draft failed: ${idea.title.substring(0, 60)}`);
+          continue;
+        }
+        const wordCount = articleDraft.contentMarkdown.split(/\s+/).filter(Boolean).length;
+        await storage.createArticle({
+          title: articleDraft.title,
+          subtitle: articleDraft.subtitle,
+          coverImageUrl: articleDraft.coverImageUrl,
+          contentMarkdown: articleDraft.contentMarkdown,
+          seoDescription: articleDraft.seoDescription,
+          articleTemplate: articleDraft.articleTemplate,
+          status: "draft",
+          pillarId: articleDraft.pillarId,
+          wordCount,
+          estimatedReadMinutes: estimateReadMinutes(wordCount),
+        } as any);
+      } else {
+        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
+        if (!draft) {
+          errors.push(`Draft gen failed: ${idea.title.substring(0, 60)}`);
+          continue;
+        }
+        draft.scheduledAt = slot;
+        await storage.createPost(
+          {
+            pillarId: draft.pillarId,
+            postType: draft.postType,
+            tone: draft.tone,
+            targetPlatform: "x",
+            status: "scheduled",
+            scheduledAt: draft.scheduledAt,
+            autopilot: true,
+            imageUrl: draft.imageUrl,
+          } as any,
+          draft.tweets as any,
+        );
+      }
       await storage.updateDiscoveredIdeaStatus(idea.id, "used");
       draftsCreated.push(idea.id);
     } catch (e: any) {
@@ -571,28 +684,47 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
       contentAngles: idea.contentAngles || [],
     });
 
-    const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
-    if (!draft) {
-      errors.push(`Draft gen failed: ${idea.title.substring(0, 50)}`);
-      continue;
-    }
-
-    draft.scheduledAt = todaySlots[i];
-
     try {
-      await storage.createPost(
-        {
-          pillarId: draft.pillarId,
-          postType: draft.postType,
-          tone: draft.tone,
-          targetPlatform: "x",
-          status: "scheduled",
-          scheduledAt: draft.scheduledAt,
-          autopilot: true,
-          imageUrl: draft.imageUrl,
-        } as any,
-        draft.tweets as any,
-      );
+      if (postType === "article") {
+        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null);
+        if (!articleDraft) {
+          errors.push(`Article draft failed: ${idea.title.substring(0, 50)}`);
+          continue;
+        }
+        const wordCount = articleDraft.contentMarkdown.split(/\s+/).filter(Boolean).length;
+        await storage.createArticle({
+          title: articleDraft.title,
+          subtitle: articleDraft.subtitle,
+          coverImageUrl: articleDraft.coverImageUrl,
+          contentMarkdown: articleDraft.contentMarkdown,
+          seoDescription: articleDraft.seoDescription,
+          articleTemplate: articleDraft.articleTemplate,
+          status: "draft",
+          pillarId: articleDraft.pillarId,
+          wordCount,
+          estimatedReadMinutes: estimateReadMinutes(wordCount),
+        } as any);
+      } else {
+        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
+        if (!draft) {
+          errors.push(`Draft gen failed: ${idea.title.substring(0, 50)}`);
+          continue;
+        }
+        draft.scheduledAt = todaySlots[i];
+        await storage.createPost(
+          {
+            pillarId: draft.pillarId,
+            postType: draft.postType,
+            tone: draft.tone,
+            targetPlatform: "x",
+            status: "scheduled",
+            scheduledAt: draft.scheduledAt,
+            autopilot: true,
+            imageUrl: draft.imageUrl,
+          } as any,
+          draft.tweets as any,
+        );
+      }
       await storage.updateDiscoveredIdeaStatus(idea.id, "scheduled");
       postsScheduled++;
     } catch (e: any) {

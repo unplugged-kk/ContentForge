@@ -9,7 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS, POST_TYPES, TONES, PLATFORMS, CHAR_LIMITS } from "@/lib/constants";
-import { Sparkles, Copy, Save, RefreshCw, Check, AlertTriangle, Zap, Loader2, TrendingUp, ArrowUp } from "lucide-react";
+import { splitIntoThread } from "@/lib/thread-splitter";
+import { FORMATS, type FormatKey } from "@/lib/unicode-formatter";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { XPostPreview } from "@/components/x-post-preview";
+import { Sparkles, Copy, Save, RefreshCw, Check, AlertTriangle, Zap, Loader2, TrendingUp, ArrowUp, Eye, Type } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import type { Post, Tweet } from "@shared/schema";
 
@@ -52,6 +57,7 @@ export default function GeneratePage() {
   const [selectedVariation, setSelectedVariation] = useState(0);
   const [editedContent, setEditedContent] = useState<string[][] | null>(null);
   const [viralScore, setViralScore] = useState<any>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -162,6 +168,27 @@ export default function GeneratePage() {
       vi === variationIdx ? v.map((t, ti) => (ti === tweetIdx ? value : t)) : v
     );
     setEditedContent(updated);
+  };
+
+  const handleSplitTweet = (tweetIdx: number) => {
+    if (!editedContent) return;
+    const limit = charLimit;
+    const piece = editedContent[selectedVariation][tweetIdx];
+    const parts = splitIntoThread(piece, limit);
+    if (parts.length <= 1) return;
+    const row = [...editedContent[selectedVariation]];
+    row.splice(tweetIdx, 1, ...parts);
+    const next = [...editedContent];
+    next[selectedVariation] = row;
+    setEditedContent(next);
+    toast({ title: "Split into thread", description: `${parts.length} segments` });
+  };
+
+  const applyUnicodeFormat = (tweetIdx: number, key: FormatKey) => {
+    if (!editedContent) return;
+    const fn = FORMATS[key];
+    const nextText = fn(editedContent[selectedVariation][tweetIdx]);
+    updateTweetContent(selectedVariation, tweetIdx, nextText);
   };
 
   return (
@@ -321,6 +348,20 @@ export default function GeneratePage() {
                         </span>
                         <div className="flex items-center gap-2">
                           <CharCount count={content.length} limit={charLimit} />
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button size="icon" variant="ghost" type="button" aria-label="Unicode formats">
+                                <Type className="h-3 w-3" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-48 p-2 flex flex-col gap-1" align="end">
+                              {(Object.keys(FORMATS) as FormatKey[]).map((k) => (
+                                <Button key={k} variant="ghost" size="sm" className="justify-start capitalize" type="button" onClick={() => applyUnicodeFormat(tIdx, k)}>
+                                  {k}
+                                </Button>
+                              ))}
+                            </PopoverContent>
+                          </Popover>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -338,19 +379,39 @@ export default function GeneratePage() {
                         rows={Math.max(2, Math.ceil(content.length / 60))}
                         data-testid={`input-tweet-${tIdx}`}
                       />
+                      {content.length > charLimit && (
+                        <div className="text-xs text-amber-500 flex items-center gap-2 flex-wrap">
+                          <AlertTriangle className="h-3 w-3 shrink-0" />
+                          <span>{content.length} chars — over limit</span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-amber-600"
+                            type="button"
+                            data-testid={`button-split-tweet-${tIdx}`}
+                            onClick={() => handleSplitTweet(tIdx)}
+                          >
+                            Split into thread
+                          </Button>
+                        </div>
+                      )}
                     </Card>
                   ))}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button
-                    className="flex-1"
+                    className="flex-1 min-w-[8rem]"
                     onClick={() => saveMutation.mutate()}
                     disabled={saveMutation.isPending}
                     data-testid="button-save-draft"
                   >
                     <Save className="h-4 w-4 mr-2" />
                     Save as Draft
+                  </Button>
+                  <Button variant="outline" type="button" data-testid="button-preview-post" onClick={() => setShowPreview(true)}>
+                    <Eye className="h-4 w-4 mr-1" />
+                    Preview
                   </Button>
                   <Button
                     variant="outline"
@@ -443,6 +504,15 @@ export default function GeneratePage() {
           </div>
         </div>
       </div>
+
+      <Dialog open={showPreview} onOpenChange={setShowPreview}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Post preview</DialogTitle>
+          </DialogHeader>
+          <XPostPreview tweets={editedContent?.[selectedVariation] ?? []} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

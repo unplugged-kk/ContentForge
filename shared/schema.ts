@@ -236,6 +236,11 @@ export const rssSources = pgTable("rss_sources", {
   feedUrl: text("feed_url").notNull(),
   category: varchar("category", { length: 50 }),
   isActive: boolean("is_active").default(true),
+  autopost: boolean("autopost").default(false),
+  autopostPlatform: varchar("autopost_platform", { length: 20 }).default("x"),
+  autopostTone: varchar("autopost_tone", { length: 20 }).default("educational"),
+  autopostPostType: varchar("autopost_post_type", { length: 20 }).default("thread"),
+  autopostPillarId: integer("autopost_pillar_id"),
   lastFetchedAt: timestamp("last_fetched_at"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -311,6 +316,7 @@ export const userProfile = pgTable("user_profile", {
   audienceDescription: text("audience_description"),
   contentGoals: text("content_goals"),
   niche: varchar("niche", { length: 200 }),
+  messagingPillars: text("messaging_pillars").array().default(sql`'{}'::text[]`),
   targetPlatforms: text("target_platforms").array().default(sql`'{}'::text[]`),
   postingFrequency: varchar("posting_frequency", { length: 50 }),
   memoryJson: jsonb("memory_json").default({}),
@@ -392,3 +398,40 @@ export const carousels = pgTable("carousels", {
 export const insertCarouselSchema = createInsertSchema(carousels).omit({ id: true, createdAt: true });
 export type Carousel = typeof carousels.$inferSelect;
 export type InsertCarousel = z.infer<typeof insertCarouselSchema>;
+
+// ── CANNED RESPONSES ───────────────────────────────────────────────────────────
+export const cannedResponses = pgTable("canned_responses", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 200 }).notNull(),
+  content: text("content").notNull(),
+  category: varchar("category", { length: 50 }).default("general"),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  usageCount: integer("usage_count").default(0),
+  isFavorite: boolean("is_favorite").default(false),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertCannedResponseSchema = createInsertSchema(cannedResponses).omit({ id: true, createdAt: true });
+export type CannedResponse = typeof cannedResponses.$inferSelect;
+export type InsertCannedResponse = z.infer<typeof insertCannedResponseSchema>;
+
+// ── YOUTUBE CHANNEL CONNECTOR ─────────────────────────────────────────────────
+export const youtubeChannels = pgTable("youtube_channels", {
+  id: serial("id").primaryKey(),
+  channelId: varchar("channel_id", { length: 50 }).notNull().unique(),
+  channelName: varchar("channel_name", { length: 200 }),
+  channelUrl: text("channel_url"),
+  isActive: boolean("is_active").default(true),
+  lastCheckedAt: timestamp("last_checked_at"),
+  lastVideoId: varchar("last_video_id", { length: 30 }),
+  autopostPlatform: varchar("autopost_platform", { length: 20 }).default("x"),
+  autopostTone: varchar("autopost_tone", { length: 20 }).default("educational"),
+  autopostPostType: varchar("autopost_post_type", { length: 20 }).default("thread"),
+  autopostPillarId: integer("autopost_pillar_id"),
+  requireApproval: boolean("require_approval").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertYoutubeChannelSchema = createInsertSchema(youtubeChannels).omit({ id: true, createdAt: true });
+export type YoutubeChannel = typeof youtubeChannels.$inferSelect;
+export type InsertYoutubeChannel = z.infer<typeof insertYoutubeChannelSchema>;

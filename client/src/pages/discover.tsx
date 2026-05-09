@@ -17,6 +17,7 @@ import {
 import type { DiscoveredIdea, RssSource, MonitoredAccount } from "@shared/schema";
 import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 
 const categoryLabels: Record<string, string> = {
   ai: "AI / ML", devops: "DevOps", mlops: "MLOps", tech: "Tech",
@@ -111,6 +112,22 @@ export default function DiscoverPage() {
     queryKey: ["/api/autopilot/market-pulse"],
     enabled: showPulse,
     staleTime: 5 * 60 * 1000,
+  });
+
+  const autopostMutation = useMutation({
+    mutationFn: async (payload: {
+      id: number;
+      autopost: boolean;
+      autopostPlatform?: string;
+      autopostTone?: string;
+      autopostPostType?: string;
+      autopostPillarId?: number | null;
+    }) => {
+      const res = await apiRequest("PATCH", `/api/discover/rss-sources/${payload.id}/autopost`, payload);
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/discover/rss-sources"] }),
+    onError: (err: any) => toast({ title: "Autopost update failed", description: err.message, variant: "destructive" }),
   });
 
   const refreshMutation = useMutation({
@@ -347,14 +364,84 @@ export default function DiscoverPage() {
               {rssSources.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No RSS sources configured</p>
               ) : rssSources.map((src) => (
-                <div key={src.id} className="flex items-center justify-between gap-2 text-sm">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Badge variant="outline" className="text-[10px] shrink-0">{src.category}</Badge>
-                    <span className="truncate">{src.name}</span>
+                <div key={src.id} className="space-y-2 rounded-md border border-border/60 p-2">
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Badge variant="outline" className="text-[10px] shrink-0">{src.category}</Badge>
+                      <span className="truncate">{src.name}</span>
+                      {src.autopost ? (
+                        <Badge variant="secondary" className="text-[10px]" data-testid={`badge-autopost-${src.id}`}>
+                          AUTO
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-muted-foreground hidden sm:inline">Autopost</span>
+                      <Switch
+                        checked={!!src.autopost}
+                        data-testid={`toggle-autopost-${src.id}`}
+                        onCheckedChange={(on) =>
+                          autopostMutation.mutate({
+                            id: src.id,
+                            autopost: on,
+                            autopostPlatform: src.autopostPlatform || "x",
+                            autopostTone: src.autopostTone || "educational",
+                            autopostPostType: src.autopostPostType || "thread",
+                          })
+                        }
+                      />
+                      <Badge variant={src.isActive ? "default" : "secondary"} className="text-[10px]">
+                        {src.isActive ? "Active" : "Paused"}
+                      </Badge>
+                    </div>
                   </div>
-                  <Badge variant={src.isActive ? "default" : "secondary"} className="text-[10px] shrink-0">
-                    {src.isActive ? "Active" : "Paused"}
-                  </Badge>
+                  {src.autopost ? (
+                    <div className="flex flex-wrap gap-2 items-center text-xs">
+                      <Select
+                        value={src.autopostPlatform || "x"}
+                        onValueChange={(autopostPlatform) =>
+                          autopostMutation.mutate({ id: src.id, autopost: true, autopostPlatform })
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-[120px]" data-testid={`select-autopost-platform-${src.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="x">X</SelectItem>
+                          <SelectItem value="threads">Threads</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={src.autopostTone || "educational"}
+                        onValueChange={(autopostTone) =>
+                          autopostMutation.mutate({ id: src.id, autopost: true, autopostTone })
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-[130px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="educational">Educational</SelectItem>
+                          <SelectItem value="technical">Technical</SelectItem>
+                          <SelectItem value="provocative">Provocative</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={src.autopostPostType || "thread"}
+                        onValueChange={(autopostPostType) =>
+                          autopostMutation.mutate({ id: src.id, autopost: true, autopostPostType })
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="thread">Thread</SelectItem>
+                          <SelectItem value="tweet">Tweet</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </CardContent>

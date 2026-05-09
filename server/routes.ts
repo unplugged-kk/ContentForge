@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { discoveredIdeas } from "@shared/schema";
+import { discoveredIdeas, analytics } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import * as cheerio from "cheerio";
@@ -14,8 +14,10 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
-import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX } from "./social/x";
+import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
 import { isToday } from "date-fns";
+import { addThreadNumbering } from "./utils/threadUtils";
+import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -28,28 +30,9 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-const SYSTEM_PROMPT = `You are a ghostwriter for Kishore Kumar Behera, a senior Infrastructure Engineering Lead with 11+ years in DevOps, Cloud (AWS/Azure/GCP), Kubernetes, and Platform Engineering. He is building a personal brand on X (Twitter) and Threads at the intersection of Data & AI and DevOps/Infrastructure.
-
-VIRAL CONTENT PRINCIPLES — Apply these to every piece of content:
-1. LEAD WITH VALUE: The first 2 lines must deliver or promise specific, actionable value.
-2. SPECIFICITY WINS: Use specific metrics, tool names, and real scenarios.
-3. CONTRARIAN + CREDIBLE: Challenge conventional wisdom WITH evidence.
-4. TEACH ONE THING: Every piece should leave the reader knowing ONE new thing.
-5. STORY > ADVICE: Lead with real scenarios, not generic advice.
-6. USE THE READER'S LANGUAGE: Write how engineers talk in Slack, not documentation.
-7. NUMBERS ARE HOOKS: "5 things", "40% reduction", "$500K saved" — numbers stop the scroll.
-8. END WITH ENGAGEMENT: End with a question or bold prediction that invites debate.
-9. PATTERN INTERRUPT: Start with something unexpected.
-10. THE SAVE TEST: Would someone bookmark this to reference later?
-
-Writing style:
-- Write in first person as Kishore
-- Be technically credible — use specific tools, metrics, and real-world scenarios
-- Short, punchy sentences for tweets. No fluff.
-- For threads, start with a killer hook
-- For X: Stay within 280 characters per individual tweet
-- For Threads: Stay within 500 characters per individual post
-- Never use hashtags inside post body`;
+function sessionUserId(req: { session?: { userId?: number } }): number {
+  return req.session?.userId ?? 1;
+}
 
 const CONTENT_PILLARS_DATA = [
   { id: 1, name: "Data Infrastructure & MLOps" },
@@ -200,6 +183,13 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
+      const post = await storage.getPost(id);
+      if (!post) return res.status(404).json({ message: "Post not found" });
+      if (post.postType === "article") {
+        return res.status(400).json({
+          message: "Article entries cannot be published via /api/posts/:id/publish. Use article publish flow.",
+        });
+      }
       const result = await tryPublishPostById(id);
       res.json({ success: true, ...result });
     } catch (err: any) {
@@ -257,7 +247,7 @@ export async function registerRoutes(
       const pillar = allPillars.find((p) => p.id === idea.pillarId);
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Expand this content idea into a ready-to-post tweet thread (3-5 tweets).\n\nTopic: ${idea.title}\n${idea.notes ? `Notes: ${idea.notes}` : ""}\n${pillar ? `Content Pillar: ${pillar.name} - ${pillar.description}` : ""}\n\nReturn ONLY a JSON object: {"tweets": [{"content": "tweet text"}]}\nEach tweet under 280 characters. First tweet is a hook.` },
       ], true);
 
@@ -294,7 +284,7 @@ export async function registerRoutes(
       const pillar = allPillars.find((p) => p.id === template.pillarId);
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Fill in this tweet template with specific, real-world content.\n\nTemplate: "${template.pattern}"\n${pillar ? `Content Pillar: ${pillar.name}` : ""}\n\nReturn ONLY the filled-in tweet text. Keep it under 280 characters if possible.` },
       ]);
       await logAiUsage(usage, latency, "fill_template");
@@ -315,7 +305,7 @@ export async function registerRoutes(
       const tweetCount = parsed.postType === "thread" ? "5-7" : "1";
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(parsed.platform)) },
         { role: "user", content: `Generate 3 variations of a ${parsed.postType} post for ${parsed.platform === "both" ? "X and Threads" : parsed.platform}.\n\n${pillar ? `Content Pillar: ${pillar.name} - ${pillar.description}` : ""}\nPost Type: ${parsed.postType} (${tweetCount} tweets/posts per variation)\nTone: ${parsed.tone}\nCharacter limit per tweet/post: ${charLimit}\n${parsed.context ? `Context/Topic: ${parsed.context}` : ""}\n\nReturn JSON: {"variations": [{"tweets": [{"content": "text"}]}, {"tweets": [{"content": "text"}]}, {"tweets": [{"content": "text"}]}]}\n\nEach variation should have ${tweetCount} tweet(s). Each tweet MUST be under ${charLimit} characters. Make them distinct.` },
       ], true);
 
@@ -323,9 +313,13 @@ export async function registerRoutes(
       const result = safeJsonParse(content);
       if (!result?.variations) return res.status(500).json({ message: "AI returned invalid response. Please try again." });
 
-      const variations = result.variations.map((v: any) => ({
-        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
-      }));
+      const variations = result.variations.map((v: any) => {
+        const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
+        const numbered = addThreadNumbering(rawTweets);
+        return {
+          tweets: numbered.map((content) => ({ content, charCount: content.length })),
+        };
+      });
       res.json({ variations, model: MODELS.TEXT });
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
@@ -340,16 +334,126 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  app.get("/api/analytics/insights", async (_req, res) => {
+    try {
+      const allPosts = await storage.getPosts();
+      const rows = await db.select().from(analytics);
+      const engagement = (a: (typeof rows)[number]) =>
+        (a.likes || 0) +
+        (a.retweets || 0) * 2 +
+        (a.replies || 0) +
+        (a.bookmarks || 0) +
+        (a.quotes || 0) +
+        Math.round((a.views || 0) / 100);
+
+      const posted = allPosts.filter((p) => p.status === "posted");
+      const topPosts = posted
+        .map((p) => {
+          const pa = rows.filter((r) => r.postId === p.id);
+          const score = pa.reduce((s, r) => s + engagement(r), 0);
+          const preview = p.tweets[0]?.content?.slice(0, 200) || "";
+          return {
+            postId: p.id,
+            score,
+            preview,
+            pillarId: p.pillarId,
+            tweets: p.tweets.map((t) => t.content),
+          };
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+
+      const hourBuckets = Array.from({ length: 24 }, (_, hour) => ({ hour, total: 0, count: 0 }));
+      for (const p of posted) {
+        if (!p.postedAt) continue;
+        const h = new Date(p.postedAt as Date).getHours();
+        const pa = rows.filter((r) => r.postId === p.id);
+        const e = pa.reduce((s, r) => s + engagement(r), 0);
+        hourBuckets[h].total += e;
+        hourBuckets[h].count += 1;
+      }
+      const bestHours = hourBuckets.map((b) => ({
+        hour: b.hour,
+        avgEngagement: b.count ? Math.round(b.total / b.count) : 0,
+        posts: b.count,
+      }));
+
+      const pillars = await storage.getPillars();
+      const pillarStats = pillars.map((pillar) => {
+        const postsIn = posted.filter((p) => p.pillarId === pillar.id);
+        let sum = 0;
+        let n = 0;
+        for (const p of postsIn) {
+          const pa = rows.filter((r) => r.postId === p.id);
+          const e = pa.reduce((s, r) => s + engagement(r), 0);
+          if (pa.length) {
+            sum += e;
+            n += 1;
+          }
+        }
+        return {
+          pillarId: pillar.id,
+          pillarName: pillar.name,
+          posts: postsIn.length,
+          avgEngagement: n ? Math.round(sum / n) : 0,
+        };
+      });
+
+      res.json({ topPosts, bestHours, pillarStats });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.post("/api/analytics", async (req, res) => {
     try { res.status(201).json(await storage.createAnalytics(req.body)); }
     catch (err: any) { res.status(400).json({ message: err.message }); }
   });
 
-  // Manual trigger: refresh X analytics for all posted posts in last 30 days
-  app.post("/api/analytics/sync/x", async (_req, res) => {
+  // Manual trigger: refresh X analytics — default 7-day window to limit API cost.
+  // Pass { days: N } body to override (max 30). Scheduler uses its own 14-day call.
+  app.post("/api/analytics/sync/x", async (req, res) => {
     try {
-      await refreshXAnalytics(30);
-      res.json({ ok: true });
+      const days = Math.min(Number(req.body?.days ?? 7), 30);
+      await refreshXAnalytics(days);
+      res.json({ ok: true, days });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // X API budget summary — how many tweet reads this month vs. the Basic tier limit
+  app.get("/api/analytics/x-usage", async (_req, res) => {
+    try {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      const logs = await storage.getAiUsageLogsAll(31);
+      const xLogs = logs.filter(
+        (l) => l.model === "x-api-v2" && l.feature === "x_analytics_sync",
+      );
+
+      const readsThisMonth = xLogs
+        .filter((l) => new Date(l.createdAt) >= monthStart)
+        .reduce((sum, l) => sum + (l.totalTokens ?? 0), 0);
+
+      const readsToday = xLogs
+        .filter((l) => new Date(l.createdAt) >= dayStart)
+        .reduce((sum, l) => sum + (l.totalTokens ?? 0), 0);
+
+      const percentUsed = Math.round((readsThisMonth / X_MONTHLY_READ_LIMIT) * 100);
+      const nearLimit = readsThisMonth >= X_MONTHLY_WARN_THRESHOLD;
+
+      res.json({
+        readsThisMonth,
+        readsToday,
+        monthlyLimit: X_MONTHLY_READ_LIMIT,
+        warnThreshold: X_MONTHLY_WARN_THRESHOLD,
+        percentUsed,
+        nearLimit,
+        period: { from: monthStart.toISOString(), to: now.toISOString() },
+      });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -589,7 +693,7 @@ export async function registerRoutes(
       const pillar = allPillars.find((p) => p.id === article.pillarId);
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "linkedin") },
         { role: "user", content: `Generate a detailed article outline for an X Article (long-form post).\n\nTitle: ${article.title}\n${topic ? `Topic/Focus: ${topic}` : ""}\n${article.articleTemplate ? `Template Style: ${article.articleTemplate}` : ""}\n${pillar ? `Content Pillar: ${pillar.name}` : ""}\n\nReturn JSON: {"sections": [{"heading": "Section Title", "description": "What to cover in 1-2 sentences", "key_points": ["point1", "point2"]}]}\n\nCreate 5-8 sections that flow logically. Include intro and conclusion.` },
       ], true);
 
@@ -610,7 +714,7 @@ export async function registerRoutes(
       const { heading, description, keyPoints } = req.body;
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "linkedin") },
         { role: "user", content: `Expand this section of an X Article into 2-4 detailed paragraphs.\n\nArticle Title: ${article.title}\nSection Heading: ${heading}\n${description ? `Description: ${description}` : ""}\n${keyPoints ? `Key Points: ${keyPoints.join(", ")}` : ""}\n\nWrite in Kishore's voice. Include specific tools, metrics, code examples where relevant. Make it technically credible and engaging.\n\nReturn ONLY the expanded section text (HTML format with <p>, <code>, <strong> tags). No JSON wrapper.` },
       ]);
 
@@ -631,7 +735,7 @@ export async function registerRoutes(
       const pillar = allPillars.find((p) => p.id === article.pillarId);
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "linkedin") },
         { role: "user", content: `Write a complete X Article (1,500-2,500 words) based on this outline.\n\nTitle: ${article.title}\n${article.subtitle ? `Subtitle: ${article.subtitle}` : ""}\n${pillar ? `Content Pillar: ${pillar.name}` : ""}\n${outline ? `Outline:\n${JSON.stringify(outline)}` : ""}\n\nWrite in rich HTML format with proper headings (h2, h3), paragraphs, code blocks, lists, and blockquotes. Make it technically deep, engaging, and full of specific examples. Include code snippets where relevant.\n\nReturn the full article as HTML content.` },
       ]);
 
@@ -651,7 +755,7 @@ export async function registerRoutes(
       const { text, goal } = req.body;
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "linkedin") },
         { role: "user", content: `Improve this section of text from an X Article.\n\nOriginal text: "${text}"\nGoal: ${goal || "Improve clarity, impact, and technical depth"}\n\nReturn ONLY the improved text. Keep the same format (HTML if it was HTML).` },
       ]);
 
@@ -670,7 +774,7 @@ export async function registerRoutes(
 
       const articleText = article.contentHtml || article.contentMarkdown || article.title;
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "linkedin") },
         { role: "user", content: `Generate metadata for this X Article.\n\nTitle: ${article.title}\nContent preview: ${String(articleText).substring(0, 500)}\n\nReturn JSON: {"suggestions": [{"title": "...", "subtitle": "...", "seoDescription": "max 160 chars"}]}\n\nGenerate 5 title/subtitle/SEO combos optimized for clicks and engagement.` },
       ], true);
 
@@ -691,7 +795,7 @@ export async function registerRoutes(
 
       const articleText = article.contentHtml || article.contentMarkdown || "";
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Convert this X Article into a 5-10 tweet thread for cross-promotion.\n\nTitle: ${article.title}\nContent: ${articleText.substring(0, 3000)}\n\nReturn JSON: {"tweets": [{"content": "tweet text"}]}\nEach tweet under 280 chars. First tweet is the hook. Last tweet links to the article.` },
       ], true);
 
@@ -717,7 +821,7 @@ export async function registerRoutes(
 
       const articleText = article.contentHtml || article.contentMarkdown || "";
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Create a compelling single tweet (under 280 chars) promoting this X Article.\n\nTitle: ${article.title}\nContent preview: ${articleText.substring(0, 1000)}\n\nReturn ONLY the tweet text. Make it a scroll-stopper.` },
       ]);
 
@@ -736,7 +840,7 @@ export async function registerRoutes(
 
       const threadText = post.tweets.map((t) => t.content).join("\n\n");
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Expand this tweet thread into a full X Article (1,500-2,500 words).\n\nThread:\n${threadText}\n\nWrite in rich HTML format with h2, h3, paragraphs, code blocks, lists, blockquotes. Expand each tweet into a full section. Add depth, examples, and technical detail.\n\nReturn the full article as HTML.` },
       ]);
 
@@ -757,6 +861,39 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Thread to article error:", err);
       res.status(500).json({ message: "Failed to convert thread to article." });
+    }
+  });
+
+  app.get("/api/articles-publish-capability", async (_req, res) => {
+    try {
+      const capability = await getXArticlePublishCapability();
+      res.json(capability);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/articles/:id/publish", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid article id" });
+      const article = await storage.getArticle(id);
+      if (!article) return res.status(404).json({ message: "Article not found" });
+      const capability = await getXArticlePublishCapability();
+      if (!capability.canPublish) {
+        return res.status(501).json({
+          message: capability.reason,
+          docsUrl: capability.docsUrl,
+          fallback: "Use article-to-thread or article-to-tweet promotion flows.",
+        });
+      }
+      // Reserved for when X exposes/this app wires article publish contract.
+      return res.status(501).json({
+        message: "Article publish API integration is not implemented yet.",
+        docsUrl: capability.docsUrl,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
   });
 
@@ -1425,8 +1562,10 @@ Return JSON:
       const promptBase = actionPrompts[action];
       if (!promptBase) return res.status(400).json({ message: `Unknown action: ${action}` });
 
+      const brandPlat =
+        contentType === "threads" ? "threads" : contentType === "article" ? "linkedin" : "x";
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), brandPlat) },
         { role: "user", content: `${promptBase}
 
 SOURCE ANALYSIS:
@@ -1448,9 +1587,11 @@ Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}` },
       const parsed = safeJsonParse(content);
       if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
 
-      const variations = parsed.variations.map((v: any) => ({
-        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
-      }));
+      const variations = parsed.variations.map((v: any) => {
+        const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
+        const numbered = addThreadNumbering(rawTweets);
+        return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
+      });
 
       await storage.createReferenceContent({
         referenceId: ref.id,
@@ -1497,7 +1638,7 @@ Return JSON: {"variations": [{"tweets": [{"content": "text"}]}]}` },
       await storage.incrementStyleUsage(profile.id);
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: `${SYSTEM_PROMPT}\n\n${profile.stylePromptSnippet}` },
+        { role: "system", content: `${await getBrandSystemPrompt(sessionUserId(req), "x")}\n\n${profile.stylePromptSnippet}` },
         { role: "user", content: `Generate a ${contentType || "thread"} about: ${topic || "a trending DevOps/AI topic"}
 
 ${pillarId ? `Content pillar context: #${pillarId}` : ""}
@@ -1510,9 +1651,11 @@ ${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet 
       const parsed = safeJsonParse(content);
       if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
 
-      const variations = parsed.variations.map((v: any) => ({
-        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
-      }));
+      const variations = parsed.variations.map((v: any) => {
+        const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
+        const numbered = addThreadNumbering(rawTweets);
+        return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
+      });
       res.json({ variations, model: MODELS.TEXT, styleName: profile.name });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -1536,7 +1679,7 @@ ${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet 
 
       const charLimit = contentType === "thread" ? 280 : contentType === "article" ? 25000 : 280;
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: `${SYSTEM_PROMPT}${styleSnippet}` },
+        { role: "system", content: `${await getBrandSystemPrompt(sessionUserId(req), "x")}${styleSnippet}` },
         { role: "user", content: `Based on the following source analysis, create a ${contentType || "thread"} for Kishore's X/Threads account.
 
 SOURCE ANALYSIS:
@@ -1557,9 +1700,11 @@ Each tweet under ${charLimit} characters.` },
       const parsed = safeJsonParse(content);
       if (!parsed?.variations) return res.status(500).json({ message: "AI returned invalid response." });
 
-      const variations = parsed.variations.map((v: any) => ({
-        tweets: (v.tweets || []).map((t: any) => ({ content: String(t.content || ""), charCount: String(t.content || "").length })),
-      }));
+      const variations = parsed.variations.map((v: any) => {
+        const rawTweets = (v.tweets || []).map((t: any) => String(t.content || ""));
+        const numbered = addThreadNumbering(rawTweets);
+        return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
+      });
       res.json({ variations, model: MODELS.TEXT });
     } catch (err: any) {
       console.error("Generate from reference error:", err);
@@ -1807,6 +1952,25 @@ Each tweet under ${charLimit} characters.` },
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  app.patch("/api/discover/rss-sources/:id/autopost", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const body = req.body as Partial<{
+        autopost: boolean;
+        autopostPlatform: string;
+        autopostTone: string;
+        autopostPostType: string;
+        autopostPillarId: number | null;
+      }>;
+      const updated = await storage.updateRssSource(id, body as any);
+      if (!updated) return res.status(404).json({ message: "RSS source not found" });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/discover/monitored-accounts", async (_req, res) => {
     try { res.json(await storage.getMonitoredAccounts()); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -1951,7 +2115,7 @@ Return JSON:
       if (!postContent) return res.status(400).json({ message: "Content is required" });
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(platform)) },
         { role: "user", content: `Rewrite this content applying ALL the improvement suggestions to maximize viral potential on ${platform || "X"}.
 
 ORIGINAL CONTENT:
@@ -1981,7 +2145,7 @@ Each tweet under 280 characters.` },
       if (!postContent || !improvement) return res.status(400).json({ message: "Content and improvement are required" });
 
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
         { role: "user", content: `Apply this specific improvement to the content.
 
 CONTENT:
@@ -2140,7 +2304,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
   app.put("/api/profile/memory", async (req, res) => {
     try {
       const userId = req.session?.userId || 1;
-      const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, memoryJson } = req.body;
+      const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, messagingPillars, targetPlatforms, postingFrequency, memoryJson } = req.body;
       const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       let result;
       if (existing) {
@@ -2151,6 +2315,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
             audienceDescription: audienceDescription ?? existing.audienceDescription,
             contentGoals: contentGoals ?? existing.contentGoals,
             niche: niche ?? existing.niche,
+            messagingPillars: messagingPillars ?? existing.messagingPillars,
             targetPlatforms: targetPlatforms ?? existing.targetPlatforms,
             postingFrequency: postingFrequency ?? existing.postingFrequency,
             memoryJson: memoryJson ?? existing.memoryJson,
@@ -2160,11 +2325,21 @@ Return ONLY the improved content text. Keep the same format and length constrain
           .returning();
       } else {
         [result] = await db.insert(userProfile)
-          .values({ userId, brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, targetPlatforms, postingFrequency, memoryJson })
+          .values({ userId, brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, messagingPillars, targetPlatforms, postingFrequency, memoryJson })
           .returning();
       }
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.get("/api/profile/memory/preview-prompt", async (req, res) => {
+    try {
+      const uid = req.session?.userId ?? 1;
+      const prompt = await getBrandSystemPrompt(uid, "x");
+      res.json({ prompt });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.get("/api/profile/branding", async (req, res) => {
@@ -2438,10 +2613,20 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
   app.post("/api/youtube/generate-post", async (req, res) => {
     try {
       const { videoId, title, author, pillarId, platform = "x", tone = "educational", postType = "thread" } = req.body;
-      const pillar = CONTENT_PILLARS_DATA.find(p => p.id === pillarId);
+      const pillarIdNum =
+        pillarId != null && pillarId !== "" ? Number.parseInt(String(pillarId), 10) : NaN;
+      const pillar = Number.isFinite(pillarIdNum)
+        ? CONTENT_PILLARS_DATA.find((p) => p.id === pillarIdNum)
+        : undefined;
+      const isThread = postType === "thread";
+      const structureBlock = isThread
+        ? `- Tweet 1: Hook — one punchy line capturing the video's biggest insight
+- Tweets 2–4: 2–3 key technical takeaways an infra/AI engineer should know
+- Last content tweet must include: Watch it here → https://www.youtube.com/watch?v=${videoId}`
+        : `- One punchy tweet that captures the biggest insight and ends with: Watch it here → https://www.youtube.com/watch?v=${videoId}`;
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `Create a ${postType} for ${platform === "x" ? "X (Twitter)" : platform} based on this YouTube video.
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(platform)) },
+        { role: "user", content: `Create a ${isThread ? "Twitter thread" : "tweet"} for X (Twitter) about this YouTube video.
 
 Video Title: "${title}"
 Channel: ${author}
@@ -2449,18 +2634,100 @@ Video URL: https://www.youtube.com/watch?v=${videoId}
 ${pillar ? `Content Pillar: ${pillar.name}` : ""}
 Tone: ${tone}
 
-Generate a compelling social media post that:
-1. References insights from the video (use your knowledge of the topic based on the title)
-2. Provides YOUR unique perspective as a Data & AI infrastructure expert
-3. Adds commentary, agrees/disagrees, or builds on the topic
-4. Ends with a call to action to watch the video
-5. If it's a thread, create 3-5 tweets
+Write as Kishore commenting on this video. Structure:
+${structureBlock}
 
-Format as a thread with tweets separated by "---"` },
+Separate tweets with "---". Do NOT add numbering (system handles it).` },
       ]);
       await logAiUsage(usage, latency, "youtube_to_post");
-      const tweets = content.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content);
+      const rawTweets = content.split("---").map((t: string) => t.trim()).filter(Boolean);
+      const numbered = addThreadNumbering(rawTweets);
+      const tweets = numbered.map((content) => ({ content, charCount: content.length }));
       res.json({ tweets, model: MODELS.TEXT });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/youtube/channels", async (_req, res) => {
+    try {
+      res.json(await storage.getYoutubeChannels());
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/youtube/channels", async (req, res) => {
+    try {
+      const channelUrl = req.body?.channelUrl;
+      if (!channelUrl || typeof channelUrl !== "string") {
+        return res.status(400).json({ message: "channelUrl is required" });
+      }
+      const { resolveYoutubeChannelId } = await import("./youtubeConnector");
+      const { channelId, channelName } = await resolveYoutubeChannelId(channelUrl);
+      let lastVideoId: string | undefined;
+      try {
+        const Parser = (await import("rss-parser")).default;
+        const feed = await new Parser().parseURL(
+          `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+        );
+        const link = feed.items[0]?.link || "";
+        const m = link.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+        if (m) lastVideoId = m[1];
+      } catch {
+        /* seed optional */
+      }
+      const row = await storage.createYoutubeChannel({
+        channelId,
+        channelName: channelName || undefined,
+        channelUrl,
+        lastVideoId,
+      });
+      res.status(201).json(row);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message || "Failed to add channel" });
+    }
+  });
+
+  app.patch("/api/youtube/channels/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const updated = await storage.updateYoutubeChannel(id, req.body);
+      if (!updated) return res.status(404).json({ message: "Channel not found" });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/youtube/channels/:id", async (req, res) => {
+    try {
+      await storage.deleteYoutubeChannel(parseInt(req.params.id, 10));
+      res.status(204).end();
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/youtube/channels/check-now", async (_req, res) => {
+    try {
+      const { checkYoutubeChannels } = await import("./youtubeConnector");
+      await checkYoutubeChannels();
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/youtube/channels/:id/check-now", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const list = await storage.getYoutubeChannels();
+      const ch = list.find((c) => c.id === id);
+      if (!ch) return res.status(404).json({ message: "Channel not found" });
+      const { checkYoutubeChannelRow } = await import("./youtubeConnector");
+      await checkYoutubeChannelRow(ch);
+      res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -2485,7 +2752,7 @@ Format as a thread with tweets separated by "---"` },
         }
       }
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(platform)) },
         { role: "user", content: `Create 3 variations of a ${postType} for ${platform === "x" ? "X (Twitter)" : platform === "linkedin" ? "LinkedIn" : "Threads"} based on the following source material.
 
 ${pillar ? `Content Pillar: ${pillar.name}` : ""}
@@ -2501,10 +2768,13 @@ For each variation, use "---VARIATION---" as separator. For threads, separate tw
       ]);
       await logAiUsage(usage, latency, "generate_from_sources");
       const variationTexts = content.split("---VARIATION---").filter((v: string) => v.trim());
-      const variations = variationTexts.map((v: string) => ({
-        tweets: v.split("---").map((t: string) => ({ content: t.trim(), charCount: t.trim().length })).filter((t: any) => t.content)
-      }));
-      res.json({ variations: variations.length ? variations : [{ tweets: [{ content: content.trim(), charCount: content.trim().length }] }], model: MODELS.TEXT });
+      const variations = variationTexts.map((v: string) => {
+        const rawTweets = v.split("---").map((t: string) => t.trim()).filter(Boolean);
+        const numbered = addThreadNumbering(rawTweets);
+        return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
+      });
+      const fallback = [{ tweets: addThreadNumbering([content.trim()]).map((c) => ({ content: c, charCount: c.length })) }];
+      res.json({ variations: variations.length ? variations : fallback, model: MODELS.TEXT });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -2604,13 +2874,99 @@ Return JSON: {
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  const cannedResponseBody = z.object({
+    title: z.string().min(1).max(200),
+    content: z.string().min(1),
+    category: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    isFavorite: z.boolean().optional(),
+  });
+
+  app.get("/api/canned-responses", async (_req, res) => {
+    try {
+      res.json(await storage.getCannedResponses());
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/canned-responses", async (req, res) => {
+    try {
+      const parsed = cannedResponseBody.parse(req.body);
+      res.status(201).json(await storage.createCannedResponse(parsed as any));
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/canned-responses/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const parsed = cannedResponseBody.partial().parse(req.body);
+      const updated = await storage.updateCannedResponse(id, parsed as any);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      res.json(updated);
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/canned-responses/:id", async (req, res) => {
+    try {
+      await storage.deleteCannedResponse(parseInt(req.params.id, 10));
+      res.status(204).end();
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/canned-responses/:id/use", async (req, res) => {
+    try {
+      const row = await storage.incrementCannedResponseUsage(parseInt(req.params.id, 10));
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/canned-responses/ai-suggest", async (req, res) => {
+    try {
+      const context = String(req.body?.context || "").trim();
+      if (!context) return res.status(400).json({ message: "context is required" });
+      const { content, usage, latency } = await aiCall(
+        [
+          { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), "x") },
+          {
+            role: "user",
+            content: `Given this situation or draft reply context, propose 5 short canned responses an infra/AI creator might reuse on X.
+
+Context:
+${context}
+
+Return JSON only: { "suggestions": [{ "title": "short label", "content": "reply text", "category": "general" }] }`,
+          },
+        ],
+        true,
+      );
+      await logAiUsage(usage, latency, "canned_ai_suggest");
+      const parsed = safeJsonParse(content);
+      res.json(parsed || { suggestions: [] });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // ── CHAT → POST ───────────────────────────────────────────────────────────────
   app.post("/api/chat/message", async (req, res) => {
     try {
       const { messages, pillarId, platform = "x", postType = "tweet" } = req.body;
       if (!messages?.length) return res.status(400).json({ message: "Messages are required" });
       const pillar = CONTENT_PILLARS_DATA.find(p => p.id === parseInt(pillarId || "0"));
-      const systemPrompt = `${SYSTEM_PROMPT}
+      const baseBrand = await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(platform));
+      const systemPrompt = `${baseBrand}
 
 You are also a collaborative content creation assistant. Help the user refine their ideas through conversation. 
 When they're ready to generate a post, produce it in the format specified.
@@ -2636,7 +2992,7 @@ If the user asks to generate a post or says something like "write this", "create
     try {
       const { postContent, instruction, platform = "x" } = req.body;
       const { content, usage, latency } = await aiCall([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: await getBrandSystemPrompt(sessionUserId(req), platformForAiPrompt(platform)) },
         { role: "user", content: `Refine this social media post based on the instruction.
 
 CURRENT POST:

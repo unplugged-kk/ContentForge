@@ -17,6 +17,9 @@ const routes: { path: string; selector: string }[] = [
   { path: "/hooks", selector: '[data-testid="text-hooks-title"]' },
   { path: "/carousel", selector: '[data-testid="text-carousel-title"]' },
   { path: "/chat", selector: '[data-testid="text-chat-title"]' },
+  { path: "/formatter", selector: '[data-testid="text-formatter-title"]' },
+  { path: "/canned-responses", selector: '[data-testid="text-canned-responses-title"]' },
+  { path: "/youtube", selector: '[data-testid="text-youtube-title"]' },
   { path: "/queue", selector: '[data-testid="text-queue-title"]' },
   { path: "/ai-usage", selector: '[data-testid="text-ai-usage-title"]' },
 ];

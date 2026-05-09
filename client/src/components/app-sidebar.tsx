@@ -1,4 +1,4 @@
-import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube, ListChecks, Bot } from "lucide-react";
+import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube, ListChecks, Bot, CaseSensitive, Quote } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -19,7 +19,10 @@ import { useToast } from "@/hooks/use-toast";
 
 const createItems = [
   { title: "Generate", url: "/", icon: Sparkles },
+  { title: "Post Formatter", url: "/formatter", icon: CaseSensitive },
+  { title: "Canned Responses", url: "/canned-responses", icon: Quote },
   { title: "Chat → Post", url: "/chat", icon: MessageSquare },
+  { title: "YouTube → Post", url: "/youtube", icon: Youtube },
   { title: "Hook Generator", url: "/hooks", icon: Zap },
   { title: "Carousel Builder", url: "/carousel", icon: LayoutGrid },
   { title: "AI Images", url: "/images", icon: Image },

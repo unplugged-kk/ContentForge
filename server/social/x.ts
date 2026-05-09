@@ -2,6 +2,11 @@ import { TwitterApi, type TwitterApiReadWrite } from "twitter-api-v2";
 import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
+import { addThreadNumbering } from "../utils/threadUtils";
+
+/** X API monthly read budget (Basic tier). Warn at 70% (7000 reads). */
+export const X_MONTHLY_READ_LIMIT = 10_000;
+export const X_MONTHLY_WARN_THRESHOLD = 7_000;
 
 /**
  * Translate raw X API error text into a human-readable message.
@@ -70,6 +75,12 @@ export type XPublishResult = {
   tweetIds: string[];
   urls: string[];
   username: string | null;
+};
+
+export type XArticlePublishCapability = {
+  canPublish: boolean;
+  reason: string;
+  docsUrl: string;
 };
 
 function createRwClient(): TwitterApiReadWrite | null {
@@ -141,38 +152,41 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
       "X credentials missing: set X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET (OAuth 1.0a) or X_OAUTH2_ACCESS_TOKEN / X_USER_ACCESS_TOKEN, or connect X in Settings.",
     );
   }
-  const trimmed = texts.map((t) => t.trim()).filter(Boolean);
-  if (trimmed.length === 0) throw new Error("No tweet text to post.");
 
-  // Thread finisher: append a follow/CTA tweet to threads when X_THREAD_FINISHER is set.
-  // Only added to multi-tweet threads (not single tweets), max 275 chars.
-  // Example: "Follow @DevOpsByte for daily DevOps & AI threads ↑"
+  // Step 1: clean input
+  let tweets = texts.map((t) => t.trim()).filter(Boolean);
+  if (tweets.length === 0) throw new Error("No tweet text to post.");
+
+  // Step 2: apply thread numbering to content tweets (before finisher)
+  tweets = addThreadNumbering(tweets);
+
+  // Step 3: append finisher AFTER numbering so it has no number
   const finisher = process.env.X_THREAD_FINISHER?.trim();
-  if (finisher && trimmed.length > 1 && finisher.length <= 275) {
-    // Only add finisher if the last tweet isn't already a CTA
-    const lastTweet = trimmed[trimmed.length - 1].toLowerCase();
-    const isAlreadyCTA = lastTweet.includes("follow") || lastTweet.includes("subscribe") || lastTweet.includes("rt this");
+  if (finisher && tweets.length > 1) {
+    const safeFinisher = finisher.slice(0, 275);
+    const lastTweet = tweets[tweets.length - 1].toLowerCase();
+    const ctaPatterns = ["follow", "subscribe", "rt this", "retweet", "share this", "like and", "🔔", "hit follow"];
+    const isAlreadyCTA = ctaPatterns.some((p) => lastTweet.includes(p));
     if (!isAlreadyCTA) {
-      trimmed.push(finisher);
+      tweets.push(safeFinisher);
     }
   }
 
-  // Use env var if set to avoid a paid API call on every post.
-  // Falls back to v2.me() only if X_USERNAME is not configured.
+  // Step 4: resolve username (env var first to avoid paid API call)
   let username: string | null = process.env.X_USERNAME || null;
   if (!username) {
     try {
-      const me = await rw.v2.me();
-      username = me.data.username ?? null;
+      username = (await rw.v2.me()).data.username ?? null;
     } catch {
       /* optional — URL will use 'i' as fallback handle */
     }
   }
 
+  // Step 5: post each tweet in reply chain
   const tweetIds: string[] = [];
   let lastId: string | undefined;
 
-  for (const text of trimmed) {
+  for (const text of tweets) {
     const body: { text: string; reply?: { in_reply_to_tweet_id: string } } = {
       text: text.slice(0, 280),
     };
@@ -253,9 +267,20 @@ export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
   if (!rw) return;
 
   try {
+    const start = Date.now();
     const data = await rw.v2.tweets(tweetIds, {
       "tweet.fields": ["public_metrics"],
     });
+
+    // Log X API read call for budget tracking (1 read per tweet ID fetched)
+    await storage.createAiUsageLog({
+      model: "x-api-v2",
+      feature: "x_analytics_sync",
+      inputTokens: tweetIds.length,
+      outputTokens: 0,
+      totalTokens: tweetIds.length,
+      latencyMs: Date.now() - start,
+    }).catch(() => null); // non-critical
 
     // Aggregate metrics across all tweets in the thread
     const totals = (data.data ?? []).reduce(
@@ -300,4 +325,24 @@ export async function refreshXAnalytics(days = 30): Promise<void> {
     await syncPostAnalyticsFromX(p.id).catch(() => null);
   }
   console.log(`[x analytics] refreshed ${targets.length} posts`);
+}
+
+/**
+ * Current public X API docs expose post/thread publishing via /2/tweets.
+ * Keep article publishing gated until a stable public API contract is available.
+ */
+export async function getXArticlePublishCapability(): Promise<XArticlePublishCapability> {
+  const status = await getXPostingConfigSummary();
+  if (!status.canAttemptPost) {
+    return {
+      canPublish: false,
+      reason: "X account/token not connected for publishing.",
+      docsUrl: "https://docs.x.com/x-api/posts/create-post",
+    };
+  }
+  return {
+    canPublish: false,
+    reason: "Public X API contract for article publishing is not configured in this app yet.",
+    docsUrl: "https://docs.x.com/x-api/posts/create-post",
+  };
 }

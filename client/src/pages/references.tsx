@@ -73,6 +73,18 @@ export default function ReferencesPage() {
 
   const saveDraftMutation = useMutation({
     mutationFn: async (variation: any) => {
+      if (genContentType === "article") {
+        const sections = (variation.tweets || []).map((t: any) => String(t.content || "").trim()).filter(Boolean);
+        const contentMarkdown = sections.join("\n\n");
+        const title = contentMarkdown.split("\n")[0]?.slice(0, 200) || "Untitled Article";
+        const articleRes = await apiRequest("POST", "/api/articles", {
+          title,
+          subtitle: activeRef?.title || null,
+          contentMarkdown,
+          status: "draft",
+        });
+        return articleRes.json();
+      }
       const res = await apiRequest("POST", "/api/posts", {
         postType: genContentType === "thread" ? "thread" : "tweet",
         tone: "conversational",
@@ -89,7 +101,8 @@ export default function ReferencesPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
-      toast({ title: "Draft saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
+      toast({ title: genContentType === "article" ? "Article draft saved" : "Draft saved" });
     },
   });
 

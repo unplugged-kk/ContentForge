@@ -173,6 +173,18 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
 
   const saveDraftMutation = useMutation({
     mutationFn: async (variation: any) => {
+      if (actionContentType === "article") {
+        const sections = (variation.tweets || []).map((t: any) => String(t.content || "").trim()).filter(Boolean);
+        const contentMarkdown = sections.join("\n\n");
+        const title = contentMarkdown.split("\n")[0]?.slice(0, 200) || "Untitled Article";
+        const articleRes = await apiRequest("POST", "/api/articles", {
+          title,
+          subtitle: selectedRef?.title || null,
+          contentMarkdown,
+          status: "draft",
+        });
+        return articleRes.json();
+      }
       const res = await apiRequest("POST", "/api/posts", {
         postType: actionContentType === "thread" ? "thread" : "tweet",
         tone: "conversational",
@@ -189,7 +201,14 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
-      toast({ title: "Draft saved!", description: "Your draft appears in the Saved Drafts section below and on the Calendar page." });
+      queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
+      toast({
+        title: actionContentType === "article" ? "Article draft saved!" : "Draft saved!",
+        description:
+          actionContentType === "article"
+            ? "Your article is now saved in Articles."
+            : "Your draft appears in the Saved Drafts section below and on the Calendar page.",
+      });
     },
   });
 

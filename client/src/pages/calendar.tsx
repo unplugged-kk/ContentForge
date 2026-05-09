@@ -14,6 +14,7 @@ import { ChevronLeft, ChevronRight, Clock, Sparkles, Loader2, TrendingUp, X, Tra
 import { SiX, SiThreads } from "react-icons/si";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek } from "date-fns";
 import type { Post, Tweet } from "@shared/schema";
+import { XPostPreview } from "@/components/x-post-preview";
 
 interface PostWithTweets extends Post {
   tweets: Tweet[];
@@ -304,6 +305,9 @@ export default function CalendarPage() {
                 <PlatformBadge platform={selectedPost.targetPlatform || "both"} />
                 <Badge variant="outline" className="text-[10px]">{selectedPost.postType}</Badge>
               </div>
+              <XPostPreview
+                tweets={[...(selectedPost.tweets || [])].sort((a, b) => a.position - b.position).map((t) => t.content)}
+              />
               <div className="space-y-2">
                 {selectedPost.tweets?.map((tweet, i) => (
                   <Card key={tweet.id} className="p-2">
