@@ -170,6 +170,17 @@ test.describe("YouTube to Post API", () => {
 });
 
 test.describe("X Article publish safeguards", () => {
+  test("GET /api/social/x/status exposes xQuick provider config shape", async ({ request }) => {
+    const res = await request.get("/api/social/x/status");
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.provider).toBe("xquick");
+    expect(body.postEndpoint).toBe("/x/tweets");
+    expect(body).toHaveProperty("hasXQuickApiKey");
+    expect(body).toHaveProperty("hasXQuickAccount");
+    expect(body).toHaveProperty("canAttemptPost");
+  });
+
   test("GET /api/articles-publish-capability returns explicit capability shape", async ({ request }) => {
     const res = await request.get("/api/articles-publish-capability");
     expect(res.ok()).toBeTruthy();

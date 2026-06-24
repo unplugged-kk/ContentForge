@@ -1,4 +1,3 @@
-import { TwitterApi, type TwitterApiReadWrite } from "twitter-api-v2";
 import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
@@ -13,6 +12,10 @@ export const X_MONTHLY_WARN_THRESHOLD = 7_000;
  * Copied and adapted from postiz-app/x.provider.ts handleErrors().
  */
 export function translateXError(body: string): string {
+  if (body.includes("XQUICK_CONFIG_MISSING"))
+    return "xQuick credentials missing: set XQUIK_API_KEY and XQUIK_ACCOUNT, or connect an xQuick token in Settings.";
+  if (body.includes("XQUICK_POST_ID_MISSING"))
+    return "xQuick accepted the request but did not return a post id. Check XQUICK_POST_ID_PATH / response mapping.";
   if (body.includes("usage-capped"))
     return "X API usage cap reached. Try again later.";
   if (body.includes("duplicate-rules") || body.includes("duplicate content"))
@@ -36,38 +39,27 @@ export function translateXError(body: string): string {
 
 /** Non-secret wiring status for Settings / debugging */
 export async function getXPostingConfigSummary(): Promise<{
-  hasOAuth1UserContext: boolean;
-  hasOAuth2UserToken: boolean;
+  provider: "xquick";
+  hasXQuickBaseUrl: boolean;
+  hasXQuickApiKey: boolean;
+  hasXQuickAccount: boolean;
   hasConnectedAccountToken: boolean;
-  hasOAuth2AppKeysOnly: boolean;
   canAttemptPost: boolean;
+  postEndpoint: string;
 }> {
-  const ak =
-    process.env.X_API_KEY ||
-    process.env.TWITTER_API_KEY ||
-    process.env.X_CONSUMER_KEY;
-  const as =
-    process.env.X_API_SECRET ||
-    process.env.TWITTER_API_SECRET ||
-    process.env.TWITTER_API_KEY_SECRET ||
-    process.env.X_CONSUMER_SECRET;
-  const at = process.env.X_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN;
-  const asec = process.env.X_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET;
-  const oauth2User =
-    process.env.X_OAUTH2_ACCESS_TOKEN ||
-    process.env.X_USER_ACCESS_TOKEN ||
-    process.env.TWITTER_ACCESS_TOKEN_OAUTH2;
-  const hasOAuth1UserContext = !!(ak && as && at && asec);
-  const hasOAuth2UserToken = !!oauth2User;
-  const hasOAuth2AppKeysOnly = !!(process.env.X_CLIENT_ID && process.env.X_CLIENT_SECRET && !hasOAuth1UserContext && !hasOAuth2UserToken);
   const acc = await storage.getConnectedAccount("x");
+  const hasXQuickBaseUrl = !!getXQuickBaseUrl();
+  const hasXQuickApiKey = !!getXQuickToken(acc?.accessToken ?? null);
+  const hasXQuickAccount = !!getXQuickAccount(acc?.username ?? null);
 
   return {
-    hasOAuth1UserContext,
-    hasOAuth2UserToken,
+    provider: "xquick",
+    hasXQuickBaseUrl,
+    hasXQuickApiKey,
+    hasXQuickAccount,
     hasConnectedAccountToken: !!acc?.accessToken,
-    hasOAuth2AppKeysOnly,
-    canAttemptPost: hasOAuth1UserContext || hasOAuth2UserToken || !!acc?.accessToken,
+    canAttemptPost: hasXQuickBaseUrl && hasXQuickApiKey && hasXQuickAccount,
+    postEndpoint: getXQuickPostEndpoint(),
   };
 }
 
@@ -83,45 +75,199 @@ export type XArticlePublishCapability = {
   docsUrl: string;
 };
 
-function createRwClient(): TwitterApiReadWrite | null {
-  const appKey =
-    process.env.X_API_KEY ||
-    process.env.TWITTER_API_KEY ||
-    process.env.X_CONSUMER_KEY;
-  const appSecret =
-    process.env.X_API_SECRET ||
-    process.env.TWITTER_API_SECRET ||
-    process.env.TWITTER_API_KEY_SECRET ||
-    process.env.X_CONSUMER_SECRET;
-  const accessToken = process.env.X_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN;
-  const accessSecret =
-    process.env.X_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET;
-  if (appKey && appSecret && accessToken && accessSecret) {
-    return new TwitterApi({
-      appKey,
-      appSecret,
-      accessToken,
-      accessSecret,
-    }).readWrite;
-  }
-  const oauth2User =
-    process.env.X_OAUTH2_ACCESS_TOKEN ||
-    process.env.X_USER_ACCESS_TOKEN ||
-    process.env.TWITTER_ACCESS_TOKEN_OAUTH2;
-  if (oauth2User) {
-    return new TwitterApi(oauth2User).readWrite;
-  }
-  return null;
+type XQuickPostResponse = {
+  id?: string;
+  tweetId?: string;
+  postId?: string;
+  writeActionId?: string;
+  status?: string;
+  error?: string;
+  message?: string;
+  url?: string;
+  username?: string;
+  data?: XQuickPostResponse;
+  result?: XQuickPostResponse;
+  user?: { username?: string };
+};
+
+function getXQuickBaseUrl(): string | null {
+  return (
+    process.env.XQUIK_API_BASE_URL?.trim() ||
+    process.env.XQUICK_API_BASE_URL?.trim() ||
+    "https://xquik.com/api/v1"
+  ).replace(/\/+$/, "");
 }
 
-async function createRwClientFromDb(): Promise<TwitterApiReadWrite | null> {
-  const fromEnv = createRwClient();
-  if (fromEnv) return fromEnv;
+function getXQuickPostEndpoint(): string {
+  return process.env.XQUIK_POST_ENDPOINT?.trim() || process.env.XQUICK_POST_ENDPOINT?.trim() || "/x/tweets";
+}
+
+function getXQuickWriteActionEndpoint(): string {
+  return (
+    process.env.XQUIK_WRITE_ACTION_ENDPOINT?.trim() ||
+    process.env.XQUICK_WRITE_ACTION_ENDPOINT?.trim() ||
+    "/x/write-actions/{id}"
+  );
+}
+
+function getXQuickReadEndpoint(): string | null {
+  return (
+    process.env.XQUIK_TWEET_LOOKUP_ENDPOINT?.trim() ||
+    process.env.XQUICK_TWEET_LOOKUP_ENDPOINT?.trim() ||
+    "/x/tweets/{id}"
+  );
+}
+
+function getXQuickAnalyticsEndpoint(): string | null {
+  return process.env.XQUIK_ANALYTICS_ENDPOINT?.trim() || process.env.XQUICK_ANALYTICS_ENDPOINT?.trim() || null;
+}
+
+function getXQuickToken(fallbackToken: string | null): string | null {
+  return process.env.XQUIK_API_KEY?.trim() || process.env.XQUICK_API_KEY?.trim() || fallbackToken || null;
+}
+
+function getXQuickAccount(fallbackUsername: string | null): string | null {
+  const account =
+    process.env.XQUIK_ACCOUNT?.trim() ||
+    process.env.XQUIK_ACCOUNT_ID?.trim() ||
+    process.env.XQUIK_USERNAME?.trim() ||
+    process.env.XQUICK_ACCOUNT?.trim() ||
+    process.env.XQUICK_ACCOUNT_ID?.trim() ||
+    process.env.XQUICK_USERNAME?.trim() ||
+    process.env.X_USERNAME?.trim() ||
+    fallbackUsername;
+  return account ? account.replace(/^@/, "") : null;
+}
+
+function joinUrl(base: string, endpoint: string): string {
+  if (/^https?:\/\//i.test(endpoint)) return endpoint;
+  return `${base}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+}
+
+function getPathValue(input: any, path: string | undefined): any {
+  if (!path) return undefined;
+  return path.split(".").reduce((current, key) => current?.[key], input);
+}
+
+function buildXQuickHeaders(token: string): Record<string, string> {
+  const headerName = process.env.XQUIK_AUTH_HEADER?.trim() || process.env.XQUICK_AUTH_HEADER?.trim() || "x-api-key";
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    [headerName]: token,
+  };
+}
+
+async function getXQuickApiConfig(): Promise<{ baseUrl: string; token: string } | null> {
   const account = await storage.getConnectedAccount("x");
-  if (account?.accessToken) {
-    return new TwitterApi(account.accessToken).readWrite;
+  const baseUrl = getXQuickBaseUrl();
+  const token = getXQuickToken(account?.accessToken ?? null);
+  if (!baseUrl || !token) return null;
+  return { baseUrl, token };
+}
+
+async function getXQuickClientConfig(): Promise<{ baseUrl: string; token: string; account: string } | null> {
+  const account = await storage.getConnectedAccount("x");
+  const apiConfig = await getXQuickApiConfig();
+  const xAccount = getXQuickAccount(account?.username ?? null);
+  if (!apiConfig || !xAccount) return null;
+  return { ...apiConfig, account: xAccount };
+}
+
+function extractXQuickPostId(data: XQuickPostResponse): string | null {
+  const configured = getPathValue(data, process.env.XQUIK_POST_ID_PATH || process.env.XQUICK_POST_ID_PATH);
+  const id =
+    configured ??
+    data.id ??
+    data.tweetId ??
+    data.postId ??
+    data.data?.id ??
+    data.data?.tweetId ??
+    data.data?.postId ??
+    data.result?.id ??
+    data.result?.tweetId ??
+    data.result?.postId;
+  return id ? String(id) : null;
+}
+
+function extractXQuickUsername(data: XQuickPostResponse): string | null {
+  const configured = getPathValue(data, process.env.XQUIK_USERNAME_PATH || process.env.XQUICK_USERNAME_PATH);
+  const username =
+    configured ??
+    data.username ??
+    data.data?.username ??
+    data.result?.username ??
+    data.user?.username ??
+    data.data?.user?.username ??
+    data.result?.user?.username;
+  return username ? String(username).replace(/^@/, "") : null;
+}
+
+function buildXQuickPostPayload(
+  account: string,
+  text: string,
+  lastId: string | undefined,
+): Record<string, unknown> {
+  const body: { account: string; text: string; reply_to_tweet_id?: string } = { account, text };
+  if (lastId) body.reply_to_tweet_id = lastId;
+  return body;
+}
+
+async function postViaXQuick(
+  config: { baseUrl: string; token: string; account: string },
+  payload: Record<string, unknown>,
+): Promise<XQuickPostResponse> {
+  const res = await fetch(joinUrl(config.baseUrl, getXQuickPostEndpoint()), {
+    method: "POST",
+    headers: buildXQuickHeaders(config.token),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
+  });
+  const bodyText = await res.text();
+  let body: any = {};
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      body = { message: bodyText };
+    }
   }
-  return null;
+  if (!res.ok) {
+    throw new Error(body?.message || body?.error || bodyText || `xQuick API returned HTTP ${res.status}`);
+  }
+  if (res.status === 202 && body?.writeActionId && !body?.tweetId) {
+    return pollXQuickWriteAction(config, String(body.writeActionId));
+  }
+  return body;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollXQuickWriteAction(
+  config: { baseUrl: string; token: string },
+  writeActionId: string,
+): Promise<XQuickPostResponse> {
+  const maxAttempts = Number(process.env.XQUIK_WRITE_POLL_ATTEMPTS ?? process.env.XQUICK_WRITE_POLL_ATTEMPTS ?? 6);
+  const delayMs = Number(process.env.XQUIK_WRITE_POLL_DELAY_MS ?? process.env.XQUICK_WRITE_POLL_DELAY_MS ?? 2_000);
+  const endpoint = getXQuickWriteActionEndpoint().replace("{id}", encodeURIComponent(writeActionId));
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(delayMs);
+    const res = await fetch(joinUrl(config.baseUrl, endpoint), {
+      headers: buildXQuickHeaders(config.token),
+      signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
+    });
+    const body = await res.json().catch(() => ({})) as XQuickPostResponse;
+    if (!res.ok) {
+      throw new Error(body?.message || body?.error || `xQuick write-action status returned HTTP ${res.status}`);
+    }
+    if (body.status === "success" && body.tweetId) return body;
+    if (body.status === "failed") throw new Error(body.message || "xQuick write action failed.");
+  }
+
+  throw new Error(`xQuick write action ${writeActionId} is still pending. Check /x/write-actions/${writeActionId}.`);
 }
 
 /**
@@ -129,27 +275,37 @@ async function createRwClientFromDb(): Promise<TwitterApiReadWrite | null> {
  * Returns null if no client configured or the post is unavailable / private.
  */
 export async function fetchTweetTextByIdViaOfficialApi(tweetId: string): Promise<string | null> {
-  const rw = await createRwClientFromDb();
-  if (!rw) return null;
+  const config = await getXQuickApiConfig();
+  const endpoint = getXQuickReadEndpoint();
+  if (!config || !endpoint) return null;
   try {
-    const res = await rw.v2.singleTweet(tweetId, {
-      "tweet.fields": ["note_tweet", "text"],
+    const url = joinUrl(config.baseUrl, endpoint).replace("{id}", encodeURIComponent(tweetId));
+    const res = await fetch(url, {
+      headers: buildXQuickHeaders(config.token),
+      signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
     });
-    const t = res.data;
-    if (!t) return null;
-    const note = (t as { note_tweet?: { text?: string } }).note_tweet?.text;
-    return (note && note.trim()) || t.text || null;
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    return (
+      getPathValue(data, process.env.XQUIK_TWEET_TEXT_PATH) ??
+      getPathValue(data, process.env.XQUICK_TWEET_TEXT_PATH) ??
+      data.text ??
+      data.data?.text ??
+      data.tweet?.text ??
+      data.fullText ??
+      null
+    );
   } catch {
     return null;
   }
 }
 
-/** Post a thread or single tweet to X. Tweet texts must be non-empty, ≤280 chars each. */
+/** Post a thread or single tweet to X through xQuick. Tweet texts must be non-empty, ≤280 chars each. */
 export async function postContentToX(texts: string[]): Promise<XPublishResult> {
-  const rw = await createRwClientFromDb();
-  if (!rw) {
+  const config = await getXQuickClientConfig();
+  if (!config) {
     throw new Error(
-      "X credentials missing: set X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET (OAuth 1.0a) or X_OAUTH2_ACCESS_TOKEN / X_USER_ACCESS_TOKEN, or connect X in Settings.",
+      "XQUICK_CONFIG_MISSING",
     );
   }
 
@@ -172,28 +328,19 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
     }
   }
 
-  // Step 4: resolve username (env var first to avoid paid API call)
-  let username: string | null = process.env.X_USERNAME || null;
-  if (!username) {
-    try {
-      username = (await rw.v2.me()).data.username ?? null;
-    } catch {
-      /* optional — URL will use 'i' as fallback handle */
-    }
-  }
+  // Step 4: resolve username from env/response to avoid extra API calls.
+  let username: string | null = config.account;
 
   // Step 5: post each tweet in reply chain
   const tweetIds: string[] = [];
   let lastId: string | undefined;
 
-  for (const text of tweets) {
-    const body: { text: string; reply?: { in_reply_to_tweet_id: string } } = {
-      text: text.slice(0, 280),
-    };
-    if (lastId) body.reply = { in_reply_to_tweet_id: lastId };
-    const sent = await rw.v2.tweet(body);
-    const id = sent.data?.id;
-    if (!id) throw new Error("X API returned no tweet id.");
+  for (let index = 0; index < tweets.length; index++) {
+    const payload = buildXQuickPostPayload(config.account, tweets[index].slice(0, 280), lastId);
+    const sent = await postViaXQuick(config, payload);
+    const id = extractXQuickPostId(sent);
+    if (!id) throw new Error("XQUICK_POST_ID_MISSING");
+    username = username || extractXQuickUsername(sent);
     tweetIds.push(id);
     lastId = id;
   }
@@ -253,8 +400,7 @@ export async function tryPublishPostById(
 }
 
 /**
- * Fetch public_metrics from X API for a posted post and upsert into the analytics table.
- * Adapted from postiz-app/x.provider.ts postAnalytics() + analytics().
+ * Fetch public metrics from xQuick if an analytics endpoint is configured.
  */
 export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
   const post = await storage.getPost(postId);
@@ -263,18 +409,24 @@ export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
   const tweetIds = (post.externalIds as any)?.x as string[] | undefined;
   if (!tweetIds || tweetIds.length === 0) return;
 
-  const rw = await createRwClientFromDb();
-  if (!rw) return;
+  const config = await getXQuickApiConfig();
+  const endpoint = getXQuickAnalyticsEndpoint();
+  if (!config || !endpoint) return;
 
   try {
     const start = Date.now();
-    const data = await rw.v2.tweets(tweetIds, {
-      "tweet.fields": ["public_metrics"],
+    const res = await fetch(joinUrl(config.baseUrl, endpoint), {
+      method: "POST",
+      headers: buildXQuickHeaders(config.token),
+      body: JSON.stringify({ ids: tweetIds }),
+      signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
     });
+    if (!res.ok) throw new Error(`xQuick analytics returned HTTP ${res.status}`);
+    const data = await res.json() as any;
 
-    // Log X API read call for budget tracking (1 read per tweet ID fetched)
+    // Log provider read call for budget tracking (1 read per post ID fetched)
     await storage.createAiUsageLog({
-      model: "x-api-v2",
+      model: "xquick-api",
       feature: "x_analytics_sync",
       inputTokens: tweetIds.length,
       outputTokens: 0,
@@ -283,9 +435,10 @@ export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
     }).catch(() => null); // non-critical
 
     // Aggregate metrics across all tweets in the thread
-    const totals = (data.data ?? []).reduce(
-      (acc, t) => {
-        const m = t.public_metrics;
+    const rows = data.data ?? data.posts ?? data.tweets ?? [];
+    const totals = rows.reduce(
+      (acc: { impressions: number; likes: number; retweets: number; replies: number; quotes: number; bookmarks: number; views: number }, t: any) => {
+        const m = t.public_metrics ?? t.metrics ?? t;
         if (!m) return acc;
         acc.impressions += m.impression_count ?? 0;
         acc.likes += m.like_count ?? 0;
@@ -336,13 +489,13 @@ export async function getXArticlePublishCapability(): Promise<XArticlePublishCap
   if (!status.canAttemptPost) {
     return {
       canPublish: false,
-      reason: "X account/token not connected for publishing.",
+      reason: "xQuick account/token not connected for publishing.",
       docsUrl: "https://docs.x.com/x-api/posts/create-post",
     };
   }
   return {
     canPublish: false,
-    reason: "Public X API contract for article publishing is not configured in this app yet.",
+    reason: "Article publishing is not configured in the xQuick adapter yet.",
     docsUrl: "https://docs.x.com/x-api/posts/create-post",
   };
 }

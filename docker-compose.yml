@@ -1,6 +1,8 @@
 version: "3.8"
 
-# Local development Postgres (persistent volume). For isolated Playwright E2E DB instead, see docker-compose.e2e.yml.
+# Docker Compose to run both Postgres database and the ContentForge application.
+# Start all services: docker compose up --build -d
+# Stop and clean up: docker compose down
 
 services:
   postgres:
@@ -20,6 +22,28 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: contentforge-app
+    restart: unless-stopped
+    ports:
+      - "3000:5000"
+    environment:
+      DATABASE_URL: postgresql://cfuser:cfpass@postgres:5432/contentforge
+      SESSION_SECRET: change-me-in-production
+      AI_API_KEY: ${AI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Pass through or fallback for optional configs
+      XQUIK_API_BASE_URL: ${XQUIK_API_BASE_URL:-https://xquik.com/api/v1}
+      XQUIK_API_KEY: ${XQUIK_API_KEY}
+      XQUIK_ACCOUNT: ${XQUIK_ACCOUNT}
+      XQUIK_ALLOW_WRITE_RETRIES: ${XQUIK_ALLOW_WRITE_RETRIES:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   contentforge_pg_data:

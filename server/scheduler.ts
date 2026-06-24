@@ -45,6 +45,10 @@ export function startSchedulers() {
 
         // Retry failed posts with exponential backoff
         if (p.status === "failed") {
+          if (process.env.XQUIK_ALLOW_WRITE_RETRIES !== "1") {
+            continue;
+          }
+
           const retryCount = (p as any).retryCount ?? 0;
           if (retryCount >= MAX_RETRIES) continue;
 

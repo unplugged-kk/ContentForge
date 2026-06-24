@@ -431,7 +431,7 @@ export async function registerRoutes(
 
       const logs = await storage.getAiUsageLogsAll(31);
       const xLogs = logs.filter(
-        (l) => l.model === "x-api-v2" && l.feature === "x_analytics_sync",
+        (l) => (l.model === "x-api-v2" || l.model === "xquick-api") && l.feature === "x_analytics_sync",
       );
 
       const readsThisMonth = xLogs
@@ -1767,7 +1767,7 @@ Each tweet under ${charLimit} characters.` },
     try {
       res.json({
         ...(await getXPostingConfigSummary()),
-        hint: "Posting needs OAuth 1.0a user keys (API key/secret + access token/secret) or an OAuth 2.0 user access token with tweet.write. X_CLIENT_ID / X_CLIENT_SECRET alone only identify the app.",
+        hint: "Posting uses xQuick. Set XQUIK_API_KEY and XQUIK_ACCOUNT (the connected X username/account ID in xQuick). XQUIK_API_BASE_URL defaults to https://xquik.com/api/v1.",
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -1792,39 +1792,40 @@ Each tweet under ${charLimit} characters.` },
       if (!platform || !accessToken) return res.status(400).json({ message: "Platform and access token are required." });
 
       if (platform === "x") {
+        const baseUrl = (process.env.XQUIK_API_BASE_URL || process.env.XQUICK_API_BASE_URL || "https://xquik.com/api/v1").replace(/\/+$/, "");
         try {
-          const verifyRes = await fetch("https://api.twitter.com/2/users/me", {
-            headers: { "Authorization": `Bearer ${accessToken}` },
+          const verifyRes = await fetch(`${baseUrl}/account`, {
+            headers: { "x-api-key": accessToken },
             signal: AbortSignal.timeout(10000),
           });
           if (verifyRes.ok) {
-            const userData = await verifyRes.json() as any;
+            const accountData = await verifyRes.json() as any;
             const account = await storage.upsertConnectedAccount({
               platform: "x",
-              username: userData.data?.username || username || "unknown",
-              displayName: userData.data?.name || username,
+              username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || accountData.xUsername || "pending_xquik_account",
+              displayName: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || accountData.xUsername || "xQuick",
               accessToken,
               isActive: true,
-              profileData: userData.data || {},
+              profileData: accountData || {},
             });
             return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
           } else {
             const account = await storage.upsertConnectedAccount({
               platform: "x",
-              username: username || "pending_verification",
+              username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || "pending_xquik_account",
               accessToken,
               isActive: true,
             });
-            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but could not verify with X API. Posting may not work until token is verified." });
+            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but could not verify with xQuick. Posting may not work until token is verified." });
           }
         } catch (e) {
           const account = await storage.upsertConnectedAccount({
             platform: "x",
-            username: username || "pending_verification",
+            username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || "pending_xquik_account",
             accessToken,
             isActive: true,
           });
-          return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but verification request failed. Check your network." });
+          return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but xQuick verification request failed. Check your network." });
         }
       }
 
@@ -1856,18 +1857,28 @@ Each tweet under ${charLimit} characters.` },
       if (!account) return res.status(404).json({ message: "Account not found" });
 
       if (account.platform === "x" && account.accessToken) {
+        const baseUrl = (process.env.XQUIK_API_BASE_URL || process.env.XQUICK_API_BASE_URL || "https://xquik.com/api/v1").replace(/\/+$/, "");
         try {
-          const testRes = await fetch("https://api.twitter.com/2/users/me", {
-            headers: { "Authorization": `Bearer ${account.accessToken}` },
+          const testRes = await fetch(`${baseUrl}/x/accounts`, {
+            headers: { "x-api-key": account.accessToken },
             signal: AbortSignal.timeout(10000),
           });
           if (testRes.ok) {
             const data = await testRes.json() as any;
-            return res.json({ success: true, username: data.data?.username, name: data.data?.name });
+            const matched = (data.accounts ?? []).find((a: any) =>
+              a.username === account.username || a.xUsername === account.username || a.id === account.username || a.xUserId === account.username
+            );
+            return res.json({
+              success: true,
+              username: matched?.username || matched?.xUsername || account.username,
+              health: matched?.health,
+              isActive: matched?.isActive,
+              note: matched ? "xQuick account found." : "xQuick API key is valid; configured X account was not found in /x/accounts.",
+            });
           }
-          return res.json({ success: false, error: "Token rejected by X API. Please reconnect." });
+          return res.json({ success: false, error: "Token rejected by xQuick. Please reconnect." });
         } catch (e) {
-          return res.json({ success: false, error: "Could not reach X API." });
+          return res.json({ success: false, error: "Could not reach xQuick API." });
         }
       }
 

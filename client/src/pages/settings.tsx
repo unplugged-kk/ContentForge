@@ -296,11 +296,11 @@ export default function SettingsPage() {
                 <AccountCard
                   platform="x"
                   label="X (Twitter)"
-                  description="Connect to publish directly to X"
+                  description="Connect xQuick to publish directly to X"
                   icon={SiX}
                   account={xAccount}
-                  helpUrl="https://developer.x.com/en/portal/dashboard"
-                  helpText="You need a Bearer Token from the X Developer Portal. Create a project and app, then generate a Bearer Token under 'Keys and tokens'."
+                  helpUrl="https://xquik.com"
+                  helpText="Use an xQuick API key and the X account username/account ID connected in the xQuick dashboard. The server also supports XQUIK_API_KEY and XQUIK_ACCOUNT env vars."
                 />
                 <AccountCard
                   platform="threads"
