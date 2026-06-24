@@ -1,0 +1,24 @@
+ALTER TABLE "ai_usage_log" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "analytics" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "articles" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "canned_responses" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "carousels" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "connected_accounts" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "context_vault" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "conversations" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "discovered_ideas" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "generated_images" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "ideas" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "messages" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "monitored_accounts" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "pillars" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "posts" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "reference_content" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "reference_posts" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "references" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "rss_sources" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "style_profiles" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "templates" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "tweets" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "viral_scores" ADD COLUMN "user_id" integer;--> statement-breakpoint
+ALTER TABLE "youtube_channels" ADD COLUMN "user_id" integer;

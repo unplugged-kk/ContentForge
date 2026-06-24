@@ -5,6 +5,7 @@ import { z } from "zod";
 
 export const pillars = pgTable("pillars", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   name: varchar("name", { length: 100 }).notNull(),
   description: text("description"),
   color: varchar("color", { length: 7 }),
@@ -12,6 +13,7 @@ export const pillars = pgTable("pillars", {
 
 export const posts = pgTable("posts", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   pillarId: integer("pillar_id"),
   postType: varchar("post_type", { length: 20 }).notNull(),
   tone: varchar("tone", { length: 20 }),
@@ -33,6 +35,7 @@ export const posts = pgTable("posts", {
 
 export const tweets = pgTable("tweets", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   postId: integer("post_id").notNull(),
   position: integer("position").notNull(),
   content: text("content").notNull(),
@@ -41,6 +44,7 @@ export const tweets = pgTable("tweets", {
 
 export const ideas = pgTable("ideas", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   title: varchar("title", { length: 280 }).notNull(),
   notes: text("notes"),
   pillarId: integer("pillar_id"),
@@ -50,6 +54,7 @@ export const ideas = pgTable("ideas", {
 
 export const templates = pgTable("templates", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   name: varchar("name", { length: 200 }).notNull(),
   pattern: text("pattern").notNull(),
   postType: varchar("post_type", { length: 20 }),
@@ -58,6 +63,7 @@ export const templates = pgTable("templates", {
 
 export const analytics = pgTable("analytics", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   postId: integer("post_id"),
   platform: varchar("platform", { length: 20 }),
   impressions: integer("impressions").default(0),
@@ -73,6 +79,7 @@ export const analytics = pgTable("analytics", {
 
 export const aiUsageLog = pgTable("ai_usage_log", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   model: varchar("model", { length: 100 }).notNull(),
   inputTokens: integer("input_tokens"),
   outputTokens: integer("output_tokens"),
@@ -84,12 +91,14 @@ export const aiUsageLog = pgTable("ai_usage_log", {
 
 export const conversations = pgTable("conversations", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   title: text("title").notNull(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
 export const messages = pgTable("messages", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   conversationId: integer("conversation_id").notNull(),
   role: text("role").notNull(),
   content: text("content").notNull(),
@@ -98,6 +107,7 @@ export const messages = pgTable("messages", {
 
 export const articles = pgTable("articles", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   postId: integer("post_id"),
   title: varchar("title", { length: 200 }).notNull(),
   subtitle: varchar("subtitle", { length: 300 }),
@@ -117,6 +127,7 @@ export const articles = pgTable("articles", {
 
 export const references = pgTable("references", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   sourceUrl: text("source_url"),
   sourceType: varchar("source_type", { length: 30 }),
   sourcePlatform: varchar("source_platform", { length: 30 }),
@@ -145,6 +156,7 @@ export const references = pgTable("references", {
 
 export const styleProfiles = pgTable("style_profiles", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   name: varchar("name", { length: 200 }).notNull(),
   sourceReferenceId: integer("source_reference_id"),
   styleJson: jsonb("style_json").notNull().default({}),
@@ -156,6 +168,7 @@ export const styleProfiles = pgTable("style_profiles", {
 
 export const referenceContent = pgTable("reference_content", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   referenceId: integer("reference_id"),
   postId: integer("post_id"),
   articleId: integer("article_id"),
@@ -165,6 +178,7 @@ export const referenceContent = pgTable("reference_content", {
 
 export const referencePosts = pgTable("reference_posts", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   referenceId: integer("reference_id"),
   postId: integer("post_id"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -172,6 +186,7 @@ export const referencePosts = pgTable("reference_posts", {
 
 export const discoveredIdeas = pgTable("discovered_ideas", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   rank: integer("rank"),
   title: varchar("title", { length: 500 }).notNull(),
   description: text("description"),
@@ -209,6 +224,7 @@ export const discoverySettings = pgTable("discovery_settings", {
 
 export const viralScores = pgTable("viral_scores", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   postId: integer("post_id"),
   articleId: integer("article_id"),
   version: integer("version").notNull().default(1),
@@ -222,6 +238,7 @@ export const viralScores = pgTable("viral_scores", {
 
 export const monitoredAccounts = pgTable("monitored_accounts", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   platform: varchar("platform", { length: 20 }).notNull(),
   username: varchar("username", { length: 100 }).notNull(),
   displayName: varchar("display_name", { length: 200 }),
@@ -232,6 +249,7 @@ export const monitoredAccounts = pgTable("monitored_accounts", {
 
 export const rssSources = pgTable("rss_sources", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   name: varchar("name", { length: 200 }).notNull(),
   feedUrl: text("feed_url").notNull(),
   category: varchar("category", { length: 50 }),
@@ -326,6 +344,7 @@ export const userProfile = pgTable("user_profile", {
 
 export const generatedImages = pgTable("generated_images", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   prompt: text("prompt").notNull(),
   revisedPrompt: text("revised_prompt"),
   imageUrl: text("image_url").notNull(),
@@ -350,6 +369,7 @@ export type InsertGeneratedImage = z.infer<typeof insertGeneratedImageSchema>;
 
 export const connectedAccounts = pgTable("connected_accounts", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   platform: varchar("platform", { length: 30 }).notNull(),
   username: varchar("username", { length: 200 }),
   displayName: varchar("display_name", { length: 300 }),
@@ -369,6 +389,7 @@ export type InsertConnectedAccount = z.infer<typeof insertConnectedAccountSchema
 // ── CONTEXT VAULT ─────────────────────────────────────────────────────────────
 export const contextVault = pgTable("context_vault", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   title: varchar("title", { length: 300 }).notNull(),
   content: text("content").notNull(),
   category: varchar("category", { length: 100 }),
@@ -386,6 +407,7 @@ export type InsertContextVaultItem = z.infer<typeof insertContextVaultSchema>;
 // ── CAROUSELS ─────────────────────────────────────────────────────────────────
 export const carousels = pgTable("carousels", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   title: varchar("title", { length: 300 }).notNull(),
   pillarId: integer("pillar_id"),
   slides: jsonb("slides").default([]),
@@ -402,6 +424,7 @@ export type InsertCarousel = z.infer<typeof insertCarouselSchema>;
 // ── CANNED RESPONSES ───────────────────────────────────────────────────────────
 export const cannedResponses = pgTable("canned_responses", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   title: varchar("title", { length: 200 }).notNull(),
   content: text("content").notNull(),
   category: varchar("category", { length: 50 }).default("general"),
@@ -418,6 +441,7 @@ export type InsertCannedResponse = z.infer<typeof insertCannedResponseSchema>;
 // ── YOUTUBE CHANNEL CONNECTOR ─────────────────────────────────────────────────
 export const youtubeChannels = pgTable("youtube_channels", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   channelId: varchar("channel_id", { length: 50 }).notNull().unique(),
   channelName: varchar("channel_name", { length: 200 }),
   channelUrl: text("channel_url"),
