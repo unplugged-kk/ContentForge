@@ -14,6 +14,7 @@ import { globalLimiter } from "./middleware/rateLimit";
 import { auditLog } from "./middleware/audit";
 import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
+import { sessionUser } from "./middleware/userContext";
 
 const app = express();
 const httpServer = createServer(app);
@@ -145,6 +146,7 @@ app.use((req, res, next) => {
   // session middleware (so they can read req.session) but BEFORE routes are
   // registered, so all routes in registerRoutes inherit the protection.
   app.use(auditLog);
+  app.use(sessionUser);
   app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
   app.use(verifyCsrf);
 
