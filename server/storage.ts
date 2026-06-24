@@ -26,6 +26,36 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, gte } from "drizzle-orm";
+import { decryptSecret, ensureEncrypted, isEncrypted } from "./middleware/crypto";
+
+/**
+ * Transparent decryption helper for connected_accounts rows. Stored values
+ * carry the `enc:v1:` prefix; legacy plaintext rows (pre-encryption) pass
+ * through `decryptSecret`'s no-prefix branch and come back unchanged. Routes
+ * always see plaintext tokens.
+ */
+function decryptConnectedAccount<T extends ConnectedAccount | undefined>(row: T): T {
+  if (!row) return row;
+  return {
+    ...row,
+    accessToken: row.accessToken && isEncrypted(row.accessToken)
+      ? safeDecrypt(row.accessToken, "accessToken")
+      : row.accessToken,
+    refreshToken: row.refreshToken && isEncrypted(row.refreshToken)
+      ? safeDecrypt(row.refreshToken, "refreshToken")
+      : row.refreshToken,
+  };
+}
+
+function safeDecrypt(stored: string, label: string): string {
+  try {
+    return decryptSecret(stored);
+  } catch (err: any) {
+    // Surface a clear error rather than returning a half-decrypted blob.
+    console.error(`[storage] failed to decrypt ${label}:`, err.message);
+    throw new Error(`Failed to decrypt stored ${label}. ENCRYPTION_KEY may have rotated.`);
+  }
+}
 
 export interface IStorage {
   getPillars(): Promise<Pillar[]>;
@@ -542,22 +572,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getConnectedAccounts(): Promise<ConnectedAccount[]> {
-    return db.select().from(connectedAccounts).orderBy(connectedAccounts.platform);
+    const rows = await db.select().from(connectedAccounts).orderBy(connectedAccounts.platform);
+    return rows.map(decryptConnectedAccount);
   }
 
   async getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined> {
     const [result] = await db.select().from(connectedAccounts).where(eq(connectedAccounts.platform, platform));
-    return result;
+    return result ? decryptConnectedAccount(result) : undefined;
   }
 
   async upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount> {
-    const existing = await this.getConnectedAccount(account.platform);
-    if (existing) {
-      const [result] = await db.update(connectedAccounts).set(account).where(eq(connectedAccounts.id, existing.id)).returning();
-      return result;
+    const encrypted: InsertConnectedAccount = {
+      ...account,
+      // Encrypt at the storage boundary. isEncrypted() guards against double-
+      // encryption if a caller already passed through ensureEncrypted().
+      accessToken: ensureEncrypted(account.accessToken) ?? undefined,
+      refreshToken: ensureEncrypted(account.refreshToken) ?? undefined,
+    };
+    const existing = await db
+      .select({ id: connectedAccounts.id })
+      .from(connectedAccounts)
+      .where(eq(connectedAccounts.platform, encrypted.platform))
+      .limit(1);
+    if (existing.length > 0) {
+      const [result] = await db
+        .update(connectedAccounts)
+        .set(encrypted)
+        .where(eq(connectedAccounts.id, existing[0].id))
+        .returning();
+      return decryptConnectedAccount(result);
     }
-    const [result] = await db.insert(connectedAccounts).values(account).returning();
-    return result;
+    const [result] = await db.insert(connectedAccounts).values(encrypted).returning();
+    return decryptConnectedAccount(result);
   }
 
   async deleteConnectedAccount(id: number): Promise<void> {
