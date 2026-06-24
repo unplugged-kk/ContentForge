@@ -18,17 +18,35 @@ import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticle
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
+import { authLimiter, publishLimiter } from "./middleware/rateLimit";
+import DOMPurify from "isomorphic-dompurify";
+import { upload, validateImageBuffer, validateUploadedImage } from "./middleware/upload";
 
-const uploadsDir = path.join(process.cwd(), "uploads");
+/**
+ * Sanitize HTML before persisting. The Tiptap editor and AI generation both
+ * produce HTML that the client later renders with dangerouslySetInnerHTML.
+ * Anything that touches the DB needs to pass through here first.
+ */
+function sanitizeHtml(input: unknown): string {
+  if (typeof input !== "string") return "";
+  // Allow common formatting tags + links/headings. Strip <script>, <iframe>,
+  // inline event handlers, and javascript: URLs.
+  return DOMPurify.sanitize(input, {
+    ALLOWED_TAGS: [
+      "p", "br", "strong", "em", "u", "s", "code", "pre", "blockquote",
+      "h1", "h2", "h3", "h4", "h5", "h6",
+      "ul", "ol", "li",
+      "a", "img",
+      "table", "thead", "tbody", "tr", "th", "td",
+      "span", "div",
+    ],
+    ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "id", "target", "rel"],
+    ALLOW_DATA_ATTR: false,
+  });
+}
+
+const uploadsDir = process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: uploadsDir,
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-});
 
 function sessionUserId(req: { session?: { userId?: number } }): number {
   return req.session?.userId ?? 1;
@@ -179,9 +197,9 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/posts/:id/publish", async (req, res) => {
+  app.post("/api/posts/:id/publish", publishLimiter, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
       const post = await storage.getPost(id);
       if (!post) return res.status(404).json({ message: "Post not found" });
@@ -658,6 +676,7 @@ export async function registerRoutes(
         pillarId: z.union([z.number(), z.string().transform(Number), z.null()]).optional().nullable(),
         coverImageUrl: z.string().optional().nullable(),
       }).parse(req.body);
+      if (body.contentHtml) body.contentHtml = sanitizeHtml(body.contentHtml);
       const result = await storage.createArticle(body as any);
       res.status(201).json(result);
     } catch (err: any) {
@@ -668,6 +687,7 @@ export async function registerRoutes(
 
   app.put("/api/articles/:id", async (req, res) => {
     try {
+      if (req.body?.contentHtml) req.body.contentHtml = sanitizeHtml(req.body.contentHtml);
       const result = await storage.updateArticle(parseInt(req.params.id), req.body);
       if (!result) return res.status(404).json({ message: "Article not found" });
       res.json(result);
@@ -679,9 +699,13 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/articles/upload-image", upload.single("image"), (req, res) => {
-    if (!req.file) return res.status(400).json({ message: "No image uploaded" });
-    res.json({ url: `/uploads/${req.file.filename}` });
+  app.post("/api/articles/upload-image", upload.single("image"), async (req, res) => {
+    try {
+      await validateUploadedImage(req);
+      res.json({ url: `/uploads/${req.file!.filename}` });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message || "Upload validation failed" });
+    }
   });
 
   app.post("/api/articles/:id/generate-outline", async (req, res) => {
@@ -850,7 +874,7 @@ export async function registerRoutes(
       const article = await storage.createArticle({
         title: post.tweets[0]?.content.substring(0, 100) || "Expanded Article",
         contentJson: {},
-        contentHtml: content.trim(),
+        contentHtml: sanitizeHtml(content.trim()),
         wordCount,
         estimatedReadMinutes: Math.ceil(wordCount / 200),
         pillarId: post.pillarId,
@@ -873,9 +897,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/articles/:id/publish", async (req, res) => {
+  app.post("/api/articles/:id/publish", publishLimiter, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid article id" });
       const article = await storage.getArticle(id);
       if (!article) return res.status(404).json({ message: "Article not found" });
@@ -1483,6 +1507,10 @@ Return JSON:
     try {
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) return res.status(400).json({ message: "Upload at least one screenshot." });
+      // Validate every uploaded file's magic number against its declared
+      // extension BEFORE forwarding bytes to the AI ingest pipeline. A failed
+      // validation rejects the whole batch.
+      for (const f of files) await validateImageBuffer(f);
 
       const imageContents = await Promise.all(files.map(async (f) => {
         const imageData = fs.readFileSync(f.path);
@@ -2254,7 +2282,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     res.json({ googleEnabled });
   });
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
       const { email, password, name } = req.body;
       if (!email || !password || !name) return res.status(400).json({ message: "Email, password, and name are required" });
@@ -2270,7 +2298,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) return res.status(400).json({ message: "Email and password are required" });

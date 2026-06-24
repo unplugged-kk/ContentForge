@@ -435,3 +435,26 @@ export const youtubeChannels = pgTable("youtube_channels", {
 export const insertYoutubeChannelSchema = createInsertSchema(youtubeChannels).omit({ id: true, createdAt: true });
 export type YoutubeChannel = typeof youtubeChannels.$inferSelect;
 export type InsertYoutubeChannel = z.infer<typeof insertYoutubeChannelSchema>;
+
+// ── AUDIT LOG ─────────────────────────────────────────────────────────────────
+// Append-only log of state-changing HTTP requests. Used by server/middleware/audit.ts.
+// userId is nullable because audit rows must survive unauthenticated 401/403 paths.
+export const auditLogs = pgTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  method: varchar("method", { length: 10 }).notNull(),
+  path: varchar("path", { length: 512 }).notNull(),
+  action: varchar("action", { length: 50 }).notNull(),
+  resourceType: varchar("resource_type", { length: 50 }),
+  resourceId: varchar("resource_id", { length: 100 }),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: text("user_agent"),
+  bodyHash: varchar("body_hash", { length: 64 }),
+  statusCode: integer("status_code").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;

@@ -9,12 +9,21 @@ import { pool, db } from "./db";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
 import { existsSync } from "fs";
+import { securityHeaders } from "./middleware/security";
+import { globalLimiter } from "./middleware/rateLimit";
+import { auditLog } from "./middleware/audit";
+import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
+import { errorHandler } from "./middleware/errorHandler";
 
 const app = express();
 const httpServer = createServer(app);
 
 // Trust Railway's reverse proxy so req.secure and cookies work correctly
 app.set("trust proxy", 1);
+
+// Security headers must be FIRST so they are set on every response, including
+// error responses and before any other middleware short-circuits.
+app.use(securityHeaders);
 
 declare module "http" {
   interface IncomingMessage {
@@ -31,6 +40,10 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+// Global rate limit applies only to /api/* (see rateLimit.skip). Placed early
+// so abusive clients are dropped before they can hit expensive handlers.
+app.use(globalLimiter);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -128,6 +141,13 @@ app.use((req, res, next) => {
   const { seedDatabase } = await import("./seed");
   await seedDatabase().catch((err) => console.error("Seed error:", err));
 
+  // Audit log + CSRF token endpoint + CSRF verification are applied AFTER
+  // session middleware (so they can read req.session) but BEFORE routes are
+  // registered, so all routes in registerRoutes inherit the protection.
+  app.use(auditLog);
+  app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
+  app.use(verifyCsrf);
+
   await registerRoutes(httpServer, app);
 
   const { startSchedulers } = await import("./scheduler");
@@ -139,18 +159,10 @@ app.use((req, res, next) => {
     console.warn(`[x] X_THREAD_FINISHER is ${finisher.length} chars (max 275). It will be truncated at publish time.`);
   }
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    return res.status(status).json({ message });
-  });
+  // Standardized error handler: logs full error server-side, returns
+  // sanitized message to client. Replaces the prior inline handler so stack
+  // traces and internal details never leak on 5xx paths.
+  app.use(errorHandler);
 
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
