@@ -176,6 +176,12 @@ app.use((req, res, next) => {
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 
+  // Durable content scheduler: materializes due Occurrences and enqueues
+  // Publications onto pg-boss. It never publishes inline. Correctness state is
+  // in PostgreSQL, so overlapping ticks or a restart cannot double-dispatch.
+  const { startContentScheduler } = await import("./content/service");
+  startContentScheduler();
+
   // Startup validation for X_THREAD_FINISHER
   const finisher = process.env.X_THREAD_FINISHER?.trim();
   if (finisher && finisher.length > 275) {

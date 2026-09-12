@@ -163,3 +163,31 @@ export {
   createDefaultContentRouter,
   type ContentApiDeps,
 } from "./routes";
+
+// ── Phase 1.5 additions ───────────────────────────────────────────────────────
+export { createHumanEditRevision, getArtifactHistory } from "./artifact";
+export { composeGenerationPolicyInput, type ComposePolicyOverrides } from "./policy";
+export {
+  archiveTemplate,
+  archiveVoice,
+  createTemplate,
+  createVoice,
+  listTemplateRevisions,
+  listVoiceRevisions,
+  reviseTemplate,
+  reviseVoice,
+  AuthoringInputError,
+  type AuthoringDeps,
+  type TemplateInput,
+  type TemplatePatch,
+  type VoiceInput,
+  type VoicePatch,
+} from "./authoring";
+export {
+  declaredVariables,
+  renderTemplateStructure,
+  templatePlaceholders,
+  undeclaredVariables,
+  type RenderedTemplate,
+} from "./templateRender";
+export { startContentScheduler } from "./service";

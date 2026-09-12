@@ -179,6 +179,9 @@ async function startApp() {
       SESSION_SECRET: "e2e-live-secret",
       SESSION_COOKIE_SECURE: "0",
       DISABLE_CRON: "1",
+      // ...but the durable content scheduler is enabled explicitly, so the real
+      // periodic tick (not just the HTTP dispatch endpoint) is exercised.
+      CONTENT_SCHEDULER_ENABLED: "1",
       CONTENTFORGE_E2E_SERVER: "1",
       // External boundaries are doubled at the transport level only: the model
       // gateway (AI_BASE_URL) and xQuick (XQUICK_API_BASE_URL) point at the
@@ -950,7 +953,8 @@ const observed = {};
     );
     const art = await http("GET", `/api/artifacts/${row.artifactId}`);
     assert(art.body.readiness === "draft", `readiness=${art.body.readiness}`);
-    return `job ${res.body.id} → artifact ${row.artifactId} (policy ${res.body.policyId})`;
+    observed.voiceJobId = res.body.id;
+    return withDetail({ id: res.body.id }, `job ${res.body.id} → artifact ${row.artifactId} (policy ${res.body.policyId})`);
   });
 
   await check("a template flows into the policy and constrains the generation", async () => {
@@ -967,7 +971,8 @@ const observed = {};
       },
       { timeoutMs: 90_000, intervalMs: 300, label: "templated generation" },
     );
-    return `job ${res.body.id} → artifact ${row.artifactId} (template ${templateId})`;
+    observed.templateJobId = res.body.id;
+    return withDetail({ id: res.body.id }, `job ${res.body.id} → artifact ${row.artifactId} (template ${templateId})`);
   });
 
   const threadArtifact = await check("the same Story produces an x_thread Artifact (multi-format)", async () => {
@@ -1100,6 +1105,174 @@ const observed = {};
     );
     assert(Number.isInteger(row.artifactId), "no artifact after restart");
     return `job ${jobId} completed after restart → artifact ${row.artifactId}`;
+  });
+
+  // ── 6c. PHASE 1.5 RED ARROWS ────────────────────────────────────────────────
+  phase("Phase 1.5: artifact revisions, version pinning, chat idempotency, scheduler tick");
+
+  const revisionChain = await check("generate → approve rev1 → human-edit rev2 (rev1 untouched, rev2 unapproved)", async () => {
+    // A fresh Opportunity so the first artifact of this chain has no predecessor.
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "revision workflow probe",
+      objective: "prove artifact revisions",
+      format: "x_post",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id, voiceId });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "revision generation" },
+    );
+    const v1 = done.artifactId;
+
+    await http("POST", `/api/artifacts/${v1}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${v1}/approve`, {});
+    assert(approved.body.readiness === "approved", `rev1 readiness=${approved.body.readiness}`);
+    const payloadV1 = JSON.stringify(approved.body.payload);
+
+    const rev = await http("POST", `/api/artifacts/${v1}/revise`, {
+      baseArtifactId: v1,
+      payload: { text: "A hand-edited post body." },
+      attributionReason: "human edit",
+    });
+    assert(rev.status === 201, `revise ${rev.status}: ${rev.text}`);
+    assert(rev.body.supersedesId === v1, "supersedes_id must point at revision 1");
+    assert(rev.body.readiness === "draft", "approval must not be carried to the new revision");
+    assert(rev.body.provenance === "human_edit", `provenance=${rev.body.provenance}`);
+
+    const v1After = await http("GET", `/api/artifacts/${v1}`);
+    assert(v1After.body.readiness === "approved", "revision 1 must stay approved");
+    assert(JSON.stringify(v1After.body.payload) === payloadV1, "revision 1 content must be immutable");
+
+    const history = await http("GET", `/api/artifacts/${rev.body.id}/history`);
+    assert(Array.isArray(history.body) && history.body.length === 2, `history length ${history.body?.length}`);
+    assert(history.body[0].id === v1 && history.body[1].id === rev.body.id, "history chain order");
+
+    const stale = await http("POST", `/api/artifacts/${v1}/revise`, {
+      baseArtifactId: v1 + 999_999,
+      payload: { text: "stale" },
+    });
+    assert(stale.status === 409, `a stale base must be 409, got ${stale.status}`);
+
+    return withDetail({ v1, v2: rev.body.id }, `rev1 ${v1} approved → rev2 ${rev.body.id} draft (chain of 2)`);
+  });
+  const revisionV1 = revisionChain?.v1;
+  const revisionV2 = revisionChain?.v2;
+
+  await check("the real periodic scheduler tick enqueues and publishes revision 2", async () => {
+    await http("POST", `/api/artifacts/${revisionV2}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${revisionV2}/approve`, {});
+    assert(approved.body.readiness === "approved", `rev2 readiness=${approved.body.readiness}`);
+
+    const sched = await http("POST", "/api/schedules", { artifactId: revisionV2 });
+    assert(sched.status === 201, `schedule ${sched.status}: ${sched.text}`);
+
+    // Deliberately NOT calling /publications/dispatch: the cron tick must do it.
+    const publication = await waitFor(
+      async () => {
+        const rows = await q("select id from publications where schedule_id = $1", [sched.body.id]);
+        return rows.length > 0 ? rows[0] : false;
+      },
+      { timeoutMs: 120_000, intervalMs: 2_000, label: "content scheduler cron tick" },
+    );
+
+    const published = await waitFor(
+      async () => {
+        const res = await http("GET", `/api/publications/${publication.id}`);
+        if (res.body.state === "published") return res.body;
+        if (res.body.state === "failed") throw new Error(`publication failed: ${res.body.lastError}`);
+        return false;
+      },
+      { timeoutMs: 60_000, intervalMs: 500, label: "publication run" },
+    );
+    assert(published.artifactId === revisionV2, "publication must pin revision 2");
+    assert(published.artifactId !== revisionV1, "the old revision must not be the one published");
+    assert(published.result?.outcome === "published", "no published Result");
+    return `cron tick → publication ${publication.id} → published (revision ${revisionV2})`;
+  });
+
+  await check("a template revision does not change an existing GenerationJob's snapshot", async () => {
+    const before = await http("GET", `/api/generation-jobs/${observed.templateJobId}`);
+    const snapshotBefore = JSON.stringify(before.body.policySnapshot);
+
+    const revised = await http("POST", `/api/templates/${templateId}/revise`, {
+      instructions: "even tighter",
+      constraints: { maxCharacters: 200 },
+    });
+    assert(revised.status === 201, `revise ${revised.status}: ${revised.text}`);
+    assert(revised.body.version === 2, `version=${revised.body.version}`);
+    assert(revised.body.templateKey, "revision must keep the template key");
+
+    const after = await http("GET", `/api/generation-jobs/${observed.templateJobId}`);
+    assert(
+      JSON.stringify(after.body.policySnapshot) === snapshotBefore,
+      "editing a template must not change an existing job's frozen request",
+    );
+
+    const revisions = await http("GET", `/api/templates/${templateId}/revisions`);
+    assert(revisions.body.length === 2, `expected 2 template revisions, got ${revisions.body.length}`);
+    const archived = await http("POST", `/api/templates/${revised.body.id}/archive`, {});
+    assert(archived.body.status === "archived", "archive is a lifecycle flag");
+    return `template v2 created and archived; job ${observed.templateJobId} snapshot unchanged`;
+  });
+
+  await check("a voice revision does not change an existing GenerationJob's snapshot", async () => {
+    const before = await http("GET", `/api/generation-jobs/${observed.voiceJobId}`);
+    const snapshotBefore = JSON.stringify(before.body.policySnapshot);
+
+    const revised = await http("POST", `/api/voices/${voiceId}/revise`, {
+      tone: "warmer, more reflective",
+    });
+    assert(revised.status === 201, `revise ${revised.status}: ${revised.text}`);
+    assert(revised.body.version === 2, `version=${revised.body.version}`);
+
+    const after = await http("GET", `/api/generation-jobs/${observed.voiceJobId}`);
+    assert(
+      JSON.stringify(after.body.policySnapshot) === snapshotBefore,
+      "editing a voice must not change an existing job's frozen request",
+    );
+    return `voice v2 created; job ${observed.voiceJobId} snapshot unchanged`;
+  });
+
+  await check("a duplicate chat request is idempotent; an explicit regeneration is not", async () => {
+    const key = `${RUN}-chat-idem`;
+    const first = await http("POST", "/api/generation/chat", {
+      message: "write about scheduler plugins",
+      idempotencyKey: key,
+    });
+    assert(first.status === 201, `chat ${first.status}: ${first.text}`);
+    assert(first.body.reused === false, "first request is not a reuse");
+
+    const duplicate = await http("POST", "/api/generation/chat", {
+      message: "write about scheduler plugins",
+      idempotencyKey: key,
+    });
+    assert(duplicate.body.reused === true, "the duplicate must be reported as reused");
+    assert(duplicate.body.opportunity.id === first.body.opportunity.id, "duplicate created a new Opportunity");
+    assert(duplicate.body.generationJobId === first.body.generationJobId, "duplicate created a new GenerationJob");
+
+    const regen = await http("POST", "/api/generation/chat", {
+      message: "write about scheduler plugins",
+      idempotencyKey: key,
+      regenerate: true,
+    });
+    assert(regen.body.opportunity.id === first.body.opportunity.id, "regeneration must stay on the same Opportunity");
+    assert(regen.body.generationJobId !== first.body.generationJobId, "regeneration must create a new GenerationJob");
+
+    const jobs = await q("select count(*)::int c from generation_jobs where opportunity_id = $1", [
+      first.body.opportunity.id,
+    ]);
+    assert(jobs[0].c === 2, `expected 2 jobs for the chat opportunity, got ${jobs[0].c}`);
+    return `idempotent (job ${first.body.generationJobId}) then regenerated (job ${regen.body.generationJobId})`;
   });
 
   // ── 7. TRANSIENT RETRY SUCCESS (awaited) ────────────────────────────────────

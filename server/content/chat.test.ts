@@ -176,6 +176,7 @@ describe("chat-to-post", () => {
       "correlationId",
       "generationJobId",
       "opportunity",
+      "reused",
       "storyCreated",
       "storyId",
     ]);

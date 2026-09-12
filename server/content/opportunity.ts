@@ -57,6 +57,8 @@ export const createOpportunitySchema = z.object({
   proposer: z.enum(["human", "autonomous"]).default("human"),
   score: z.number().min(-999).max(999).optional(),
   scoreBreakdown: z.record(z.unknown()).optional(),
+  /** Durable idempotency for chat-originated Opportunities. */
+  chatKey: z.string().trim().min(1).max(200).optional(),
 });
 
 export type CreateOpportunityInput = z.input<typeof createOpportunitySchema>;
@@ -149,6 +151,7 @@ export async function createOpportunityFromStory(
     score: body.score === undefined ? null : String(body.score),
     scoreBreakdown: body.scoreBreakdown ?? {},
     proposer: body.proposer,
+    chatKey: body.chatKey ?? null,
   });
 }
 

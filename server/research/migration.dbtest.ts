@@ -92,7 +92,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 42, `expected 42 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 9, "all nine migrations recorded");
+      assert.equal(await migrationCount(pool), 11, "all eleven migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -174,12 +174,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0008 without a db:push.
+      // The forward migration must apply 0003-0010 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 42, `expected 42 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 9, "0003-0008 recorded after upgrade");
+      assert.equal(await migrationCount(pool), 11, "0003-0010 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");

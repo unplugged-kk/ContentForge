@@ -678,6 +678,12 @@ export const opportunities = pgTable(
     scoreBreakdown: jsonb("score_breakdown").$type<Record<string, unknown>>().notNull().default({}),
     /** human | autonomous — who proposed it (process treats both identically). */
     proposer: varchar("proposer", { length: 20 }).notNull().default("human"),
+    /**
+     * Durable idempotency for chat-to-post: a repeated conversational request
+     * (same key) reuses this Opportunity instead of creating a parallel one.
+     * NULL for everything that did not originate from chat.
+     */
+    chatKey: varchar("chat_key", { length: 200 }),
     killReason: text("kill_reason"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -685,6 +691,7 @@ export const opportunities = pgTable(
   (table) => [
     index("opportunities_story_idx").on(table.storyId),
     index("opportunities_status_idx").on(table.status),
+    uniqueIndex("opportunities_chat_key_uq").on(table.chatKey),
   ],
 );
 
@@ -701,6 +708,9 @@ export const voices = pgTable(
   {
     id: serial("id").primaryKey(),
     userId: integer("user_id"),
+    /** Stable logical identity; revisions increment `version` (never mutate). */
+    voiceKey: varchar("voice_key", { length: 200 }),
+    version: integer("version").notNull().default(1),
     name: varchar("name", { length: 200 }).notNull(),
     description: text("description"),
     /** e.g. "technical, direct, no hype" */
@@ -719,7 +729,10 @@ export const voices = pgTable(
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   },
-  (table) => [index("voices_status_idx").on(table.status)],
+  (table) => [
+    uniqueIndex("voices_key_version_uq").on(table.voiceKey, table.version),
+    index("voices_status_idx").on(table.status),
+  ],
 );
 
 /**
@@ -734,6 +747,9 @@ export const contentTemplates = pgTable(
   {
     id: serial("id").primaryKey(),
     userId: integer("user_id"),
+    /** Stable logical identity; revisions increment `version` (never mutate). */
+    templateKey: varchar("template_key", { length: 200 }),
+    version: integer("version").notNull().default(1),
     name: varchar("name", { length: 200 }).notNull(),
     description: text("description"),
     supportedFormats: text("supported_formats").array().default(sql`'{}'::text[]`),
@@ -751,7 +767,10 @@ export const contentTemplates = pgTable(
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   },
-  (table) => [index("content_templates_status_idx").on(table.status)],
+  (table) => [
+    uniqueIndex("content_templates_key_version_uq").on(table.templateKey, table.version),
+    index("content_templates_status_idx").on(table.status),
+  ],
 );
 
 /**
@@ -908,6 +927,8 @@ export const schedules = pgTable(
   (table) => [
     index("schedules_artifact_idx").on(table.artifactId),
     index("schedules_status_idx").on(table.status),
+    /** Drives the scheduler's due-schedule scan (status + start_at). */
+    index("schedules_due_idx").on(table.status, table.startAt),
   ],
 );
 
@@ -933,6 +954,8 @@ export const scheduleOccurrences = pgTable(
       table.occurrenceTime,
     ),
     index("schedule_occurrences_status_idx").on(table.status),
+    /** Drives the scheduler's due-occurrence scan (status + occurrence_time). */
+    index("schedule_occurrences_due_idx").on(table.status, table.occurrenceTime),
   ],
 );
 

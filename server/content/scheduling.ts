@@ -157,21 +157,32 @@ export async function dispatchDueOccurrences(
 
   const due = await deps.content.listDueOccurrences(now, limit);
   for (const occurrence of due) {
+    // Claim the occurrence first (compare-and-set), so of two overlapping
+    // scheduler ticks exactly one proceeds. `enqueued` rows are re-processed
+    // (not re-claimed) so a crash before enqueue self-heals.
+    if (occurrence.status === "pending") {
+      const claimed = await deps.content.markOccurrenceStatusIf(
+        occurrence.id,
+        "pending",
+        "enqueued",
+      );
+      if (!claimed) continue;
+    }
+
     const publication = await ensurePublicationForOccurrence(occurrence, deps);
+    // Only the caller that actually created the Publication enqueues it; the
+    // UNIQUE (schedule × occurrence × artifact revision) key is the arbiter.
     if (!publication) continue;
 
     const enqueued = await deps.enqueuePublication(publication);
-    if (enqueued) {
-      result.enqueued += 1;
-      await deps.content.markOccurrenceStatus(occurrence.id, "enqueued");
-    }
+    if (enqueued) result.enqueued += 1;
     result.publications.push(publication);
   }
 
   return result;
 }
 
-/** Create (idempotently) the Publication that binds this occurrence. */
+/** Create the Publication that binds this occurrence (returns it only when created). */
 async function ensurePublicationForOccurrence(
   occurrence: ScheduleOccurrence,
   deps: DispatchDeps,
@@ -199,7 +210,8 @@ async function ensurePublicationForOccurrence(
     correlationId: randomUUID(),
   });
 
-  return created || publication.state !== "published" ? publication : undefined;
+  // Not created → another tick already produced it (it enqueues, not us).
+  return created ? publication : undefined;
 }
 
 export type { Artifact, Schedule, ScheduleOccurrence };

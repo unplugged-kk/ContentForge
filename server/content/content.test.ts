@@ -323,6 +323,8 @@ describe("generation policy", () => {
       getVoice: async () => ({ id: 1, name: "Direct", tone: "technical", vocabulary: [], sentenceStyle: null, formatting: {}, doRules: ["be concrete"], dontRules: [], examples: [], status: "active" }),
       getContentTemplate: async () => undefined,
       listGenerationPolicies: async () => created as never,
+      getGenerationPolicyBySpecHash: async (hash: string) =>
+        (created as Array<Record<string, unknown>>).find((p) => p.specHash === hash) as never,
       nextPolicyVersion: async () => created.length + 1,
       findOrCreateGenerationPolicy: async (row: Record<string, unknown>) => {
         const policy = { ...row, id: created.length + 1 };

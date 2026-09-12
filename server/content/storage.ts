@@ -9,7 +9,7 @@
  * Behind an interface so services are testable without a database.
  */
 
-import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -57,6 +57,8 @@ export interface InsertOpportunityRow {
   score: string | null;
   scoreBreakdown: JsonRecord;
   proposer: string;
+  /** Durable idempotency for chat-to-post (NULL for non-chat opportunities). */
+  chatKey?: string | null;
 }
 
 // ── GenerationJob ─────────────────────────────────────────────────────────────
@@ -139,6 +141,8 @@ export interface InsertResultRow {
 // ── creation intelligence: voices / templates / policies ─────────────────────
 export interface InsertVoiceRow {
   userId?: number | null;
+  voiceKey?: string | null;
+  version?: number;
   name: string;
   description?: string | null;
   tone?: string | null;
@@ -152,6 +156,8 @@ export interface InsertVoiceRow {
 
 export interface InsertTemplateRow {
   userId?: number | null;
+  templateKey?: string | null;
+  version?: number;
   name: string;
   description?: string | null;
   supportedFormats?: string[];
@@ -183,18 +189,28 @@ export interface ContentStoragePort {
   insertVoice(row: InsertVoiceRow): Promise<Voice>;
   getVoice(id: number): Promise<Voice | undefined>;
   listVoices(): Promise<Voice[]>;
+  listVoicesByKey(voiceKey: string): Promise<Voice[]>;
+  nextVoiceVersion(voiceKey: string): Promise<number>;
+  setVoiceStatus(id: number, status: string): Promise<Voice | undefined>;
 
   insertContentTemplate(row: InsertTemplateRow): Promise<ContentTemplate>;
   getContentTemplate(id: number): Promise<ContentTemplate | undefined>;
   listContentTemplates(): Promise<ContentTemplate[]>;
+  listContentTemplatesByKey(templateKey: string): Promise<ContentTemplate[]>;
+  nextTemplateVersion(templateKey: string): Promise<number>;
+  setContentTemplateStatus(id: number, status: string): Promise<ContentTemplate | undefined>;
 
   findOrCreateGenerationPolicy(row: InsertPolicyRow): Promise<{ policy: GenerationPolicy; created: boolean }>;
   getGenerationPolicy(id: number): Promise<GenerationPolicy | undefined>;
+  /** Indexed lookup by the content-addressed spec identity (no table scan). */
+  getGenerationPolicyBySpecHash(specHash: string): Promise<GenerationPolicy | undefined>;
   listGenerationPolicies(): Promise<GenerationPolicy[]>;
   nextPolicyVersion(policyKey: string): Promise<number>;
 
   insertOpportunity(row: InsertOpportunityRow): Promise<Opportunity>;
   getOpportunity(id: number): Promise<Opportunity | undefined>;
+  /** Durable chat idempotency lookup. */
+  getOpportunityByChatKey(chatKey: string): Promise<Opportunity | undefined>;
   listOpportunitiesByStory(storyId: number): Promise<Opportunity[]>;
   updateOpportunityStatus(
     id: number,
@@ -204,6 +220,8 @@ export interface ContentStoragePort {
 
   claimGenerationJob(row: InsertGenerationJobRow): Promise<ClaimGenerationJobResult>;
   getGenerationJob(id: number): Promise<GenerationJob | undefined>;
+  /** Most recent attempt for an Opportunity (chat idempotency reporting). */
+  getLatestGenerationJobForOpportunity(opportunityId: number): Promise<GenerationJob | undefined>;
   markGenerationRunning(id: number): Promise<void>;
   markGenerationSucceeded(
     id: number,
@@ -241,6 +259,8 @@ export interface ContentStoragePort {
   getOccurrenceByScheduleTime(scheduleId: number, at: Date): Promise<ScheduleOccurrence | undefined>;
   listDueOccurrences(now: Date, limit: number): Promise<ScheduleOccurrence[]>;
   markOccurrenceStatus(id: number, status: string): Promise<void>;
+  /** Conditional transition (compare-and-set) so only one tick may claim a due occurrence. */
+  markOccurrenceStatusIf(id: number, from: string, to: string): Promise<boolean>;
 
   claimPublication(row: InsertPublicationRow): Promise<ClaimPublicationResult>;
   getPublication(id: number): Promise<Publication | undefined>;
@@ -275,6 +295,8 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .insert(voices)
       .values({
         userId: row.userId ?? null,
+        voiceKey: row.voiceKey ?? null,
+        version: row.version ?? 1,
         name: row.name,
         description: row.description ?? null,
         tone: row.tone ?? null,
@@ -298,12 +320,39 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return this.database.select().from(voices).orderBy(asc(voices.id));
   }
 
+  async listVoicesByKey(voiceKey: string): Promise<Voice[]> {
+    return this.database
+      .select()
+      .from(voices)
+      .where(eq(voices.voiceKey, voiceKey))
+      .orderBy(asc(voices.version));
+  }
+
+  async nextVoiceVersion(voiceKey: string): Promise<number> {
+    const rows = await this.database
+      .select({ version: voices.version })
+      .from(voices)
+      .where(eq(voices.voiceKey, voiceKey));
+    return rows.reduce((acc, r) => (r.version > acc ? r.version : acc), 0) + 1;
+  }
+
+  async setVoiceStatus(id: number, status: string): Promise<Voice | undefined> {
+    const [row] = await this.database
+      .update(voices)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(voices.id, id))
+      .returning();
+    return row;
+  }
+
   // ── Content templates ───────────────────────────────────────────────────────
   async insertContentTemplate(row: InsertTemplateRow): Promise<ContentTemplate> {
     const [inserted] = await this.database
       .insert(contentTemplates)
       .values({
         userId: row.userId ?? null,
+        templateKey: row.templateKey ?? null,
+        version: row.version ?? 1,
         name: row.name,
         description: row.description ?? null,
         supportedFormats: row.supportedFormats ?? [],
@@ -328,6 +377,34 @@ export class DatabaseContentStorage implements ContentStoragePort {
 
   async listContentTemplates(): Promise<ContentTemplate[]> {
     return this.database.select().from(contentTemplates).orderBy(asc(contentTemplates.id));
+  }
+
+  async listContentTemplatesByKey(templateKey: string): Promise<ContentTemplate[]> {
+    return this.database
+      .select()
+      .from(contentTemplates)
+      .where(eq(contentTemplates.templateKey, templateKey))
+      .orderBy(asc(contentTemplates.version));
+  }
+
+  async nextTemplateVersion(templateKey: string): Promise<number> {
+    const rows = await this.database
+      .select({ version: contentTemplates.version })
+      .from(contentTemplates)
+      .where(eq(contentTemplates.templateKey, templateKey));
+    return rows.reduce((acc, r) => (r.version > acc ? r.version : acc), 0) + 1;
+  }
+
+  async setContentTemplateStatus(
+    id: number,
+    status: string,
+  ): Promise<ContentTemplate | undefined> {
+    const [row] = await this.database
+      .update(contentTemplates)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(contentTemplates.id, id))
+      .returning();
+    return row;
   }
 
   // ── Generation policies (immutable, content-addressed) ──────────────────────
@@ -378,6 +455,15 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return this.database.select().from(generationPolicies).orderBy(asc(generationPolicies.id));
   }
 
+  async getGenerationPolicyBySpecHash(specHash: string): Promise<GenerationPolicy | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(generationPolicies)
+      .where(eq(generationPolicies.specHash, specHash))
+      .limit(1);
+    return row;
+  }
+
   async nextPolicyVersion(policyKey: string): Promise<number> {
     const rows = await this.database
       .select({ version: generationPolicies.version })
@@ -398,6 +484,15 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .select()
       .from(opportunities)
       .where(eq(opportunities.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getOpportunityByChatKey(chatKey: string): Promise<Opportunity | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.chatKey, chatKey))
       .limit(1);
     return row;
   }
@@ -446,6 +541,18 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .select()
       .from(generationJobs)
       .where(eq(generationJobs.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestGenerationJobForOpportunity(
+    opportunityId: number,
+  ): Promise<GenerationJob | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(generationJobs)
+      .where(eq(generationJobs.opportunityId, opportunityId))
+      .orderBy(desc(generationJobs.id))
       .limit(1);
     return row;
   }
@@ -633,11 +740,17 @@ export class DatabaseContentStorage implements ContentStoragePort {
   }
 
   async listDueOccurrences(now: Date, limit: number): Promise<ScheduleOccurrence[]> {
+    // `enqueued` is included so a crash between claiming an occurrence and
+    // enqueueing its Publication self-heals on the next tick (the publication
+    // claim is idempotent, so a re-tick cannot double-enqueue).
     return this.database
       .select()
       .from(scheduleOccurrences)
       .where(
-        and(eq(scheduleOccurrences.status, "pending"), lte(scheduleOccurrences.occurrenceTime, now)),
+        and(
+          inArray(scheduleOccurrences.status, ["pending", "enqueued"]),
+          lte(scheduleOccurrences.occurrenceTime, now),
+        ),
       )
       .orderBy(asc(scheduleOccurrences.occurrenceTime))
       .limit(limit);
@@ -648,6 +761,16 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .update(scheduleOccurrences)
       .set({ status })
       .where(eq(scheduleOccurrences.id, id));
+  }
+
+  /** Compare-and-set: true only for the caller that performed the transition. */
+  async markOccurrenceStatusIf(id: number, from: string, to: string): Promise<boolean> {
+    const rows = await this.database
+      .update(scheduleOccurrences)
+      .set({ status: to })
+      .where(and(eq(scheduleOccurrences.id, id), eq(scheduleOccurrences.status, from)))
+      .returning({ id: scheduleOccurrences.id });
+    return rows.length > 0;
   }
 
   // ── Publication ─────────────────────────────────────────────────────────────

@@ -90,6 +90,13 @@ export const chatRequestSchema = z.object({
   templateId: z.number().int().positive().nullable().optional(),
   /** Enqueue generation immediately (default true). */
   generate: z.boolean().optional(),
+  /**
+   * Durable idempotency: repeating a request with the same key reuses the
+   * Opportunity (and its GenerationJob) instead of creating a parallel one.
+   */
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
+  /** Intentional regeneration: a new job/Artifact revision for the same request. */
+  regenerate: z.boolean().optional(),
 });
 
 export type ChatRequest = z.input<typeof chatRequestSchema>;
@@ -97,6 +104,8 @@ export type ChatRequest = z.input<typeof chatRequestSchema>;
 export interface ChatResult {
   storyId: number;
   storyCreated: boolean;
+  /** True when a duplicate request was collapsed onto an existing Opportunity. */
+  reused: boolean;
   opportunity: Opportunity;
   generationJobId: number | null;
   correlationId: string | null;
@@ -121,43 +130,93 @@ export async function handleChatRequest(
   }
   const body = parsed.data;
 
-  const intent = await deps.intent.extract(body.message);
-  const format = body.format ?? intent.format;
-  const channel = body.channel ?? intent.channel;
+  const keyedOpportunity = body.idempotencyKey
+    ? await deps.content.getOpportunityByChatKey(body.idempotencyKey)
+    : undefined;
 
-  let story: Story;
-  let storyCreated = false;
-  if (body.storyId != null) {
-    const existing = await deps.stories.getStory(body.storyId);
-    if (!existing) throw new ChatStoryNotFoundError(body.storyId);
-    story = existing;
-  } else {
-    story = await deps.stories.insertStory({
-      userId,
-      researchJobId: null,
-      provenance: "human",
-      title: intent.title,
-      insightBody: intent.insightBody,
-      interpretationMarked: true,
-      angles: intent.angles,
-      evidenceRefs: [],
-      status: "ready",
-    });
-    storyCreated = true;
+  // Duplicate delivery (and not an explicit regeneration) → reuse the existing
+  // Opportunity and its GenerationJob. No duplicate work.
+  if (keyedOpportunity && body.regenerate !== true) {
+    const job = await deps.content.getLatestGenerationJobForOpportunity(keyedOpportunity.id);
+    return {
+      storyId: keyedOpportunity.storyId,
+      storyCreated: false,
+      reused: true,
+      opportunity: keyedOpportunity,
+      generationJobId: job?.id ?? null,
+      correlationId: job?.correlationId ?? null,
+    };
   }
 
-  const opportunity = await createOpportunityFromStory(
-    story.id,
-    {
-      concept: intent.concept,
-      objective: intent.objective,
-      format,
-      channel,
-      ...(intent.audience ? { audience: intent.audience } : {}),
-      proposer: "human",
-    },
-    deps.opportunities,
-  );
+  const intent = await deps.intent.extract(body.message);
+
+  let storyId: number;
+  let storyCreated = false;
+  let opportunity: Opportunity;
+
+  if (keyedOpportunity) {
+    // Explicit regeneration against an existing chat Opportunity: reuse it.
+    storyId = keyedOpportunity.storyId;
+    opportunity = keyedOpportunity;
+  } else {
+    const format = body.format ?? intent.format;
+    const channel = body.channel ?? intent.channel;
+
+    let story: Story;
+    if (body.storyId != null) {
+      const existing = await deps.stories.getStory(body.storyId);
+      if (!existing) throw new ChatStoryNotFoundError(body.storyId);
+      story = existing;
+    } else {
+      story = await deps.stories.insertStory({
+        userId,
+        researchJobId: null,
+        provenance: "human",
+        title: intent.title,
+        insightBody: intent.insightBody,
+        interpretationMarked: true,
+        angles: intent.angles,
+        evidenceRefs: [],
+        status: "ready",
+      });
+      storyCreated = true;
+    }
+    storyId = story.id;
+
+    try {
+      opportunity = await createOpportunityFromStory(
+        story.id,
+        {
+          concept: intent.concept,
+          objective: intent.objective,
+          format,
+          channel,
+          ...(intent.audience ? { audience: intent.audience } : {}),
+          proposer: "human",
+          ...(body.idempotencyKey ? { chatKey: body.idempotencyKey } : {}),
+        },
+        deps.opportunities,
+      );
+    } catch (error) {
+      // Two concurrent identical requests: the UNIQUE chat_key index rejects the
+      // loser, which then reuses the winner's Opportunity instead of failing.
+      if (body.idempotencyKey) {
+        const winner = await deps.content.getOpportunityByChatKey(body.idempotencyKey);
+        if (winner) {
+          const job = await deps.content.getLatestGenerationJobForOpportunity(winner.id);
+          return {
+            storyId: winner.storyId,
+            storyCreated: false,
+            reused: true,
+            opportunity: winner,
+            generationJobId: job?.id ?? null,
+            correlationId: job?.correlationId ?? null,
+          };
+        }
+      }
+      throw error;
+    }
+  }
 
   let generationJobId: number | null = null;
   let correlationId: string | null = null;
@@ -167,11 +226,12 @@ export async function handleChatRequest(
       ...(body.templateId !== undefined ? { templateId: body.templateId } : {}),
       objective: intent.objective,
       ...(intent.audience ? { audience: intent.audience } : {}),
+      ...(body.regenerate ? { regenerate: true } : {}),
     };
     const { job } = await createGenerationJob(opportunity.id, options, deps.generation);
     generationJobId = job.id;
     correlationId = job.correlationId;
   }
 
-  return { storyId: story.id, storyCreated, opportunity, generationJobId, correlationId };
+  return { storyId, storyCreated, reused: false, opportunity, generationJobId, correlationId };
 }

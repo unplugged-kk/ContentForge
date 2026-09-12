@@ -30,16 +30,16 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Research synthesis → reusable meaning | Story | IMPLEMENTED |
 | Research reuse across formats | Story → N Opportunities | IMPLEMENTED (proven: research rows unchanged) |
 | One Story → many formats | Opportunity (`format` × `channel`) | IMPLEMENTED (x_post + x_thread) |
-| Voice / writing-style matching | Voice → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — a voice profile feeds an immutable policy revision and the rendered prompt; **automatic style analysis of the user's own posts is deferred** |
-| Templates | ContentTemplate → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — structure/constraints/instructions are data consumed by the policy; template authoring UI + seeded corpus deferred |
+| Voice / writing-style matching | Voice → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — **API foundation complete**: reusable voice profiles with immutable revisions (create / revise / archive / revisions), feeding an immutable policy revision and the rendered prompt. **Deferred**: automatic style analysis of the user's own posts, and any UI |
+| Templates | ContentTemplate → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — **API foundation complete**: structure/variables/constraints/instructions as data, immutable revisions, deterministic rendering with explicit `[missing: var]` markers and undeclared-variable rejection. **Deferred**: authoring UI, seeded corpus |
 | Platform-aware formatting | Format profile → policy prompt | IMPLEMENTED for x_post/x_thread; other pairs are one registration away |
 | Multi-platform formatting | format × channel dimensions | ARCHITECTURALLY READY — only X formats are implemented; no fake placeholders registered |
-| Chat-to-post | chat → Story(human) → Opportunity → GenerationJob | IMPLEMENTED (service + API; no conversational UI) |
+| Chat-to-post | chat → Story(human) → Opportunity → GenerationJob | IMPLEMENTED — durable idempotency (`idempotencyKey` → same Opportunity/job) and explicit `regenerate`; no conversational UI |
 | Repurposing (format change) | Story → new Opportunity → new Artifact | IMPLEMENTED — never re-researches, never clones evidence |
 | Regeneration after rejection | GenerationJob (`regenerate`) → new Artifact revision | IMPLEMENTED (idempotent duplicate delivery vs intentional regeneration is explicit) |
-| Human editing | Artifact revision (`provenance=human_edit`) | PARTIALLY IMPLEMENTED — the durable revision path exists; no editor UI |
-| Approval workflow | Artifact readiness | IMPLEMENTED (`draft → in_review → approved \| rejected`, pinned per revision) |
-| Scheduling | Schedule → Occurrence | PARTIALLY IMPLEMENTED — one-shot only; **recurrence (RRULE/cron) expansion deferred** |
+| Human editing | Artifact revision (`provenance=human_edit`) | **API foundation complete** — `POST /artifacts/:id/revise` (stale-base guarded) creates a new draft revision, `GET /artifacts/:id/history` exposes the chain, prior revisions and their approvals/publications stay pinned. **Deferred**: editor UI |
+| Approval workflow | Artifact readiness | IMPLEMENTED (`draft → in_review → approved \| rejected`, pinned per revision; approval never carries to a new revision) |
+| Scheduling | Schedule → Occurrence | PARTIALLY IMPLEMENTED — **durable periodic scheduler tick implemented** (cron → compare-and-set claim → idempotent publication claim → pg-boss); one-shot only, **recurrence expansion still deferred and explicitly rejected** rather than faked |
 | Publishing | Publication → ChannelAdapter | IMPLEMENTED for X (x_post/x_thread via existing xQuick); other channels ARCHITECTURALLY READY |
 | Publication reconciliation | Publication lease + `Result(unknown)` | PARTIALLY IMPLEMENTED — reconcile-first is enforced; the X `reconcile()` resolver is a stub |
 | Analytics | Publication → Result | PARTIALLY IMPLEMENTED — one durable Result per Publication; metric mappers deferred |

@@ -182,6 +182,40 @@ export async function rejectArtifact(
   return updated;
 }
 
+/**
+ * The full revision chain this artifact belongs to, oldest first, walking
+ * `supersedes_id`. Bounded by the Opportunity's revisions (never a table scan).
+ */
+export async function getArtifactHistory(
+  artifactId: number,
+  deps: ArtifactDeps,
+): Promise<Artifact[]> {
+  const artifact = await deps.artifacts.getArtifact(artifactId);
+  if (!artifact) throw new ArtifactNotFoundError(artifactId);
+
+  const all = await deps.artifacts.listArtifactsByOpportunity(artifact.opportunityId);
+  const byId = new Map(all.map((a) => [a.id, a]));
+
+  // Walk back to the root revision of this chain.
+  let root = artifact;
+  const guard = new Set<number>();
+  while (root.supersedesId !== null && byId.has(root.supersedesId) && !guard.has(root.id)) {
+    guard.add(root.id);
+    root = byId.get(root.supersedesId)!;
+  }
+
+  // Then forward from the root, following supersedes pointers.
+  const chain: Artifact[] = [];
+  const seen = new Set<number>();
+  let cursor: Artifact | undefined = root;
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    chain.push(cursor);
+    cursor = all.find((a) => a.supersedesId === cursor!.id);
+  }
+  return chain;
+}
+
 /** The only readiness the scheduler will ever consider. */
 export function schedulableReadiness(): ArtifactReadiness {
   return "approved";

@@ -24,6 +24,7 @@ import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
 import { createArtifact, attributionSchema } from "./artifact";
 import {
   assembleEffectiveRequest,
+  composeGenerationPolicyInput,
   resolveGenerationPolicy,
   TemplateFormatMismatchError,
   TemplateNotFoundError,
@@ -205,17 +206,18 @@ export async function createGenerationJob(
   const { story, context } = await loadGenerationContext(opportunity, deps);
 
   const resolved = await resolveGenerationPolicy(
-    {
-      userId: opportunity.userId ?? null,
-      format: opportunity.format,
-      channel: opportunity.channel,
-      voiceId: input.voiceId ?? null,
-      templateId: input.templateId ?? null,
-      objective: input.objective ?? opportunity.objective,
-      audience: input.audience ?? opportunity.audience,
-      constraints: input.constraints ?? {},
-      model: input.model ?? deps.defaultModel,
-    },
+    composeGenerationPolicyInput(
+      opportunity,
+      {
+        voiceId: input.voiceId ?? null,
+        templateId: input.templateId ?? null,
+        objective: input.objective ?? null,
+        audience: input.audience ?? null,
+        constraints: input.constraints ?? {},
+        model: input.model ?? null,
+      },
+      deps.defaultModel,
+    ),
     { content: deps.content },
   );
 

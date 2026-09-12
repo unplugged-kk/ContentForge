@@ -33,12 +33,25 @@ import {
 } from "./generation";
 import {
   approveArtifact,
+  createHumanEditRevision,
+  getArtifactHistory,
   rejectArtifact,
   submitArtifactForReview,
   ArtifactNotFoundError,
   ArtifactStateError,
   InvalidArtifactPayloadError,
 } from "./artifact";
+import {
+  archiveTemplate,
+  archiveVoice,
+  AuthoringInputError,
+  createTemplate,
+  createVoice,
+  listTemplateRevisions,
+  listVoiceRevisions,
+  reviseTemplate,
+  reviseVoice,
+} from "./authoring";
 import {
   createSchedule,
   dispatchDueOccurrences,
@@ -176,6 +189,13 @@ const createGenerationBody = z.object({
   rejectionReason: z.string().trim().min(1).max(2000).optional(),
   /** Intentional regeneration → a new job/revision (see §21). */
   regenerate: z.boolean().optional(),
+});
+
+const reviseArtifactBody = z.object({
+  /** The exact revision the client edited — guards against a stale base. */
+  baseArtifactId: z.number().int().positive(),
+  payload: z.record(z.unknown()),
+  attributionReason: z.string().trim().min(1).max(500).optional(),
 });
 
 const createVoiceBody = z.object({
@@ -374,6 +394,49 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     });
   }
 
+  // ── Artifact revisions (human editing) ──────────────────────────────────────
+  /** Full revision chain for an artifact's Opportunity, oldest first. */
+  router.get("/artifacts/:id/history", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const chain = await getArtifactHistory(id, { artifacts: deps.content });
+      return res.json(chain.map(serializeArtifact));
+    } catch (error) {
+      if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  /**
+   * Human edit → a NEW revision. The prior revision is never mutated and the new
+   * one starts at `draft` (no inherited approval).
+   */
+  router.post("/artifacts/:id/revise", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const body = reviseArtifactBody.parse(req.body ?? {});
+      if (body.baseArtifactId !== id) {
+        return res.status(409).json({
+          message: `stale revision: baseArtifactId ${body.baseArtifactId} does not match artifact ${id}`,
+        });
+      }
+      const artifact = await createHumanEditRevision(
+        id,
+        body.payload,
+        { artifacts: deps.content },
+        { attributionReason: body.attributionReason ?? null },
+      );
+      return res.status(201).json(serializeArtifact(artifact));
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof InvalidArtifactPayloadError) return res.status(422).json({ message: error.message });
+      return next(error);
+    }
+  });
+
   // ── Schedules ───────────────────────────────────────────────────────────────
   router.post("/schedules", async (req, res, next) => {
     try {
@@ -462,21 +525,49 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/voices", async (req, res, next) => {
     try {
       const body = createVoiceBody.parse(req.body ?? {});
-      const voice = await deps.content.insertVoice({
-        userId: getUserId(req) ?? 1,
-        name: body.name,
-        description: body.description ?? null,
-        tone: body.tone ?? null,
-        vocabulary: body.vocabulary ?? [],
-        sentenceStyle: body.sentenceStyle ?? null,
-        formatting: body.formatting ?? {},
-        doRules: body.doRules ?? [],
-        dontRules: body.dontRules ?? [],
-        examples: body.examples ?? [],
-      });
+      const voice = await createVoice(getUserId(req) ?? 1, body, { content: deps.content });
       return res.status(201).json(voice);
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  /** Create the next revision under the same key; the prior revision is untouched. */
+  router.post("/voices/:id/revise", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid voice id" });
+    try {
+      const voice = await reviseVoice(id, req.body ?? {}, { content: deps.content });
+      return res.status(201).json(voice);
+    } catch (error) {
+      if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof VoiceNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.post("/voices/:id/archive", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid voice id" });
+    try {
+      return res.json(await archiveVoice(id, { content: deps.content }));
+    } catch (error) {
+      if (error instanceof VoiceNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/voices/:id/revisions", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid voice id" });
+    try {
+      const voice = await deps.content.getVoice(id);
+      if (!voice) return res.status(404).json({ message: "Voice not found" });
+      const revisions = await listVoiceRevisions(voice.voiceKey ?? `voice:${voice.id}`, { content: deps.content });
+      return res.json(revisions);
+    } catch (error) {
       return next(error);
     }
   });
@@ -505,20 +596,52 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/templates", async (req, res, next) => {
     try {
       const body = createTemplateBody.parse(req.body ?? {});
-      const template = await deps.content.insertContentTemplate({
-        userId: getUserId(req) ?? 1,
-        name: body.name,
-        description: body.description ?? null,
-        supportedFormats: body.supportedFormats ?? [],
-        supportedChannels: body.supportedChannels ?? [],
-        structure: body.structure ?? [],
-        variables: body.variables ?? [],
-        constraints: body.constraints ?? {},
-        instructions: body.instructions ?? null,
-      });
+      const template = await createTemplate(getUserId(req) ?? 1, body, { content: deps.content });
       return res.status(201).json(template);
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  /** Create the next revision under the same key; the prior revision is untouched. */
+  router.post("/templates/:id/revise", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid template id" });
+    try {
+      const template = await reviseTemplate(id, req.body ?? {}, { content: deps.content });
+      return res.status(201).json(template);
+    } catch (error) {
+      if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.post("/templates/:id/archive", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid template id" });
+    try {
+      return res.json(await archiveTemplate(id, { content: deps.content }));
+    } catch (error) {
+      if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/templates/:id/revisions", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid template id" });
+    try {
+      const template = await deps.content.getContentTemplate(id);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      const revisions = await listTemplateRevisions(
+        template.templateKey ?? `tpl:${template.id}`,
+        { content: deps.content },
+      );
+      return res.json(revisions);
+    } catch (error) {
       return next(error);
     }
   });
@@ -586,6 +709,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       return res.status(201).json({
         storyId: result.storyId,
         storyCreated: result.storyCreated,
+        reused: result.reused,
         opportunity: serializeOpportunity(result.opportunity),
         generationJobId: result.generationJobId,
         correlationId: result.correlationId,

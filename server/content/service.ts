@@ -21,8 +21,10 @@ import {
   type GenerationDeps,
 } from "./generation";
 import type { ChatDeps } from "./chat";
-import { runPublication, type PublicationDeps } from "./publication";
+import { runPublication, reconcileStalePublications, type PublicationDeps } from "./publication";
+import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
+import cron from "node-cron";
 
 export const contentStorage = new DatabaseContentStorage(db);
 
@@ -173,4 +175,74 @@ export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
   registerGenerationRunJob();
   registerPublicationRunJob();
+}
+
+// ── Durable scheduler tick ────────────────────────────────────────────────────
+let contentSchedulerStarted = false;
+
+/**
+ * Periodic scheduler loop (Phase 1.5).
+ *
+ * The scheduler owns WHEN: it materializes due Occurrences and enqueues
+ * Publications. It never publishes — `publication.run` does that.
+ *
+ * Correctness lives in PostgreSQL, not in this timer: the occurrence
+ * `pending → enqueued` compare-and-set means at most one tick (in any process)
+ * claims an occurrence, and the UNIQUE publication identity means a re-tick
+ * cannot create or enqueue a second Publication. The in-process flag only avoids
+ * redundant overlapping ticks; losing the process loses nothing durable.
+ */
+export function startContentScheduler(options: { cronExpression?: string } = {}): void {
+  if (contentSchedulerStarted) return;
+  contentSchedulerStarted = true;
+
+  // `DISABLE_CRON=1` turns crons off app-wide; the E2E enables this one
+  // explicitly so the real periodic tick can be observed without enabling the
+  // legacy schedulers (which would make outbound calls).
+  const disabled = process.env.DISABLE_CRON === "1";
+  const explicitlyEnabled = process.env.CONTENT_SCHEDULER_ENABLED === "1";
+  if (disabled && !explicitlyEnabled) {
+    console.log("[content-scheduler] disabled (DISABLE_CRON=1)");
+    return;
+  }
+
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      const now = new Date();
+      const result = await dispatchDueOccurrences(now, {
+        content: contentStorage,
+        enqueuePublication: async (publication) => {
+          const { getJobRuntime } = await import("../jobs/bootstrap");
+          const enqueued = await getJobRuntime().enqueue({
+            jobType: PUBLICATION_RUN_JOB_TYPE,
+            payload: { publicationId: publication.id },
+            correlationId: publication.correlationId,
+            idempotencyKey: publication.idempotencyKey,
+          });
+          return !enqueued.deduplicated;
+        },
+      });
+      const reconciled = await reconcileStalePublications(now, publicationDeps);
+      if (result.materialized > 0 || result.enqueued > 0 || reconciled > 0) {
+        console.log(
+          `[content-scheduler] materialized=${result.materialized} enqueued=${result.enqueued} reconciled=${reconciled}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[content-scheduler] tick failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      running = false;
+    }
+  };
+
+  cron.schedule(options.cronExpression ?? "* * * * *", () => {
+    void tick();
+  });
+  console.log("[content-scheduler] started (every minute)");
 }

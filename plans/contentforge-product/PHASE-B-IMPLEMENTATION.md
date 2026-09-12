@@ -147,14 +147,35 @@ Three layers, all green:
 
 | Check | Result |
 |---|---|
-| `npm run test:unit` | **191 passed / 0 failed** (35 suites) |
-| `npm run test:db` (real Postgres) | **64 passed / 0 failed / 0 skipped** (8 suites) |
-| `npm test` | **191 passed** |
+| `npm run test:unit` | **200 passed / 0 failed** (39 suites) |
+| `npm run test:db` (real Postgres) | **74 passed / 0 failed / 0 skipped** (9 suites) |
+| `npm test` | **200 passed** |
 | `npx tsc` | **0 errors** |
-| `npm run test:e2e:live` (real running app) | see Phase 1 below |
-| Migrations 0005–0008 | additive only — 0 ALTER/DROP on pre-existing tables |
-| Fresh DB migrate | bootstraps to 42 tables / 9 migrations from zero |
+| `npm run test:e2e:live` (real running app) | **59 passed / 0 failed** |
+| Migrations 0005–0010 | additive only — 0 ALTER/DROP of pre-existing columns |
+| Fresh DB migrate | bootstraps to 42 tables / 11 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
+
+## Phase 1.5 — creation intelligence hardening + product surface
+
+Turns the Phase 1 primitives into a durable, editable, version-safe, schedulable
+foundation. Still no parallel content model and no provider coupling.
+
+| Area | What changed |
+|---|---|
+| **Artifact revisions** | `POST /api/artifacts/:id/revise` (human edit → NEW revision, `provenance=human_edit`, starts `draft`, stale-base guarded with 409) and `GET /api/artifacts/:id/history` (full chain). Prior revisions, their approvals and their pinned Publications are never touched. |
+| **Policy composition** | `composeGenerationPolicyInput()` centralizes defaulting from the Opportunity; validation (format × channel profile, template compatibility, voice/template existence + archived, undeclared template variables) lives in exactly one place. `resolveGenerationPolicy` now uses an **indexed** `get_generation_policy_by_spec_hash` lookup instead of scanning the table. |
+| **Voice authoring** | `voices.voice_key` + `version`; `POST /voices/:id/revise`, `/archive`, `GET /voices/:id/revisions`; reuses `actor`/per-user conventions. Revisions are immutable. |
+| **Template authoring** | `content_templates.template_key` + `version`; `/revise`, `/archive`, `/revisions`. Deterministic rendering (`renderTemplateStructure`) with explicit `[missing: var]` markers; placeholders not declared as variables are rejected at policy resolution — never silently dropped. |
+| **Chat hardening** | `opportunities.chat_key` (UNIQUE) gives durable chat idempotency: a repeated request reuses the Opportunity **and its GenerationJob**; an explicit `regenerate` bypasses reuse and creates a new job. Concurrent duplicates are settled by the unique index. |
+| **Scheduler tick** | `startContentScheduler()` — a real periodic cron (enabled independently of `DISABLE_CRON` via `CONTENT_SCHEDULER_ENABLED=1`). It materializes due Occurrences and enqueues `publication.run`; it never publishes. Duplicate dispatch is prevented **in PostgreSQL**: a `pending → enqueued` compare-and-set (`markOccurrenceStatusIf`) plus the UNIQUE publication identity. `enqueued` occurrences are re-examined so a crash before enqueue self-heals. |
+| **Recurrence** | Still deferred, and now explicitly so: `recurrence`/`count > 1` are rejected with a clear error rather than faking an expansion. The durable seam (columns + occurrence table) exists for a later phase. |
+| **Indexes** | `schedules(status, start_at)` and `schedule_occurrences(status, occurrence_time)` back the due-scan; `(voice_key, version)` / `(template_key, version)` / `opportunities.chat_key` are UNIQUE. |
+
+Invariants added/kept: changing a Voice or Template after a GenerationJob exists
+never changes that job's frozen request (proved in DB tests and live E2E);
+approval never carries to a new revision; a Publication stays pinned to the exact
+revision it was created for.
 
 ## Phase 1 — creation intelligence (CannerAI parity)
 
