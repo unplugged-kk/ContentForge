@@ -5,7 +5,7 @@
  * the storage layer can migrate independently of orchestration.
  */
 
-import { and, eq, ne } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -264,6 +264,23 @@ export class DatabaseResearchStorage implements ResearchStoragePort {
       .where(eq(researchJobs.correlationId, correlationId))
       .limit(1);
     return rows[0];
+  }
+
+  /**
+   * Recent jobs visible to a user: their own, plus legacy rows with no owner.
+   * Backed by `research_jobs_user_idx`.
+   */
+  async listJobs(userId: number | null, limit = 50): Promise<ResearchJob[]> {
+    return this.database
+      .select()
+      .from(researchJobs)
+      .where(
+        userId === null
+          ? isNull(researchJobs.userId)
+          : or(eq(researchJobs.userId, userId), isNull(researchJobs.userId)),
+      )
+      .orderBy(desc(researchJobs.id))
+      .limit(Math.min(Math.max(limit, 1), 200));
   }
 
   async listSources(jobId: number): Promise<ResearchSource[]> {

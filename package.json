@@ -25,7 +25,8 @@
     "build:verify": "npm run check && npm run build && playwright test",
     "e2e:db:up": "docker compose -f docker-compose.e2e.yml up -d --wait",
     "e2e:db:down": "docker compose -f docker-compose.e2e.yml down -v",
-    "build:verify:docker": "node script/e2e-docker.mjs"
+    "build:verify:docker": "node script/e2e-docker.mjs",
+    "smoke:research": "node --import tsx script/research-smoke.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

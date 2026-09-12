@@ -257,6 +257,123 @@ const server = http.createServer(async (req, res) => {
     res.end(body);
   };
 
+  // ── Deterministic provider fixtures (Phase 2) ────────────────────────────────
+  // Reddit public JSON listing.
+  if (url.pathname.startsWith("/reddit/")) {
+    const sub = url.pathname.match(/\/r\/([^/]+)\//)?.[1] ?? "all";
+    return send(
+      200,
+      JSON.stringify({
+        data: {
+          children: [
+            {
+              data: {
+                name: `t3_${RUN}reddit1`,
+                id: `${RUN}reddit1`,
+                title: "Kubernetes scheduler plugins are now stable",
+                permalink: `/r/${sub}/comments/${RUN}reddit1/kubernetes_scheduler_plugins/`,
+                url: `https://example.com/${RUN}/reddit-post`,
+                selftext: "A practitioner write-up on scheduler plugins and placement policy.",
+                author: "ada",
+                created_utc: 1767225600,
+                subreddit: sub,
+                score: 240,
+                num_comments: 31,
+              },
+            },
+            {
+              data: {
+                name: `t3_${RUN}reddit2`,
+                id: `${RUN}reddit2`,
+                title: "Cost signals for Kubernetes workloads",
+                permalink: `/r/${sub}/comments/${RUN}reddit2/cost_signals/`,
+                selftext: "Request-to-limit ratios and bin packing in practice.",
+                author: "grace",
+                created_utc: 1767312000,
+                subreddit: sub,
+                score: 88,
+                num_comments: 9,
+              },
+            },
+          ],
+        },
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  // Hacker News (Algolia) search/front page.
+  if (url.pathname.startsWith("/hn/")) {
+    return send(
+      200,
+      JSON.stringify({
+        hits: [
+          {
+            objectID: `${RUN}hn1`,
+            title: "Scheduler plugins and the move to platform-owned policy",
+            url: `https://example.com/${RUN}/hn-story`,
+            author: "pg",
+            created_at: "2026-03-01T10:00:00.000Z",
+            points: 310,
+            num_comments: 120,
+          },
+          {
+            objectID: `${RUN}hn2`,
+            title: "Measuring Kubernetes cost per workload",
+            url: `https://example.com/${RUN}/hn-cost`,
+            author: "cmeik",
+            created_at: "2026-03-02T10:00:00.000Z",
+            points: 140,
+            num_comments: 40,
+          },
+        ],
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  // YouTube public channel Atom feed (view-source link must be reachable for validation).
+  if (url.pathname.startsWith("/youtube/")) {
+    const channelId = url.searchParams.get("channel_id") ?? "fixture-channel";
+    return send(
+      200,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>ContentForge Fixture Channel</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/${channelId}"/>
+  <entry>
+    <id>yt:video:${RUN}vid1</id>
+    <yt:videoId>${RUN}vid1</yt:videoId>
+    <title>Scheduler plugins, explained</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=${RUN}vid1"/>
+    <published>2026-02-10T09:00:00.000Z</published>
+    <author><name>ContentForge</name></author>
+  </entry>
+  <entry>
+    <id>yt:video:${RUN}vid2</id>
+    <yt:videoId>${RUN}vid2</yt:videoId>
+    <title>Kubernetes cost per workload</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=${RUN}vid2"/>
+    <published>2026-02-11T09:00:00.000Z</published>
+    <author><name>ContentForge</name></author>
+  </entry>
+</feed>`,
+    );
+  }
+
+  // A plain HTML page for the web provider.
+  if (url.pathname.startsWith("/web/")) {
+    return send(
+      200,
+      `<!doctype html><html><head><title>Platform-owned scheduling</title>
+<meta name="author" content="ContentForge"></head>
+<body><article><h1>Platform-owned scheduling</h1>
+<p>Scheduler plugins became a stable extension point, so placement policy now lives with the platform team rather than inside the scheduler binary.</p>
+<p>Cost signals are the next input teams want to schedule against.</p></article></body></html>`,
+      "text/html; charset=utf-8",
+    );
+  }
+
   switch (url.pathname) {
     case "/health":
       return send(200, "ok", "text/plain");

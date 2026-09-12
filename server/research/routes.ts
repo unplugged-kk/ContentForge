@@ -10,12 +10,13 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import type { ResearchJob, ResearchEvidence, ResearchSource } from "@shared/schema";
 import { getUserId } from "../middleware/userContext";
-import { hasProvider } from "./registry";
+import { hasProvider, listProviders } from "./registry";
 import type { ClaimJobInput, ClaimJobResult } from "./storage";
 
 export interface ResearchApiStorage {
   claimJob(input: ClaimJobInput): Promise<ClaimJobResult>;
   getJob(jobId: number): Promise<ResearchJob | undefined>;
+  listJobs(userId: number | null, limit?: number): Promise<ResearchJob[]>;
   listSources(jobId: number): Promise<ResearchSource[]>;
   listEvidence(jobId: number): Promise<ResearchEvidence[]>;
 }
@@ -46,6 +47,11 @@ export const createResearchJobBodySchema = z
     window: windowSchema.optional(),
     budget: budgetSchema.optional(),
     idempotencyKey: z.string().trim().min(1).max(300).optional(),
+    /**
+     * Request-scoped provider config (per provider id), stored durably on the
+     * job so execution is reproducible. E.g. `{ web: { urls: ["https://…"] } }`.
+     */
+    providerConfig: z.record(z.record(z.unknown())).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.kind === "human_input" && !value.authorStatement) {
@@ -126,6 +132,7 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
         window: body.window ?? null,
         budget: body.budget ?? null,
         authorStatement: body.authorStatement ?? null,
+        providerConfig: body.providerConfig ?? null,
       },
     });
 
@@ -151,8 +158,8 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     const id = parseId(req, res);
     if (id === null) return;
 
-    const job = await deps.storage.getJob(id);
-    if (!job) return res.status(404).json({ message: "Research job not found" });
+    const job = await loadOwnedJob(req, res, deps, id);
+    if (!job) return;
 
     const [sources, evidence] = await Promise.all([
       deps.storage.listSources(id),
@@ -163,12 +170,44 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     );
   });
 
+  /** Recent research jobs for the caller (their own, plus legacy unowned rows). */
+  router.get("/jobs", async (req, res) => {
+    const requested = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
+    const userId = getUserId(req) ?? 1;
+    const jobs = await deps.storage.listJobs(userId, limit);
+    return res.json(jobs.map((job) => serializeJob(job)));
+  });
+
+  /**
+   * Provider capability/access surface: what can be attempted, with which
+   * capabilities, and at which access class. No credentials are exposed.
+   */
+  router.get("/providers", (_req, res) => {
+    const providers = listProviders().map((provider) => ({
+      id: provider.id,
+      version: provider.version,
+      contractVersion: provider.contractVersion,
+      accessClass: provider.accessClass,
+      description: provider.description ?? null,
+      backends: provider.backends.map((backend) => ({
+        id: backend.id,
+        capabilities: backend.capabilities,
+        sourceCapabilities: backend.sourceCapabilities ?? [],
+      })),
+      capabilities: Array.from(
+        new Set(provider.backends.flatMap((backend) => backend.capabilities)),
+      ).sort(),
+    }));
+    return res.json({ providers });
+  });
+
   router.get("/jobs/:id/sources", async (req, res) => {
     const id = parseId(req, res);
     if (id === null) return;
 
-    const job = await deps.storage.getJob(id);
-    if (!job) return res.status(404).json({ message: "Research job not found" });
+    const job = await loadOwnedJob(req, res, deps, id);
+    if (!job) return;
     return res.json(await deps.storage.listSources(id));
   });
 
@@ -176,12 +215,37 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     const id = parseId(req, res);
     if (id === null) return;
 
-    const job = await deps.storage.getJob(id);
-    if (!job) return res.status(404).json({ message: "Research job not found" });
+    const job = await loadOwnedJob(req, res, deps, id);
+    if (!job) return;
     return res.json(await deps.storage.listEvidence(id));
   });
 
   return router;
+}
+
+/**
+ * Load a job only if it is visible to the caller. A job owned by someone else is
+ * reported as 404 (never 403), so the endpoint does not leak existence.
+ */
+async function loadOwnedJob(
+  req: Request,
+  res: Response,
+  deps: ResearchApiDeps,
+  id: number,
+): Promise<ResearchJob | undefined> {
+  const job = await deps.storage.getJob(id);
+  if (!job) {
+    res.status(404).json({ message: "Research job not found" });
+    return undefined;
+  }
+  // Same default-user convention as job creation (single-operator today), so
+  // anonymous/legacy access keeps working while distinct users stay isolated.
+  const userId = getUserId(req) ?? 1;
+  if (job.userId !== null && job.userId !== userId) {
+    res.status(404).json({ message: "Research job not found" });
+    return undefined;
+  }
+  return job;
 }
 
 /** Router wired to the application's engine, storage, and queue. */

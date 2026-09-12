@@ -58,6 +58,52 @@ export {
 } from "./storage";
 export { RSS_PROVIDER_ID, createRssProvider, rssProvider, rssProviderConfigSchema } from "./providers/rss";
 export {
+  REDDIT_PROVIDER_ID,
+  createRedditProvider,
+  loadRedditProviderConfig,
+  normalizeRedditPost,
+  redditProvider,
+  redditProviderConfigSchema,
+} from "./providers/reddit";
+export {
+  YOUTUBE_PROVIDER_ID,
+  createYoutubeProvider,
+  loadYoutubeProviderConfig,
+  normalizeYoutubeItem,
+  youtubeProvider,
+  youtubeProviderConfigSchema,
+  youtubeVideoId,
+} from "./providers/youtube";
+export {
+  HN_PROVIDER_ID,
+  createHnProvider,
+  loadHnProviderConfig,
+  hnProvider,
+  hnProviderConfigSchema,
+  normalizeHnHit,
+} from "./providers/hn";
+export {
+  WEB_PROVIDER_ID,
+  createWebProvider,
+  loadWebProviderConfig,
+  webProvider,
+  webProviderConfigSchema,
+} from "./providers/web";
+export {
+  DEFAULT_ALLOWED_CONTENT_TYPES,
+  DEFAULT_URL_MAX_LENGTH,
+  DisallowedContentTypeError,
+  UrlTooLongError,
+  assertAllowedContentType,
+  assertUrlLength,
+  createSafeFetchDeps,
+  normalizeContentType,
+  type ProviderHttpDeps,
+  type ProviderHttpRequest,
+  type ProviderHttpResponse,
+} from "./providers/http";
+export { envList, providerUrls, type ProviderUrls } from "./providers/providerUrls";
+export {
   createRssConfigLoader,
   loadRssProviderConfig,
   type RssConfigContext,

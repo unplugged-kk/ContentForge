@@ -512,7 +512,11 @@ export const researchJobs = pgTable(
     finishedAt: timestamp("finished_at"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   },
-  (table) => [index("research_jobs_status_idx").on(table.status)],
+  (table) => [
+    index("research_jobs_status_idx").on(table.status),
+    /** Per-user research listing / isolation. */
+    index("research_jobs_user_idx").on(table.userId),
+  ],
 );
 
 export const researchSources = pgTable(
@@ -541,6 +545,15 @@ export const researchSources = pgTable(
   },
   (table) => [
     uniqueIndex("research_sources_job_url_uq").on(table.jobId, table.canonicalUrl),
+    /**
+     * Durable provider-identity dedupe: the same provider result can never be
+     * stored twice for one job, independent of URL canonicalization.
+     */
+    uniqueIndex("research_sources_job_provider_native_uq").on(
+      table.jobId,
+      table.provider,
+      table.nativeId,
+    ),
   ],
 );
 

@@ -192,6 +192,13 @@ async function startApp() {
       XQUICK_API_BASE_URL: FIXTURE_BASE,
       XQUICK_API_KEY: "fixture-key",
       XQUICK_ACCOUNT: "cf_e2e",
+      // Phase 2: point the real providers at the deterministic fixture. The
+      // operator allowlist is what lets the SSRF-guarded providers reach it; it
+      // is default-off in production and never derived from request input.
+      REDDIT_BASE_URL: `${FIXTURE_BASE}/reddit`,
+      YOUTUBE_BASE_URL: `${FIXTURE_BASE}/youtube`,
+      HN_BASE_URL: `${FIXTURE_BASE}/hn`,
+      RESEARCH_ALLOWED_HOSTS: "localhost",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -1273,6 +1280,199 @@ const observed = {};
     ]);
     assert(jobs[0].c === 2, `expected 2 jobs for the chat opportunity, got ${jobs[0].c}`);
     return `idempotent (job ${first.body.generationJobId}) then regenerated (job ${regen.body.generationJobId})`;
+  });
+
+  // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
+  phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
+
+  await check("GET /api/research/providers exposes the capability/access surface", async () => {
+    const res = await http("GET", "/api/research/providers");
+    assert(res.status === 200, `providers ${res.status}`);
+    const byId = new Map((res.body.providers ?? []).map((p) => [p.id, p]));
+    for (const id of ["rss", "reddit", "youtube", "hn", "web"]) {
+      assert(byId.has(id), `provider "${id}" is not registered`);
+      assert(byId.get(id).accessClass === "open", `${id} access class`);
+    }
+    const youtube = byId.get("youtube");
+    assert(
+      youtube.capabilities.length === 1 && youtube.capabilities[0] === "discover",
+      `youtube is metadata-only (no fetch), got ${JSON.stringify(youtube.capabilities)}`,
+    );
+    const web = byId.get("web");
+    assert(web.capabilities.includes("search") && web.capabilities.includes("fetch"), "web capabilities");
+    return `5 providers: ${Array.from(byId.keys()).join(", ")}`;
+  });
+
+  const mixed = await check("a mixed-provider directed job yields ONE ResearchJob with aggregated evidence", async () => {
+    const before = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    const res = await http("POST", "/api/research/jobs", {
+      kind: "directed",
+      query: "kubernetes",
+      providerIds: ["rss", "reddit", "hn", "web"],
+      idempotencyKey: `${RUN}-mixed`,
+      providerConfig: {
+        reddit: { subreddits: ["kubernetes"] },
+        web: { urls: [`${FIXTURE_BASE}/web/doc.html`] },
+      },
+    });
+    assert(res.status === 201, `create ${res.status}: ${res.text}`);
+    const jobId = res.body.id;
+
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/research/jobs/${jobId}`);
+        if (r.body.status === "complete") return r.body;
+        if (r.body.status === "failed") throw new Error(`research failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "mixed research" },
+    );
+
+    const sources = await q("select provider, count(*)::int c from research_sources where job_id = $1 group by provider order by provider", [jobId]);
+    const providers = sources.map((r) => r.provider);
+    for (const id of ["rss", "reddit", "hn", "web"]) {
+      assert(providers.includes(id), `no source from provider "${id}" (got ${providers.join(",")})`);
+    }
+    assert(done.sourceCount >= 5, `expected >=5 sources, got ${done.sourceCount}`);
+    assert(done.evidenceCount >= 5, `expected >=5 evidence rows, got ${done.evidenceCount}`);
+
+    const after = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    assert(after.jobs === before.jobs + 1, `expected exactly one new ResearchJob (${before.jobs} -> ${after.jobs})`);
+
+    observed.mixedJobId = jobId;
+    return withDetail(
+      { id: jobId },
+      `job ${jobId}: ${done.sourceCount} sources from ${providers.join("+")}, ${done.evidenceCount} evidence`,
+    );
+  });
+  const mixedJobId = mixed?.id;
+
+  await check("an autonomous job discovers across providers (youtube discover path)", async () => {
+    const res = await http("POST", "/api/research/jobs", {
+      kind: "autonomous",
+      query: "kubernetes platform engineering",
+      providerIds: ["rss", "youtube"],
+      idempotencyKey: `${RUN}-autonomous`,
+      providerConfig: { youtube: { channelIds: ["fixture-channel"] } },
+    });
+    assert(res.status === 201, `create ${res.status}: ${res.text}`);
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/research/jobs/${res.body.id}`);
+        if (r.body.status === "complete") return r.body;
+        if (r.body.status === "failed") throw new Error(`research failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "autonomous research" },
+    );
+    const sources = await q("select provider from research_sources where job_id = $1", [res.body.id]);
+    const providers = sources.map((r) => r.provider);
+    assert(providers.includes("youtube"), `no youtube source (got ${providers.join(",")})`);
+    assert(providers.includes("rss"), "no rss source");
+    return `job ${res.body.id}: ${done.sourceCount} sources (${providers.join("+")})`;
+  });
+
+  await check("the SSRF boundary refuses a metadata URL in the live app, with no fabricated evidence", async () => {
+    const res = await http("POST", "/api/research/jobs", {
+      kind: "directed",
+      query: "metadata probe",
+      providerIds: ["web"],
+      idempotencyKey: `${RUN}-ssrf`,
+      providerConfig: { web: { urls: ["http://169.254.169.254/latest/meta-data/"] } },
+    });
+    assert(res.status === 201, `create ${res.status}: ${res.text}`);
+    const jobId = res.body.id;
+
+    const failed = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/research/jobs/${jobId}`);
+        if (r.body.status === "failed") return r.body;
+        if (r.body.status === "complete") throw new Error("a blocked URL must not complete successfully");
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "ssrf refusal" },
+    );
+    assert(failed.errorClass === "permanent", `expected a permanent failure, got ${failed.errorClass}`);
+    const rows = await q("select count(*)::int c from research_sources where job_id = $1", [jobId]);
+    assert(rows[0].c === 0, `no source may be fabricated for a blocked URL (got ${rows[0].c})`);
+    const evidence = await q("select count(*)::int c from research_evidence where job_id = $1", [jobId]);
+    assert(evidence[0].c === 0, `no evidence may be fabricated for a blocked URL (got ${evidence[0].c})`);
+    return "blocked at the boundary → permanent failure, 0 sources, 0 evidence";
+  });
+
+  await check("GET /api/research/jobs lists recent research (owner scoped)", async () => {
+    const res = await http("GET", "/api/research/jobs?limit=10");
+    assert(res.status === 200, `list ${res.status}`);
+    assert(Array.isArray(res.body), "expected an array");
+    assert(res.body.length > 0, "expected at least one job");
+    assert(res.body.every((j) => typeof j.id === "number" && typeof j.status === "string"), "job shape");
+    return `${res.body.length} recent job(s)`;
+  });
+
+  await check("the mixed research becomes a Story, then two formats, with NO re-research", async () => {
+    const before = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+
+    const story = await http("POST", "/api/stories", {
+      researchJobId: mixedJobId,
+      title: "Platform-owned scheduling: what Reddit, HN and the web agree on",
+      insightBody: "Scheduler plugins are stable, cost is the next scheduling input.",
+      angles: ["Platform teams own placement policy", "Cost as a scheduling signal"],
+    });
+    assert(story.status === 201, `story ${story.status}: ${story.text}`);
+    const storyId = story.body.id;
+
+    const post = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "short post",
+      objective: "educate",
+      format: "x_post",
+      channel: "x",
+    });
+    const thread = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "thread",
+      objective: "educate",
+      format: "x_thread",
+      channel: "x",
+    });
+    assert(post.status === 201 && thread.status === 201, "opportunities created");
+
+    for (const opp of [post.body.id, thread.body.id]) {
+      const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp });
+      assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+      await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`generation failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 300, label: "generation" },
+      );
+    }
+
+    const after = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    assert(
+      after.jobs === before.jobs && after.sources === before.sources && after.evidence === before.evidence,
+      `deriving content must not re-run research: before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+    );
+    return `mixed research → story ${storyId} → x_post + x_thread, research unchanged`;
   });
 
   // ── 7. TRANSIENT RETRY SUCCESS (awaited) ────────────────────────────────────

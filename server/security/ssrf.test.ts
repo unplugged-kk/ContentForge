@@ -6,6 +6,7 @@ import {
   UnsafeUrlError,
   createGuardedLookup,
   isBlockedAddress,
+  resolveAllowedHosts,
   safeFetch,
   validateUrlSyntax,
 } from "./ssrf";
@@ -238,5 +239,55 @@ describe("safeFetch", () => {
     } finally {
       await new Promise<void>((resolve) => slow.close(() => resolve()));
     }
+  });
+});
+
+describe("operator host allowlist (default off)", () => {
+  it("parses RESEARCH_ALLOWED_HOSTS and defaults to empty", () => {
+    assert.deepEqual(resolveAllowedHosts({}), []);
+    assert.deepEqual(resolveAllowedHosts({ RESEARCH_ALLOWED_HOSTS: "" }), []);
+    assert.deepEqual(
+      resolveAllowedHosts({ RESEARCH_ALLOWED_HOSTS: " LocalHost , mirror.internal " }),
+      ["localhost", "mirror.internal"],
+    );
+  });
+
+  it("keeps blocking IP literals unless that exact host is allowlisted", () => {
+    assert.throws(() => validateUrlSyntax("http://127.0.0.1/"), UnsafeUrlError);
+    assert.throws(() => validateUrlSyntax("http://169.254.169.254/latest/meta-data/"), UnsafeUrlError);
+    // The named host only.
+    assert.doesNotThrow(() => validateUrlSyntax("http://127.0.0.1/", { allowedHosts: ["127.0.0.1"] }));
+    assert.throws(
+      () => validateUrlSyntax("http://169.254.169.254/", { allowedHosts: ["127.0.0.1"] }),
+      UnsafeUrlError,
+    );
+  });
+
+  it("still enforces scheme, credentials and port rules for allowlisted hosts", () => {
+    assert.throws(() => validateUrlSyntax("ftp://mirror.internal/x", { allowedHosts: ["mirror.internal"] }), UnsafeUrlError);
+    assert.throws(
+      () => validateUrlSyntax("http://user:pw@mirror.internal/x", { allowedHosts: ["mirror.internal"] }),
+      UnsafeUrlError,
+    );
+    assert.throws(
+      () => validateUrlSyntax("http://mirror.internal:8080/x", { allowedHosts: ["mirror.internal"] }),
+      UnsafeUrlError,
+    );
+  });
+
+  it("applies the allowlist at connect time, not just at syntax check", async () => {
+    const lookup = createGuardedLookup(["localhost"]);
+    const allowed = await new Promise<{ address: string }[]>((resolve, reject) => {
+      lookup("localhost", { all: true }, (err, address) =>
+        err ? reject(err) : resolve(address as { address: string }[]),
+      );
+    });
+    assert.ok(allowed.length > 0, "an allowlisted host resolves");
+
+    const guarded = createGuardedLookup([]);
+    const blockedError = await new Promise<Error | null>((resolve) => {
+      guarded("localhost", { all: true }, (err) => resolve(err ?? null));
+    });
+    assert.ok(blockedError instanceof UnsafeUrlError, "without the allowlist it stays blocked");
   });
 });

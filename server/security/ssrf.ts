@@ -170,6 +170,33 @@ export function isBlockedAddress(ip: string): boolean {
 
 export interface UrlValidationOptions {
   allowedPorts?: readonly number[];
+  /**
+   * Operator-sanctioned extra hosts (default: none).
+   *
+   * This is an explicit, default-off exception owned by the deployment (e.g. an
+   * internal mirror, or the deterministic E2E fixture). It is NEVER derived from
+   * request input, and it only bypasses the *address* check for the exact host
+   * named — scheme, credentials and port rules still apply, and every other
+   * address (loopback, RFC1918, link-local, metadata, IPv6 private) stays blocked.
+   */
+  allowedHosts?: readonly string[];
+}
+
+/** Parse `RESEARCH_ALLOWED_HOSTS` (comma separated). Empty by default. */
+export function resolveAllowedHosts(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.RESEARCH_ALLOWED_HOSTS ?? "";
+  const out = new Set<string>();
+  for (const part of raw.split(",")) {
+    const host = part.trim().toLowerCase();
+    if (host.length > 0) out.add(host);
+  }
+  return Array.from(out);
+}
+
+function isAllowlistedHost(host: string, allowed: readonly string[] | undefined): boolean {
+  if (!allowed || allowed.length === 0) return false;
+  const normalized = host.toLowerCase();
+  return allowed.some((candidate) => candidate === normalized);
 }
 
 /** Syntax gate applied before any network activity. */
@@ -201,7 +228,7 @@ export function validateUrlSyntax(
   }
 
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (isIP(host) && isBlockedAddress(host)) {
+  if (isIP(host) && !isAllowlistedHost(host, options.allowedHosts) && isBlockedAddress(host)) {
     throw new UnsafeUrlError("blocked_address", `Address ${host} is not routable for research`);
   }
 
@@ -218,7 +245,7 @@ export type LookupFn = (
  * DNS lookup that rejects any hostname resolving to a blocked address.
  * Passed to the HTTP agent so validation happens at connect time.
  */
-export function createGuardedLookup(): LookupFn {
+export function createGuardedLookup(allowedHosts: readonly string[] = []): LookupFn {
   return (hostname, options, callback) => {
     dnsLookup(
       hostname,
@@ -228,6 +255,11 @@ export function createGuardedLookup(): LookupFn {
         const resolved = addresses ?? [];
         if (resolved.length === 0) {
           return callback(new UnsafeUrlError("dns_no_records", `No addresses for ${hostname}`));
+        }
+        // Operator-sanctioned host: resolve normally, without the address filter.
+        if (isAllowlistedHost(hostname, allowedHosts)) {
+          if (options?.all) return callback(null, resolved);
+          return callback(null, resolved[0].address, resolved[0].family);
         }
         const blocked = resolved.filter((a) => isBlockedAddress(a.address));
         if (blocked.length > 0) {
@@ -254,6 +286,8 @@ export interface SafeFetchOptions {
   maxBytes?: number;
   maxRedirects?: number;
   allowedPorts?: readonly number[];
+  /** Operator-sanctioned extra hosts (see `UrlValidationOptions`). */
+  allowedHosts?: readonly string[];
   headers?: Record<string, string>;
   /** Injection point for tests; defaults to the SSRF-guarded resolver. */
   lookup?: LookupFn;
@@ -357,7 +391,7 @@ export async function safeFetch(
   rawUrl: string,
   options: SafeFetchOptions = {},
 ): Promise<SafeFetchResult> {
-  const lookup = options.lookup ?? createGuardedLookup();
+  const lookup = options.lookup ?? createGuardedLookup(options.allowedHosts ?? resolveAllowedHosts());
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const deadline = Date.now() + timeoutMs;

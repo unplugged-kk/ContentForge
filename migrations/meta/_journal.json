@@ -78,6 +78,13 @@
       "when": 1789195112595,
       "tag": "0010_purple_tattoo",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789205265170,
+      "tag": "0011_glamorous_firebrand",
+      "breakpoints": true
     }
   ]
 }

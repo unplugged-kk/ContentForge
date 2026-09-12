@@ -91,7 +91,19 @@ export function createResearchRunHandler(deps: ResearchRunDeps) {
       userId: job.userId,
     });
 
-    const result = await deps.engine.executeJob(job, { ...base, providerConfig });
+    // Request-scoped provider config (e.g. explicit web URLs for a directed job)
+    // is stored durably on the job's initiation and overrides the deployment
+    // default per provider. The engine still only sees a config map.
+    const scoped = asRecord(asRecord(job.initiation).providerConfig);
+    const merged: Record<string, Record<string, unknown>> = { ...providerConfig };
+    for (const providerId of Object.keys(scoped)) {
+      merged[providerId] = {
+        ...(merged[providerId] ?? {}),
+        ...asRecord(scoped[providerId]),
+      };
+    }
+
+    const result = await deps.engine.executeJob(job, { ...base, providerConfig: merged });
 
     if (result.status === "complete") {
       ctx.logger.info(
