@@ -148,6 +148,7 @@ export {
   generationRunPayloadSchema,
   publicationDeps,
   publicationRunPayloadSchema,
+  registerBuiltinVisualProviders,
   registerContentJobs,
   registerGenerationRunJob,
   registerPublicationRunJob,

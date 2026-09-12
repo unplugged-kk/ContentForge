@@ -24,13 +24,32 @@ import type { ChatDeps } from "./chat";
 import { runPublication, reconcileStalePublications, type PublicationDeps } from "./publication";
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
-import { createLocalAssetStorage } from "./visual";
+import { createLocalAssetStorage, registerVisualProvider } from "./visual";
+import { createFixtureVisualProvider } from "./visualFixture";
 import { runVisualGeneration } from "./visualService";
 import cron from "node-cron";
 
 export const contentStorage = new DatabaseContentStorage(db);
 
 export const visualAssetStorage = createLocalAssetStorage();
+
+/**
+ * Visual production for the running app. The ONLY producer wired here is the
+ * deterministic fixture (real 1×1 PNG bytes through the real worker/queue/DB).
+ * A real vendor is a future registration behind the same port — the domain,
+ * the job, and the worker do not change.
+ *
+ * `VISUAL_PROVIDER_FAIL_MODE` (transient | permanent | invalid) is honored so
+ * failure paths stay deterministically exercisable without code changes.
+ */
+export function registerBuiltinVisualProviders(): void {
+  registerVisualProvider(
+    createFixtureVisualProvider({
+      providerId: process.env.VISUAL_PROVIDER_ID?.trim() || "local-fixture",
+      failMode: (process.env.VISUAL_PROVIDER_FAIL_MODE as "none" | "transient" | "permanent" | "invalid" | undefined) ?? "none",
+    }),
+  );
+}
 
 export interface VisualRunDeps {
   content: typeof contentStorage;
@@ -241,6 +260,7 @@ export function registerVisualRunJob(
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
+  registerBuiltinVisualProviders();
   registerGenerationRunJob();
   registerPublicationRunJob();
   registerVisualRunJob();

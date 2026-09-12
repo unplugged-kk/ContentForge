@@ -26,7 +26,8 @@
     "e2e:db:up": "docker compose -f docker-compose.e2e.yml up -d --wait",
     "e2e:db:down": "docker compose -f docker-compose.e2e.yml down -v",
     "build:verify:docker": "node script/e2e-docker.mjs",
-    "smoke:research": "node --import tsx script/research-smoke.mjs"
+    "smoke:research": "node --import tsx script/research-smoke.mjs",
+    "test:e2e:visual": "node script/e2e-visual.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
