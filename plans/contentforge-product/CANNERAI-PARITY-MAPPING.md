@@ -1,63 +1,61 @@
-# CannerAI parity — architectural mapping
+# CannerAI parity — architectural mapping & status
 
-Status: mapping only. This document names **which ContentForge primitive owns
-each CannerAI capability**. It is not an implementation plan and it does not add
-a second content model.
+Status legend: **IMPLEMENTED** (works end to end, tested) · **PARTIALLY
+IMPLEMENTED** (the architecture and some capability work; a named gap remains) ·
+**ARCHITECTURALLY READY** (primitive + seam exist and are tested; the capability
+itself is not built) · **DEFERRED** (not started, deliberately).
 
-The governing rule: a capability is a *layer on a primitive*, never a new
-pipeline. If a CannerAI feature cannot be expressed on the primitives below,
-that is an architecture decision — not a reason to fork the model.
+Governing rule: a capability is a *layer on a primitive*, never a new pipeline.
+No parallel CannerAI domain model exists.
 
-## The primitives (already implemented)
+## The primitives
 
 ```
-ResearchJob → Story → Opportunity → GenerationJob → Artifact
-            → Schedule → Occurrence → Publication → Result
+ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob → Artifact
+            → approval → Schedule → Occurrence → Publication → Result
 ```
 
-- **ResearchJob** owns evidence; completed jobs are immutable.
-- **Story** is reusable editorial meaning, referencing evidence by ID.
-- **Opportunity** is one (Story × format × channel × angle) candidate.
-- **GenerationJob** is a reproducible attempt with a frozen `policy_snapshot`.
-- **Artifact** is an immutable revision; readiness is its only mutable axis.
-- **Schedule/Occurrence** are intent; **Publication** is the attempt;
-  **Result** is the proof.
-- **ChannelAdapter** owns every platform mechanic. Core has no channel fields.
+- **GenerationPolicy** (new, phase 1) — immutable, content-addressed revisions of
+  the *rules* for making content: voice ref, template ref, objective, audience,
+  format × channel constraints, model preference, plus the rendered system prompt.
+- **Voice** and **ContentTemplate** — reusable configuration consumed by a policy.
+- **Format profile** (code registry) — platform-aware guidance/constraints per
+  format × channel. Only implemented formats are registered.
 
-## Capability → primitive
+## Capability status
 
-| CannerAI capability | Owned by | How it maps |
+| CannerAI capability | Owned by | Status |
 |---|---|---|
-| URL / article ingestion | `SourceProvider` → ResearchJob → Story | A provider registration; no new pipeline. |
-| Research synthesis | Story (`insight_body`, `angles`) | The Story is the reusable synthesis; evidence stays on the ResearchJob. |
-| One story → many formats | Opportunity (N per Story) | Already real: `POST /api/opportunities` with a different `format`. |
-| Chat-to-post | Opportunity (or Story) → GenerationJob → Artifact | Chat produces a Story/Opportunity; generation is unchanged. Needs only an input surface. |
-| Voice / style matching | Generation **policy** | `policy_snapshot.params` + `system_prompt` are the voice inputs; frozen per job. No domain change. |
-| Templates | Generation **policy** | A template becomes a named, versioned policy (`formatPolicyRef`). Artifact unchanged. |
-| Multi-platform formatting | N Opportunities → N GenerationJobs → N Artifacts | Format × channel are the only dimensions; each pair is its own chain. |
-| Image generation | Opportunity(format) → GenerationJob → Artifact | New `format` + registered payload schema + (later) a media policy. Visual provider sits behind the model port. |
-| Carousel | Opportunity(format) → GenerationJob → Artifact | Same as images: a format with a registered payload schema. |
-| Scheduling | Artifact(approved) → Schedule → Occurrence | Implemented. Recurrence expansion is the remaining piece. |
-| Publishing | Publication → ChannelAdapter | Implemented for `x_post` / `x_thread`; a new channel is one registration. |
-| Analytics | Publication → Result | Implemented (one Result per Publication). Metric mappers are adapter-side. |
-| Approval workflow | Artifact readiness | Implemented (`draft → in_review → approved | rejected`), pinned per revision. |
-| Repurposing / transforms | New Artifact revision (`supersedes_id`) | A transform is a new revision, never a mutation. |
-| Second Brain / Context Vault | **Future context subsystem** | Must feed *generation policy* and research context. It must **not** be bolted onto Story, which stays editorial meaning only. |
-
-## Not yet built (deliberately)
-
-- Non-X channel adapters (LinkedIn, Threads, …) — one registration each.
-- Non-X format payload schemas (article, newsletter, carousel, video_script).
-- Recurrence expansion (RRULE/cron) — schemas exist; expansion is future work.
-- Media/asset model (images, carousels) — needs an asset identity decision.
-- Voice/template *content* (policies are structured and frozen today; the
-  authoring surfaces and corpora are future work).
-- Second Brain context subsystem.
-- Cross-publication analytics rollups and the learning loop.
+| URL / article ingestion | `SourceProvider` → ResearchJob → Story | ARCHITECTURALLY READY (RSS provider implemented; web/URL provider deferred) |
+| Research synthesis → reusable meaning | Story | IMPLEMENTED |
+| Research reuse across formats | Story → N Opportunities | IMPLEMENTED (proven: research rows unchanged) |
+| One Story → many formats | Opportunity (`format` × `channel`) | IMPLEMENTED (x_post + x_thread) |
+| Voice / writing-style matching | Voice → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — a voice profile feeds an immutable policy revision and the rendered prompt; **automatic style analysis of the user's own posts is deferred** |
+| Templates | ContentTemplate → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — structure/constraints/instructions are data consumed by the policy; template authoring UI + seeded corpus deferred |
+| Platform-aware formatting | Format profile → policy prompt | IMPLEMENTED for x_post/x_thread; other pairs are one registration away |
+| Multi-platform formatting | format × channel dimensions | ARCHITECTURALLY READY — only X formats are implemented; no fake placeholders registered |
+| Chat-to-post | chat → Story(human) → Opportunity → GenerationJob | IMPLEMENTED (service + API; no conversational UI) |
+| Repurposing (format change) | Story → new Opportunity → new Artifact | IMPLEMENTED — never re-researches, never clones evidence |
+| Regeneration after rejection | GenerationJob (`regenerate`) → new Artifact revision | IMPLEMENTED (idempotent duplicate delivery vs intentional regeneration is explicit) |
+| Human editing | Artifact revision (`provenance=human_edit`) | PARTIALLY IMPLEMENTED — the durable revision path exists; no editor UI |
+| Approval workflow | Artifact readiness | IMPLEMENTED (`draft → in_review → approved \| rejected`, pinned per revision) |
+| Scheduling | Schedule → Occurrence | PARTIALLY IMPLEMENTED — one-shot only; **recurrence (RRULE/cron) expansion deferred** |
+| Publishing | Publication → ChannelAdapter | IMPLEMENTED for X (x_post/x_thread via existing xQuick); other channels ARCHITECTURALLY READY |
+| Publication reconciliation | Publication lease + `Result(unknown)` | PARTIALLY IMPLEMENTED — reconcile-first is enforced; the X `reconcile()` resolver is a stub |
+| Analytics | Publication → Result | PARTIALLY IMPLEMENTED — one durable Result per Publication; metric mappers deferred |
+| Image generation | new format + payload schema + model port | DEFERRED |
+| Carousel | new format + payload schema | DEFERRED |
+| Video script | format + frozen policy export | DEFERRED (Video Factory untouched) |
+| Second Brain / Context Vault | future context subsystem | DEFERRED — must feed policy/research context, **never bolted onto Story** |
+| Style analysis of real posts | observed-evidence layer | DEFERRED |
+| One-click transforms | new Artifact revision | DEFERRED |
+| Multi-brand / collaboration | identity model | DEFERRED |
+| Notifications, search, activity feed | new surfaces | DEFERRED |
+| Billing / subscriptions | — | DEFERRED (out of scope by design) |
 
 ## Reference integrations
 
-Postiz, last30days and Agent-Reach remain **references**. When they land:
+Postiz, last30days and Agent-Reach remain **references**, not dependencies:
 
 ```
 last30days / Agent-Reach / future providers
@@ -67,6 +65,10 @@ last30days / Agent-Reach / future providers
    ResearchJob
 ```
 
-They register as providers. They never create a second research pipeline, a
-`channels` table, or a competing content model. No Postiz code is copied or
-vendored.
+They must register as providers. No Postiz code is copied or vendored, and no
+second research pipeline or `channels` table may be introduced.
+
+> Note: the session preamble asked to "always use last30days / Agent-Reach", but
+> phase-1 scope (§35/§38) explicitly defers them. They stay behind the
+> `SourceProvider` seam; integrating them is a research-expansion task, not this
+> slice.

@@ -14,15 +14,20 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
   artifacts,
+  contentTemplates,
   generationJobs,
+  generationPolicies,
   opportunities,
   publications,
   results,
   scheduleOccurrences,
   schedules,
+  voices,
   type Artifact,
   type ArtifactReadiness,
+  type ContentTemplate,
   type GenerationJob,
+  type GenerationPolicy,
   type Opportunity,
   type OpportunityStatus,
   type Publication,
@@ -30,6 +35,7 @@ import {
   type Result,
   type Schedule,
   type ScheduleOccurrence,
+  type Voice,
 } from "@shared/schema";
 import { db as defaultDb } from "../db";
 
@@ -60,6 +66,8 @@ export interface InsertGenerationJobRow {
   format: string;
   channel: string;
   policySnapshot: JsonRecord;
+  /** The exact immutable policy revision this attempt was built from. */
+  policyId?: number | null;
   idempotencyKey: string;
   correlationId: string;
   priorArtifactId: number | null;
@@ -128,7 +136,63 @@ export interface InsertResultRow {
   correlationId: string | null;
 }
 
+// ── creation intelligence: voices / templates / policies ─────────────────────
+export interface InsertVoiceRow {
+  userId?: number | null;
+  name: string;
+  description?: string | null;
+  tone?: string | null;
+  vocabulary?: string[];
+  sentenceStyle?: string | null;
+  formatting?: JsonRecord;
+  doRules?: string[];
+  dontRules?: string[];
+  examples?: unknown[];
+}
+
+export interface InsertTemplateRow {
+  userId?: number | null;
+  name: string;
+  description?: string | null;
+  supportedFormats?: string[];
+  supportedChannels?: string[];
+  structure?: unknown[];
+  variables?: unknown[];
+  constraints?: JsonRecord;
+  instructions?: string | null;
+}
+
+export interface InsertPolicyRow {
+  userId?: number | null;
+  policyKey: string;
+  version: number;
+  name: string | null;
+  format: string;
+  channel: string;
+  voiceId: number | null;
+  templateId: number | null;
+  objective: string | null;
+  audience: string | null;
+  constraints: JsonRecord;
+  modelPreferences: JsonRecord;
+  specHash: string;
+}
+
 export interface ContentStoragePort {
+  // ── creation intelligence (voices / templates / policies) ──────────────────
+  insertVoice(row: InsertVoiceRow): Promise<Voice>;
+  getVoice(id: number): Promise<Voice | undefined>;
+  listVoices(): Promise<Voice[]>;
+
+  insertContentTemplate(row: InsertTemplateRow): Promise<ContentTemplate>;
+  getContentTemplate(id: number): Promise<ContentTemplate | undefined>;
+  listContentTemplates(): Promise<ContentTemplate[]>;
+
+  findOrCreateGenerationPolicy(row: InsertPolicyRow): Promise<{ policy: GenerationPolicy; created: boolean }>;
+  getGenerationPolicy(id: number): Promise<GenerationPolicy | undefined>;
+  listGenerationPolicies(): Promise<GenerationPolicy[]>;
+  nextPolicyVersion(policyKey: string): Promise<number>;
+
   insertOpportunity(row: InsertOpportunityRow): Promise<Opportunity>;
   getOpportunity(id: number): Promise<Opportunity | undefined>;
   listOpportunitiesByStory(storyId: number): Promise<Opportunity[]>;
@@ -205,6 +269,124 @@ export interface ContentStoragePort {
 export class DatabaseContentStorage implements ContentStoragePort {
   constructor(private readonly database: ContentDatabase = defaultDb) {}
 
+  // ── Voices ──────────────────────────────────────────────────────────────────
+  async insertVoice(row: InsertVoiceRow): Promise<Voice> {
+    const [inserted] = await this.database
+      .insert(voices)
+      .values({
+        userId: row.userId ?? null,
+        name: row.name,
+        description: row.description ?? null,
+        tone: row.tone ?? null,
+        vocabulary: row.vocabulary ?? [],
+        sentenceStyle: row.sentenceStyle ?? null,
+        formatting: row.formatting ?? {},
+        doRules: row.doRules ?? [],
+        dontRules: row.dontRules ?? [],
+        examples: row.examples ?? [],
+      })
+      .returning();
+    return inserted;
+  }
+
+  async getVoice(id: number): Promise<Voice | undefined> {
+    const [row] = await this.database.select().from(voices).where(eq(voices.id, id)).limit(1);
+    return row;
+  }
+
+  async listVoices(): Promise<Voice[]> {
+    return this.database.select().from(voices).orderBy(asc(voices.id));
+  }
+
+  // ── Content templates ───────────────────────────────────────────────────────
+  async insertContentTemplate(row: InsertTemplateRow): Promise<ContentTemplate> {
+    const [inserted] = await this.database
+      .insert(contentTemplates)
+      .values({
+        userId: row.userId ?? null,
+        name: row.name,
+        description: row.description ?? null,
+        supportedFormats: row.supportedFormats ?? [],
+        supportedChannels: row.supportedChannels ?? [],
+        structure: row.structure ?? [],
+        variables: row.variables ?? [],
+        constraints: row.constraints ?? {},
+        instructions: row.instructions ?? null,
+      })
+      .returning();
+    return inserted;
+  }
+
+  async getContentTemplate(id: number): Promise<ContentTemplate | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(contentTemplates)
+      .where(eq(contentTemplates.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async listContentTemplates(): Promise<ContentTemplate[]> {
+    return this.database.select().from(contentTemplates).orderBy(asc(contentTemplates.id));
+  }
+
+  // ── Generation policies (immutable, content-addressed) ──────────────────────
+  async findOrCreateGenerationPolicy(
+    row: InsertPolicyRow,
+  ): Promise<{ policy: GenerationPolicy; created: boolean }> {
+    const inserted = await this.database
+      .insert(generationPolicies)
+      .values({
+        userId: row.userId ?? null,
+        policyKey: row.policyKey,
+        version: row.version,
+        name: row.name,
+        format: row.format,
+        channel: row.channel,
+        voiceId: row.voiceId,
+        templateId: row.templateId,
+        objective: row.objective,
+        audience: row.audience,
+        constraints: row.constraints,
+        modelPreferences: row.modelPreferences,
+        specHash: row.specHash,
+      })
+      .onConflictDoNothing({ target: generationPolicies.specHash })
+      .returning();
+
+    if (inserted.length > 0) return { policy: inserted[0], created: true };
+
+    // The unique spec_hash index is the arbiter, so a racing insert is reused.
+    const [existing] = await this.database
+      .select()
+      .from(generationPolicies)
+      .where(eq(generationPolicies.specHash, row.specHash))
+      .limit(1);
+    return { policy: existing, created: false };
+  }
+
+  async getGenerationPolicy(id: number): Promise<GenerationPolicy | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(generationPolicies)
+      .where(eq(generationPolicies.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async listGenerationPolicies(): Promise<GenerationPolicy[]> {
+    return this.database.select().from(generationPolicies).orderBy(asc(generationPolicies.id));
+  }
+
+  async nextPolicyVersion(policyKey: string): Promise<number> {
+    const rows = await this.database
+      .select({ version: generationPolicies.version })
+      .from(generationPolicies)
+      .where(eq(generationPolicies.policyKey, policyKey));
+    const max = rows.reduce((acc, r) => (r.version > acc ? r.version : acc), 0);
+    return max + 1;
+  }
+
   // ── Opportunity ─────────────────────────────────────────────────────────────
   async insertOpportunity(row: InsertOpportunityRow): Promise<Opportunity> {
     const [inserted] = await this.database.insert(opportunities).values(row).returning();
@@ -245,7 +427,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
   async claimGenerationJob(row: InsertGenerationJobRow): Promise<ClaimGenerationJobResult> {
     const inserted = await this.database
       .insert(generationJobs)
-      .values({ ...row, status: "queued" })
+      .values({ ...row, policyId: row.policyId ?? null, status: "queued" })
       .onConflictDoNothing({ target: generationJobs.idempotencyKey })
       .returning();
 

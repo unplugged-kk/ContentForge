@@ -689,6 +689,114 @@ export const opportunities = pgTable(
 );
 
 /**
+ * Voice profile — reusable writing identity for generation (CannerAI parity
+ * phase 1). A voice is *configuration*, never a second generation engine: it
+ * feeds a GenerationPolicy, which is what a GenerationJob snapshots.
+ *
+ * Deliberately supersedes `user_profile.brand_voice` (a single text column) as
+ * the policy input without removing it; legacy rows stay untouched.
+ */
+export const voices = pgTable(
+  "voices",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    /** e.g. "technical, direct, no hype" */
+    tone: varchar("tone", { length: 200 }),
+    /** Vocabulary preferences/banlist. */
+    vocabulary: jsonb("vocabulary").$type<string[]>().notNull().default([]),
+    sentenceStyle: varchar("sentence_style", { length: 200 }),
+    /** Formatting preferences (line breaks, emoji use, casing…). */
+    formatting: jsonb("formatting").$type<Record<string, unknown>>().notNull().default({}),
+    doRules: jsonb("do_rules").$type<string[]>().notNull().default([]),
+    dontRules: jsonb("dont_rules").$type<string[]>().notNull().default([]),
+    /** Reference material (bounded excerpts/notes), never bulk corpora. */
+    examples: jsonb("examples").$type<unknown[]>().notNull().default([]),
+    /** active | archived */
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("voices_status_idx").on(table.status)],
+);
+
+/**
+ * Content template — reusable *structure* consumed by a GenerationPolicy
+ * (CannerAI parity phase 1). Data, not a code path per template.
+ *
+ * Distinct from the legacy `templates` table (pattern + postType + pillarId),
+ * which is prior art and stays for the legacy editor.
+ */
+export const contentTemplates = pgTable(
+  "content_templates",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    supportedFormats: text("supported_formats").array().default(sql`'{}'::text[]`),
+    supportedChannels: text("supported_channels").array().default(sql`'{}'::text[]`),
+    /** Ordered structural sections, e.g. hook → insight → evidence → takeaway → cta. */
+    structure: jsonb("structure").$type<unknown[]>().notNull().default([]),
+    /** Declared placeholders the assembler may fill. */
+    variables: jsonb("variables").$type<unknown[]>().notNull().default([]),
+    /** Structural constraints (max sections, required sections…). */
+    constraints: jsonb("constraints").$type<Record<string, unknown>>().notNull().default({}),
+    /** Free-form generation instructions appended to the policy prompt. */
+    instructions: text("instructions"),
+    /** active | archived */
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("content_templates_status_idx").on(table.status)],
+);
+
+/**
+ * Generation policy — the central creation primitive (CannerAI parity phase 1).
+ *
+ * Immutable, content-addressed revisions: a policy row is never edited, a new
+ * one is inserted. `spec_hash` is UNIQUE, so resolving the same effective policy
+ * twice reuses the same revision instead of duplicating it, and a later edit
+ * (different voice/template/constraints) necessarily produces a new revision.
+ * A GenerationJob pins `policy_id` AND snapshots the rendered request, so it can
+ * always answer "exactly what produced this Artifact?".
+ */
+export const generationPolicies = pgTable(
+  "generation_policies",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** Stable logical identity, e.g. `pol:x_post:x`. */
+    policyKey: varchar("policy_key", { length: 200 }).notNull(),
+    version: integer("version").notNull().default(1),
+    name: varchar("name", { length: 200 }),
+    format: varchar("format", { length: 50 }).notNull(),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    voiceId: integer("voice_id").references(() => voices.id),
+    templateId: integer("template_id").references(() => contentTemplates.id),
+    objective: text("objective"),
+    audience: text("audience"),
+    /** Length/structure/CTA/platform constraints resolved for this policy. */
+    constraints: jsonb("constraints").$type<Record<string, unknown>>().notNull().default({}),
+    /** Model preferences (ids only — providers stay infrastructure). */
+    modelPreferences: jsonb("model_preferences").$type<Record<string, unknown>>().notNull().default({}),
+    /** Deterministic hash of the resolved spec; the idempotency input. */
+    specHash: varchar("spec_hash", { length: 64 }).notNull(),
+    /** active | archived */
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("generation_policies_key_version_uq").on(table.policyKey, table.version),
+    uniqueIndex("generation_policies_spec_hash_uq").on(table.specHash),
+    index("generation_policies_format_channel_idx").on(table.format, table.channel),
+  ],
+);
+
+/**
  * GenerationJob — one reproducible generation attempt for an Opportunity
  * (Ticket 05 §5). Distinct from Artifact: this records *how* content was made
  * (frozen policy, model, cost, attempts); the Artifact is the resulting content.
@@ -703,8 +811,10 @@ export const generationJobs = pgTable(
     /** Requested dimensions, copied from the Opportunity at creation time. */
     format: varchar("format", { length: 50 }).notNull(),
     channel: varchar("channel", { length: 50 }).notNull(),
-    /** FROZEN policy: format policy ref + version, model, params, rendered prompts. */
+    /** FROZEN policy: the fully rendered effective request for this attempt. */
     policySnapshot: jsonb("policy_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    /** The exact immutable policy revision this attempt was built from. */
+    policyId: integer("policy_id").references(() => generationPolicies.id),
     /** (opportunity + policy hash) — the authoritative idempotency arbiter. */
     idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
     /** queued | running | succeeded | failed */
@@ -919,6 +1029,20 @@ export const insertResultSchema = createInsertSchema(results).omit({
   createdAt: true,
   updatedAt: true,
 });
+export const insertVoiceSchema = createInsertSchema(voices).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertContentTemplateSchema = createInsertSchema(contentTemplates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertGenerationPolicySchema = createInsertSchema(generationPolicies).omit({
+  id: true,
+  createdAt: true,
+});
 
 export type Opportunity = typeof opportunities.$inferSelect;
 export type InsertOpportunity = z.infer<typeof insertOpportunitySchema>;
@@ -933,6 +1057,12 @@ export type Publication = typeof publications.$inferSelect;
 export type InsertPublication = z.infer<typeof insertPublicationSchema>;
 export type Result = typeof results.$inferSelect;
 export type InsertResult = z.infer<typeof insertResultSchema>;
+export type Voice = typeof voices.$inferSelect;
+export type InsertVoice = z.infer<typeof insertVoiceSchema>;
+export type ContentTemplate = typeof contentTemplates.$inferSelect;
+export type InsertContentTemplate = z.infer<typeof insertContentTemplateSchema>;
+export type GenerationPolicy = typeof generationPolicies.$inferSelect;
+export type InsertGenerationPolicy = z.infer<typeof insertGenerationPolicySchema>;
 export type OpportunityStatus = "proposed" | "selected" | "killed";
 export type ArtifactReadiness = "draft" | "in_review" | "approved" | "rejected";
 export type PublicationState =

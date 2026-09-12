@@ -93,6 +93,10 @@ let flakyHits = 0;
 let flakyLongHits = 0;
 let requests = 0;
 let tweetCounter = 0;
+/** When true, the next completion returns a payload that fails validation. */
+let invalidNext = false;
+/** Artificial model latency (ms), so a generation job can be observed queued. */
+let modelDelayMs = 0;
 
 /** Read a JSON request body (bounded). */
 function readBody(req) {
@@ -114,17 +118,56 @@ function readBody(req) {
  * (`server/ai` + `aiCall`) is exercised end to end without calling a provider.
  * Returns the payload shape the format's registry schema expects.
  */
-function completionBody(format) {
-  const content =
-    format === "x_thread"
-      ? JSON.stringify({ units: ["Kubernetes scheduling is now a policy surface.", "Platform teams can own placement."] })
-      : JSON.stringify({ text: "Kubernetes scheduling is now a policy surface, not a hardcoded heuristic." });
+function completionBody(format, invalid = false) {
+  let content;
+  if (invalid) {
+    // Structurally invalid for the registered schema: an x_thread needs >= 1 unit.
+    content = JSON.stringify(format === "x_thread" ? { units: [] } : {});
+  } else if (format === "x_thread") {
+    content = JSON.stringify({ units: ["Kubernetes scheduling is now a policy surface.", "Platform teams can own placement."] });
+  } else {
+    content = JSON.stringify({ text: "Kubernetes scheduling is now a policy surface, not a hardcoded heuristic." });
+  }
   return {
     id: "chatcmpl-fixture",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: "fixture-model",
     choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+  };
+}
+
+/**
+ * Deterministic chat-intent extraction response (OpenAI-compatible).
+ */
+function intentCompletionBody() {
+  const intent = {
+    title: "Kubernetes scheduling as a policy surface",
+    insightBody:
+      "Scheduler plugins became a stable extension point, so placement policy now lives with the platform team rather than in the scheduler binary.",
+    angles: [
+      "Platform teams own placement policy",
+      "Cost is the next scheduling input",
+    ],
+    concept: "explain why scheduling moved into platform ownership",
+    objective: "educate platform engineers",
+    audience: "platform engineering teams",
+    format: "x_post",
+    channel: "x",
+  };
+  return {
+    id: "chatcmpl-intent",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fixture-model",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: JSON.stringify(intent) },
+        finish_reason: "stop",
+      },
+    ],
     usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
   };
 }
@@ -141,9 +184,31 @@ async function handlePost(req, res, url) {
     res.end(JSON.stringify(body));
   };
 
+  if (url.pathname === "/control/invalid-next") {
+    await readBody(req);
+    invalidNext = true;
+    return send(200, { ok: true, invalidNext });
+  }
+
+  if (url.pathname === "/control/model-delay") {
+    const body = await readBody(req);
+    modelDelayMs = Number(body.ms ?? 0);
+    return send(200, { ok: true, modelDelayMs });
+  }
+
   if (url.pathname.endsWith("/chat/completions")) {
     const body = await readBody(req);
     const prompt = JSON.stringify(body.messages ?? []);
+    if (modelDelayMs > 0) await new Promise((r) => setTimeout(r, modelDelayMs));
+    // Chat-to-post intent extraction (deterministic).
+    if (prompt.includes("CONTENT_REQUEST_INTENT")) {
+      return send(200, intentCompletionBody());
+    }
+    // Forced invalid payload: fails the format registry's validation.
+    if (invalidNext) {
+      invalidNext = false;
+      return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post", true));
+    }
     return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post"));
   }
 

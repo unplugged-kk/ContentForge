@@ -15,11 +15,12 @@ import { researchStorage } from "../research/service";
 import { storyStorage } from "../story/service";
 import { z } from "zod";
 import { DatabaseContentStorage } from "./storage";
-import { createGatewayGenerationModel } from "./model";
+import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 import {
   runGenerationJob,
   type GenerationDeps,
 } from "./generation";
+import type { ChatDeps } from "./chat";
 import { runPublication, type PublicationDeps } from "./publication";
 import { registerBuiltinChannelAdapters } from "./adapters";
 
@@ -40,6 +41,15 @@ export const generationDeps: GenerationDeps = {
 
 export const publicationDeps: PublicationDeps = {
   content: contentStorage,
+};
+
+/** Chat-to-post: conversational input becomes a normal Story → Opportunity → job. */
+export const chatDeps: ChatDeps = {
+  content: contentStorage,
+  stories: storyStorage,
+  opportunities: { opportunities: contentStorage, stories: storyStorage },
+  intent: createGatewayChatIntent(),
+  generation: generationDeps,
 };
 
 // ── generation.run ────────────────────────────────────────────────────────────

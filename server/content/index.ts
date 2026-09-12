@@ -7,9 +7,12 @@ export {
   type InsertArtifactRow,
   type InsertGenerationJobRow,
   type InsertOpportunityRow,
+  type InsertPolicyRow,
   type InsertPublicationRow,
   type InsertResultRow,
   type InsertScheduleRow,
+  type InsertTemplateRow,
+  type InsertVoiceRow,
   type JsonRecord,
 } from "./storage";
 
@@ -30,24 +33,60 @@ export {
 } from "./opportunity";
 
 export {
-  buildGenerationPolicy,
   createGenerationJob,
   generationIdempotencyKey,
   loadGenerationContext,
   runGenerationJob,
+  GenerationInputError,
   OpportunityKilledError,
   OpportunityNotFoundError as GenerationOpportunityNotFoundError,
   StoryMissingForOpportunityError,
-  type BuildPolicyOptions,
   type CreateGenerationJobInput,
+  type EffectiveGenerationRequest,
   type GenerationContext,
   type GenerationDeps,
   type GenerationModelPort,
   type GenerationOutput,
-  type GenerationPolicy,
   type GenerationRequest,
   type GenerationRunResult,
 } from "./generation";
+
+export {
+  assembleEffectiveRequest,
+  canonicalJson,
+  policySpecHash,
+  resolveGenerationPolicy,
+  templateContentHash,
+  voiceContentHash,
+  PolicyInputError,
+  TemplateFormatMismatchError,
+  TemplateNotFoundError,
+  VoiceNotFoundError,
+  type PolicyDeps,
+  type PolicySpec,
+  type ResolvePolicyInput,
+  type ResolvedPolicy,
+} from "./policy";
+
+export {
+  getFormatProfile,
+  hasFormatProfile,
+  listFormatProfiles,
+  type FormatProfile,
+} from "./formatProfiles";
+
+export {
+  chatRequestSchema,
+  handleChatRequest,
+  ChatInputError,
+  ChatStoryNotFoundError,
+  type ChatDeps,
+  type ChatIntent,
+  type ChatIntentPort,
+  type ChatRequest,
+  type ChatResult,
+  type ChatStoryPort,
+} from "./chat";
 
 export {
   approveArtifact,
@@ -100,6 +139,7 @@ export {
 } from "./adapters";
 
 export {
+  chatDeps,
   contentStorage,
   createGenerationRunHandler,
   createPublicationRunHandler,
@@ -115,6 +155,8 @@ export {
   type GenerationRunPayload,
   type PublicationRunPayload,
 } from "./service";
+
+export { CHAT_INTENT_MARKER, createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 
 export {
   createContentRouter,

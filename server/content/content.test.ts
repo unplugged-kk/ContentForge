@@ -26,11 +26,17 @@ import {
   InvalidOpportunityInputError,
   StoryNotUsableError,
 } from "./opportunity";
+import { generationIdempotencyKey } from "./generation";
 import {
-  buildGenerationPolicy,
-  generationIdempotencyKey,
-  type GenerationPolicy,
-} from "./generation";
+  assembleEffectiveRequest,
+  canonicalJson,
+  policySpecHash,
+  resolveGenerationPolicy,
+  voiceContentHash,
+  PolicyInputError,
+  type PolicySpec,
+} from "./policy";
+import { getFormatProfile, hasFormatProfile } from "./formatProfiles";
 import {
   approveArtifact,
   createArtifact,
@@ -264,41 +270,127 @@ describe("opportunity boundary", () => {
 
 // ── Generation policy ─────────────────────────────────────────────────────────
 describe("generation policy", () => {
-  it("is deterministic and embeds fully rendered prompts and input hashes", () => {
-    const s = story();
-    const o = opportunity({ storyId: s.id });
-    const evidence = [{ id: 1, excerpt: "e", kind: "excerpt" }];
-    const a = buildGenerationPolicy(o, s, evidence, { model: "m1" });
-    const b = buildGenerationPolicy(o, s, evidence, { model: "m1" });
-    assert.deepEqual(a, b, "same inputs → identical policy");
-    assert.match(a.systemPrompt, /x_post/);
-    assert.match(a.userPrompt, /Scheduler plugins/);
-    assert.equal(a.formatPolicyRef, "x_post@1");
-    assert.equal(a.inputHashes.story.length, 64);
+  const spec = (over: Partial<PolicySpec> = {}): PolicySpec => ({
+    format: "x_post",
+    channel: "x",
+    formatPolicyRef: "x_post@1",
+    voiceId: null,
+    voiceHash: "none",
+    templateId: null,
+    templateHash: "none",
+    objective: "o",
+    audience: null,
+    constraints: { maxCharacters: 280 },
+    model: "m1",
+    ...over,
   });
 
-  it("changes identity when the policy changes", () => {
-    const s = story();
-    const o = opportunity({ storyId: s.id });
-    const p1 = buildGenerationPolicy(o, s, [], { model: "m1" });
-    const p2 = buildGenerationPolicy(o, s, [], { model: "m2" });
-    assert.notEqual(generationIdempotencyKey(o.id, p1), generationIdempotencyKey(o.id, p2));
+  it("hashes the canonical spec deterministically and order-independently", () => {
+    assert.equal(policySpecHash(spec()), policySpecHash(spec()));
     assert.equal(
-      generationIdempotencyKey(o.id, p1),
-      generationIdempotencyKey(o.id, buildGenerationPolicy(o, s, [], { model: "m1" })),
-      "the same (opportunity, policy) collapses to one job",
+      policySpecHash(spec({ constraints: { a: 1, b: 2 } })),
+      policySpecHash(spec({ constraints: { b: 2, a: 1 } })),
+      "key order must not change the hash",
     );
+    assert.equal(canonicalJson({ b: 1, a: [2, { d: 1, c: 2 }] }), '{"a":[2,{"c":2,"d":1}],"b":1}');
   });
 
-  it("builds the composite publication identity from schedule × occurrence × revision", () => {
-    assert.equal(
-      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 3 }),
-      "publication:1:2:3",
+  it("changes the spec hash when the voice or template content changes", () => {
+    const base = spec();
+    assert.notEqual(
+      policySpecHash(base),
+      policySpecHash(spec({ voiceId: 7, voiceHash: voiceContentHash({ id: 7, name: "v", tone: "direct" } as never) })),
     );
     assert.notEqual(
-      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 3 }),
-      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 4 }),
+      policySpecHash(base),
+      policySpecHash(spec({ templateId: 3, templateHash: "abc" })),
     );
+  });
+
+  it("distinguishes duplicate delivery from intentional regeneration", () => {
+    const h = "a".repeat(64);
+    assert.equal(generationIdempotencyKey(5, h), generationIdempotencyKey(5, h), "duplicate collapses");
+    assert.notEqual(
+      generationIdempotencyKey(5, h),
+      generationIdempotencyKey(5, h, "regen-uuid"),
+      "an explicit regeneration nonce produces a distinct job",
+    );
+  });
+
+  it("resolves a policy to an immutable, content-addressed revision", async () => {
+    const created: Record<string, unknown>[] = [];
+    const content = {
+      getVoice: async () => ({ id: 1, name: "Direct", tone: "technical", vocabulary: [], sentenceStyle: null, formatting: {}, doRules: ["be concrete"], dontRules: [], examples: [], status: "active" }),
+      getContentTemplate: async () => undefined,
+      listGenerationPolicies: async () => created as never,
+      nextPolicyVersion: async () => created.length + 1,
+      findOrCreateGenerationPolicy: async (row: Record<string, unknown>) => {
+        const policy = { ...row, id: created.length + 1 };
+        created.push(policy);
+        return { policy: policy as never, created: true };
+      },
+    } as never;
+
+    const first = await resolveGenerationPolicy(
+      { format: "x_post", channel: "x", voiceId: 1, model: "m1" },
+      { content },
+    );
+    assert.equal(first.created, true);
+    assert.equal(first.policy.version, 1);
+    assert.equal(first.voice?.name, "Direct");
+    assert.equal(first.profile.format, "x_post");
+    // A different voice produces a different spec hash → a new revision.
+    const second = await resolveGenerationPolicy(
+      { format: "x_post", channel: "x", model: "m1" },
+      { content },
+    );
+    assert.notEqual(second.specHash, first.specHash);
+  });
+
+  it("rejects formats without a payload schema or a format profile", async () => {
+    const content = { listGenerationPolicies: async () => [] } as never;
+    await assert.rejects(
+      () => resolveGenerationPolicy({ format: "carousel", channel: "x" }, { content }),
+      PolicyInputError,
+    );
+    await assert.rejects(
+      () => resolveGenerationPolicy({ format: "x_post", channel: "linkedin" }, { content }),
+      PolicyInputError,
+    );
+  });
+
+  it("assembles a deterministic effective request carrying policy + voice + template + platform rules", () => {
+    const resolved = {
+      policy: { id: 9, policyKey: "pol:x_post:x", version: 2, format: "x_post", channel: "x", constraints: { maxCharacters: 280 }, modelPreferences: { model: "m1" } },
+      voice: { id: 1, name: "Direct", tone: "technical", vocabulary: [], sentenceStyle: null, formatting: {}, doRules: ["be concrete"], dontRules: ["no hype"], examples: [] },
+      template: { id: 2, name: "Hook → Insight → Takeaway", description: null, structure: [{ name: "hook" }, { name: "insight" }, { name: "takeaway" }], variables: [], constraints: {}, instructions: "Keep it tight." },
+      profile: getFormatProfile("x_post", "x")!,
+      specHash: "a".repeat(64),
+      created: false,
+    } as never;
+    const ctx = {
+      story: { id: 1, title: "Scheduling", insightBody: "policy surface", angles: [] },
+      opportunity: { id: 2, concept: "c", objective: "o", audience: null, angle: null },
+      evidence: [{ id: 3, excerpt: "evidence text", kind: "excerpt" }],
+    };
+
+    const a = assembleEffectiveRequest(resolved, ctx, "m1");
+    const b = assembleEffectiveRequest(resolved, ctx, "m1");
+    assert.deepEqual(a, b, "assembly is deterministic");
+    assert.equal(a.policyId, 9);
+    assert.match(a.systemPrompt, /Platform guidance/);
+    assert.match(a.systemPrompt, /be concrete/);
+    assert.match(a.systemPrompt, /hook → insight → takeaway/);
+    assert.match(a.userPrompt, /evidence text/);
+    assert.equal(a.inputHashes.voice.length, 64);
+    assert.equal(a.format, "x_post");
+  });
+
+  it("only supports formats that are genuinely implemented", () => {
+    assert.equal(hasFormatProfile("x_post", "x"), true);
+    assert.equal(hasFormatProfile("x_thread", "x"), true);
+    assert.equal(hasFormatProfile("linkedin_post", "linkedin"), false, "no fake placeholders");
+    assert.equal(hasFormatProfile("carousel", "x"), false);
   });
 });
 
@@ -552,4 +644,17 @@ describe("publication boundary", () => {
   });
 });
 
-export type { GenerationJob, ScheduleOccurrence, GenerationPolicy };
+describe("publication identity", () => {
+  it("is the composite of schedule × occurrence × artifact revision", () => {
+    assert.equal(
+      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 3 }),
+      "publication:1:2:3",
+    );
+    assert.notEqual(
+      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 3 }),
+      publicationIdempotencyKey({ scheduleId: 1, occurrenceId: 2, artifactId: 4 }),
+    );
+  });
+});
+
+export type { GenerationJob, ScheduleOccurrence };

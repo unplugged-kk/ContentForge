@@ -258,6 +258,15 @@ async function fixtureGet(p) {
   return { status: res.status, text: await res.text() };
 }
 
+async function fixturePost(p, body) {
+  const res = await fetch(`${FIXTURE_BASE}${p}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  return { status: res.status, body: await res.json().catch(() => undefined) };
+}
+
 // ── Domain helpers ────────────────────────────────────────────────────────────
 /**
  * One active RSS source pointing at the fixture. Seeded sources are removed so
@@ -571,6 +580,7 @@ const observed = {};
   });
   const generationJobId = generationRes?.body?.id;
   observed.generationJobId = generationJobId;
+  observed.goldenPolicyId = generationRes?.body?.policyId ?? null;
   assert(Number.isInteger(generationJobId), "harness error: generation job id not captured");
 
   const artifactCreated = await check("real generation worker produces an Artifact", async () => {
@@ -881,6 +891,215 @@ const observed = {};
     );
     assert(Number.isInteger(row.artifactId), "no artifact after restart");
     return `artifact ${row.artifactId} produced by the restarted worker`;
+  });
+
+  // ── 6b. CREATION INTELLIGENCE (CannerAI parity phase 1) ─────────────────────
+  phase("Creation intelligence: Voice / Template / Policy → multi-format, chat-to-post, failure");
+  const researchBeforeCreation = {
+    jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+    sources: (await q("select count(*)::int c from research_sources"))[0].c,
+    evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+  };
+
+  const voiceRes = await check("POST /api/voices persists a reusable voice", async () => {
+    const res = await http("POST", "/api/voices", {
+      name: `${RUN} direct`,
+      tone: "technical, direct, no hype",
+      doRules: ["lead with the point"],
+      dontRules: ["no hype", "no emoji"],
+      vocabulary: ["p99"],
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(res.body.id > 0, "no voice id");
+    return withDetail({ id: res.body.id }, `voice ${res.body.id}`);
+  });
+  const voiceId = voiceRes?.id;
+  assert(Number.isInteger(voiceId), "harness error: voice id not captured");
+
+  const templateRes = await check("POST /api/templates persists a reusable structure", async () => {
+    const res = await http("POST", "/api/templates", {
+      name: `${RUN} hook-insight-takeaway`,
+      description: "Hook → Insight → Takeaway",
+      supportedFormats: ["x_post"],
+      supportedChannels: ["x"],
+      structure: [{ name: "hook" }, { name: "insight" }, { name: "takeaway" }],
+      constraints: { maxCharacters: 240 },
+      instructions: "Keep it tight; no filler.",
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    return withDetail({ id: res.body.id }, `template ${res.body.id}`);
+  });
+  const templateId = templateRes?.id;
+  assert(Number.isInteger(templateId), "harness error: template id not captured");
+
+  await check("a voice resolves to a distinct policy revision and reaches the prompt", async () => {
+    const res = await http("POST", "/api/generation-jobs", { opportunityId, voiceId });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(res.body.policyId, "job does not pin a policy revision");
+    assert(/no hype/.test(String(res.body.policySnapshot.systemPrompt)), "voice rules reached the prompt");
+    assert(res.body.policyId && res.body.policyId !== observed.goldenPolicyId, "a different voice must be a different policy revision");
+
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${res.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "voiced generation" },
+    );
+    const art = await http("GET", `/api/artifacts/${row.artifactId}`);
+    assert(art.body.readiness === "draft", `readiness=${art.body.readiness}`);
+    return `job ${res.body.id} → artifact ${row.artifactId} (policy ${res.body.policyId})`;
+  });
+
+  await check("a template flows into the policy and constrains the generation", async () => {
+    const res = await http("POST", "/api/generation-jobs", { opportunityId, templateId });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(/hook → insight → takeaway/.test(String(res.body.policySnapshot.systemPrompt)), "template structure missing from the prompt");
+    assert(/no filler/.test(String(res.body.policySnapshot.systemPrompt)), "template instructions missing from the prompt");
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${res.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "templated generation" },
+    );
+    return `job ${res.body.id} → artifact ${row.artifactId} (template ${templateId})`;
+  });
+
+  const threadArtifact = await check("the same Story produces an x_thread Artifact (multi-format)", async () => {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "turn the story into a thread",
+      objective: "educate",
+      format: "x_thread",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    assert(opp.body.format === "x_thread", "wrong format");
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "thread generation" },
+    );
+    const art = await http("GET", `/api/artifacts/${row.artifactId}`);
+    assert(art.body.format === "x_thread", `format=${art.body.format}`);
+    assert(Array.isArray(art.body.payload.units) && art.body.payload.units.length >= 1, "thread payload shape");
+    return withDetail({ id: row.artifactId }, `artifact ${row.artifactId} (x_thread, ${art.body.payload.units.length} units)`);
+  });
+  observed.threadArtifactId = threadArtifact?.id;
+
+  await check("every derivation reused the same research (no re-research)", async () => {
+    const after = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    assert(after.jobs === researchBeforeCreation.jobs && after.sources === researchBeforeCreation.sources && after.evidence === researchBeforeCreation.evidence, `research rows changed: ${JSON.stringify(after)} vs ${JSON.stringify(researchBeforeCreation)}`);
+    const policies = await q("select count(*)::int c from generation_policies");
+    assert(policies[0].c >= 3, `expected >=3 policy revisions, got ${policies[0].c}`);
+    return `research unchanged; ${policies[0].c} policy revisions`;
+  });
+
+  await check("chat-to-post becomes a normal Story → Opportunity → GenerationJob → Artifact", async () => {
+    const res = await http("POST", "/api/generation/chat", {
+      message: "write a post explaining that Kubernetes scheduling is now a platform-owned policy surface",
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(res.body.storyCreated === true, "chat should create a human Story");
+    assert(res.body.opportunity?.id > 0, "no opportunity");
+    assert(res.body.generationJobId > 0, "no generation job");
+    assert(/[0-9a-f-]{8}/.test(String(res.body.correlationId)), "no correlation id");
+
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${res.body.generationJobId}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "chat generation" },
+    );
+    const art = await http("GET", `/api/artifacts/${row.artifactId}`);
+    assert(art.body.opportunityId === res.body.opportunity.id, "artifact not from the chat opportunity");
+    // A human Story has no evidence → attribution is explicit, never faked.
+    assert(Array.isArray(art.body.attribution) && art.body.attribution.length === 0, "human Story should carry no evidence attribution");
+    assert(Boolean(art.body.attributionReason), "no attribution reason");
+    return `chat → story ${res.body.storyId} → opportunity ${res.body.opportunity.id} → artifact ${row.artifactId}`;
+  });
+
+  await check("an invalid model payload fails validation terminally with no Artifact", async () => {
+    await fixturePost("/control/invalid-next", {});
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "invalid payload probe",
+      objective: "prove validation",
+      format: "x_thread",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "failed") return r.body;
+        if (r.body.status === "succeeded") throw new Error("expected a validation failure but the job succeeded");
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "validation failure" },
+    );
+    assert(row.errorClass === "permanent", `errorClass=${row.errorClass}`);
+    assert(/payload|units/i.test(String(row.errorMessage)), `unexpected message: ${row.errorMessage}`);
+    assert(row.artifactId === null, "no artifact may be created from an invalid payload");
+    return `permanent validation failure (${String(row.errorMessage).slice(0, 60)}…)`;
+  });
+
+  await check("a queued GenerationJob survives a process restart and completes", async () => {
+    await fixturePost("/control/model-delay", { ms: 6000 });
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "restart-survival probe",
+      objective: "prove recovery",
+      format: "x_post",
+      channel: "x",
+    });
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    const jobId = gen.body.id;
+    const correlation = gen.body.correlationId;
+    await fixturePost("/control/model-delay", { ms: 0 });
+
+    await killApp("SIGKILL");
+    const [atKill] = await q("select status, correlation_id from generation_jobs where id = $1", [jobId]);
+    record(
+      "GenerationJob row survived the kill",
+      atKill && ["queued", "running"].includes(atKill.status),
+      `status=${atKill?.status}, correlation preserved=${atKill?.correlation_id === correlation}`,
+    );
+
+    await startApp();
+    await setActiveFeed(`${FIXTURE_BASE}/feed.xml`);
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${jobId}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 120_000, intervalMs: 500, label: "post-restart generation job" },
+    );
+    assert(Number.isInteger(row.artifactId), "no artifact after restart");
+    return `job ${jobId} completed after restart → artifact ${row.artifactId}`;
   });
 
   // ── 7. TRANSIENT RETRY SUCCESS (awaited) ────────────────────────────────────

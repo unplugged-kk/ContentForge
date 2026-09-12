@@ -147,14 +147,52 @@ Three layers, all green:
 
 | Check | Result |
 |---|---|
-| `npm run test:unit` | **182 passed / 0 failed** (33 suites) |
-| `npm run test:db` (real Postgres) | **56 passed / 0 failed / 0 skipped** (7 suites) |
-| `npm test` | **182 passed** |
+| `npm run test:unit` | **191 passed / 0 failed** (35 suites) |
+| `npm run test:db` (real Postgres) | **64 passed / 0 failed / 0 skipped** (8 suites) |
+| `npm test` | **191 passed** |
 | `npx tsc` | **0 errors** |
-| `npm run test:e2e:live` (real running app) | **44 passed / 0 failed** |
-| Migrations 0005–0007 | additive only — 0 ALTER/DROP on pre-existing tables |
-| Fresh DB migrate | bootstraps to 39 tables / 8 migrations from zero |
+| `npm run test:e2e:live` (real running app) | see Phase 1 below |
+| Migrations 0005–0008 | additive only — 0 ALTER/DROP on pre-existing tables |
+| Fresh DB migrate | bootstraps to 42 tables / 9 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
+
+## Phase 1 — creation intelligence (CannerAI parity)
+
+Adds the creation layer on top of the core lifecycle, without a second content
+system:
+
+```
+Story → Opportunity → GenerationPolicy → GenerationJob → Artifact
+```
+
+| Module | Responsibility |
+|---|---|
+| `shared/schema.ts` + `migrations/0008_damp_mole_man.sql` | `voices`, `content_templates`, `generation_policies` (immutable, content-addressed revisions); `generation_jobs.policy_id` |
+| `server/content/policy.ts` | Resolve a policy from voice/template/format × channel; assemble the effective request; spec hashing |
+| `server/content/formatProfiles.ts` | Platform-aware formatting config (x_post / x_thread only — no fake placeholders) |
+| `server/content/chat.ts` | Chat-to-post: message → human Story → Opportunity → GenerationJob |
+| `server/content/model.ts` | Gateway adapters for generation **and** chat-intent (no provider named outside this file) |
+| `server/content/artifact.ts` | `createHumanEditRevision` — human edits are new revisions, never overwrites |
+| `server/content/generation.ts` | Job creation pins the policy revision + frozen snapshot; regeneration semantics |
+
+Key decisions:
+
+- **GenerationPolicy is the central primitive.** It is generic (no
+  `XGenerationPolicy`); `format × channel` stay dimensions, platform behaviour
+  comes from the format profile, and payload validation stays in the registry.
+- **Policies are immutable and content-addressed.** `spec_hash` is UNIQUE and
+  derived from the resolved contents (including voice/template content hashes), so
+  resolving the same spec reuses a revision and editing a voice/template
+  necessarily produces a new one. A GenerationJob pins `policy_id` *and*
+  snapshots the fully rendered request.
+- **Idempotency is explicit.** Same (opportunity, policy spec) → the same job
+  (duplicate delivery). An explicit `regenerate` nonce → a new job and therefore
+  a new Artifact revision linked by `supersedes_id`.
+- **Chat is a source of meaning, not a model.** It creates an ordinary
+  human-provenance Story (no research) and an ordinary Opportunity; there is no
+  chat-only entity.
+- **No new abstraction for AI.** Both generation and chat-intent go through the
+  existing `server/ai` gateway behind ports; providers are infrastructure.
 
 ## Slice B6 — core content lifecycle (done)
 

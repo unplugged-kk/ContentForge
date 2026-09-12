@@ -57,6 +57,13 @@
       "when": 1789179517275,
       "tag": "0007_dusty_preak",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789190919007,
+      "tag": "0008_damp_mole_man",
+      "breakpoints": true
     }
   ]
 }

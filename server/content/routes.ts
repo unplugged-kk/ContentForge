@@ -46,11 +46,24 @@ import {
   ScheduleInputError,
 } from "./scheduling";
 import { getChannelAdapter } from "./adapters";
+import {
+  ChatInputError,
+  ChatStoryNotFoundError,
+  handleChatRequest,
+  type ChatDeps,
+} from "./chat";
+import {
+  PolicyInputError,
+  TemplateFormatMismatchError,
+  TemplateNotFoundError,
+  VoiceNotFoundError,
+} from "./policy";
 
 export interface ContentApiDeps {
   content: ContentStoragePort;
   opportunities: OpportunityDeps;
   generation: GenerationDeps;
+  chat: ChatDeps;
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
 }
@@ -80,6 +93,8 @@ const serializeGenerationJob = (j: GenerationJob) => ({
   channel: j.channel,
   status: j.status,
   attempt: j.attempt,
+  /** The exact immutable policy revision this attempt used. */
+  policyId: j.policyId,
   model: j.model,
   provider: j.provider,
   policySnapshot: j.policySnapshot,
@@ -103,6 +118,7 @@ const serializeArtifact = (a: Artifact) => ({
   supersedesId: a.supersedesId,
   provenance: a.provenance,
   attribution: a.attribution,
+  attributionReason: a.attributionReason,
   createdAt: a.createdAt,
 });
 
@@ -150,11 +166,39 @@ const createOpportunityBody = z.object({
 
 const createGenerationBody = z.object({
   opportunityId: z.number().int().positive(),
+  voiceId: z.number().int().positive().nullable().optional(),
+  templateId: z.number().int().positive().nullable().optional(),
+  objective: z.string().trim().min(1).max(2000).optional(),
+  audience: z.string().trim().min(1).max(2000).optional(),
+  constraints: z.record(z.unknown()).optional(),
   model: z.string().trim().min(1).max(120).optional(),
-  tone: z.string().trim().min(1).max(120).optional(),
-  language: z.string().trim().min(1).max(20).optional(),
   priorArtifactId: z.number().int().positive().optional(),
   rejectionReason: z.string().trim().min(1).max(2000).optional(),
+  /** Intentional regeneration → a new job/revision (see §21). */
+  regenerate: z.boolean().optional(),
+});
+
+const createVoiceBody = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2000).optional(),
+  tone: z.string().trim().max(200).optional(),
+  vocabulary: z.array(z.string().trim().min(1).max(80)).max(200).optional(),
+  sentenceStyle: z.string().trim().max(200).optional(),
+  formatting: z.record(z.unknown()).optional(),
+  doRules: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  dontRules: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  examples: z.array(z.unknown()).max(20).optional(),
+});
+
+const createTemplateBody = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2000).optional(),
+  supportedFormats: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
+  supportedChannels: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
+  structure: z.array(z.unknown()).max(50).optional(),
+  variables: z.array(z.unknown()).max(50).optional(),
+  constraints: z.record(z.unknown()).optional(),
+  instructions: z.string().trim().max(4000).optional(),
 });
 
 const createScheduleBody = z.object({
@@ -414,6 +458,151 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     return res.json({ channels });
   });
 
+  // ── Voices ──────────────────────────────────────────────────────────────────
+  router.post("/voices", async (req, res, next) => {
+    try {
+      const body = createVoiceBody.parse(req.body ?? {});
+      const voice = await deps.content.insertVoice({
+        userId: getUserId(req) ?? 1,
+        name: body.name,
+        description: body.description ?? null,
+        tone: body.tone ?? null,
+        vocabulary: body.vocabulary ?? [],
+        sentenceStyle: body.sentenceStyle ?? null,
+        formatting: body.formatting ?? {},
+        doRules: body.doRules ?? [],
+        dontRules: body.dontRules ?? [],
+        examples: body.examples ?? [],
+      });
+      return res.status(201).json(voice);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      return next(error);
+    }
+  });
+
+  router.get("/voices", async (_req, res, next) => {
+    try {
+      return res.json(await deps.content.listVoices());
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/voices/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid voice id" });
+    try {
+      const voice = await deps.content.getVoice(id);
+      if (!voice) return res.status(404).json({ message: "Voice not found" });
+      return res.json(voice);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Templates ───────────────────────────────────────────────────────────────
+  router.post("/templates", async (req, res, next) => {
+    try {
+      const body = createTemplateBody.parse(req.body ?? {});
+      const template = await deps.content.insertContentTemplate({
+        userId: getUserId(req) ?? 1,
+        name: body.name,
+        description: body.description ?? null,
+        supportedFormats: body.supportedFormats ?? [],
+        supportedChannels: body.supportedChannels ?? [],
+        structure: body.structure ?? [],
+        variables: body.variables ?? [],
+        constraints: body.constraints ?? {},
+        instructions: body.instructions ?? null,
+      });
+      return res.status(201).json(template);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      return next(error);
+    }
+  });
+
+  router.get("/templates", async (_req, res, next) => {
+    try {
+      return res.json(await deps.content.listContentTemplates());
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/templates/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid template id" });
+    try {
+      const template = await deps.content.getContentTemplate(id);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      return res.json(template);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Generation policies (immutable, content-addressed revisions) ─────────────
+  router.get("/generation-policies", async (_req, res, next) => {
+    try {
+      return res.json(await deps.content.listGenerationPolicies());
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/generation-policies/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid policy id" });
+    try {
+      const policy = await deps.content.getGenerationPolicy(id);
+      if (!policy) return res.status(404).json({ message: "Generation policy not found" });
+      return res.json(policy);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Chat-to-post ────────────────────────────────────────────────────────────
+  router.post("/generation/chat", async (req, res, next) => {
+    try {
+      const result = await handleChatRequest(getUserId(req) ?? 1, req.body ?? {}, deps.chat);
+      if (result.generationJobId !== null) {
+        const job = await deps.content.getGenerationJob(result.generationJobId);
+        if (job && job.status === "queued") {
+          try {
+            await deps.enqueueGeneration(job);
+          } catch (error) {
+            return res.status(503).json({
+              message: "Generation queue unavailable",
+              opportunityId: result.opportunity.id,
+              generationJobId: job.id,
+              detail: message(error),
+            });
+          }
+        }
+      }
+      return res.status(201).json({
+        storyId: result.storyId,
+        storyCreated: result.storyCreated,
+        opportunity: serializeOpportunity(result.opportunity),
+        generationJobId: result.generationJobId,
+        correlationId: result.correlationId,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof ChatInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof ChatStoryNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof PolicyInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof VoiceNotFoundError || error instanceof TemplateNotFoundError) {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error instanceof TemplateFormatMismatchError) return res.status(409).json({ message: error.message });
+      return next(error);
+    }
+  });
+
   return router;
 }
 
@@ -425,6 +614,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
     {
       contentStorage,
       generationDeps,
+      chatDeps,
       registerContentJobs,
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
@@ -443,6 +633,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
     content: contentStorage,
     opportunities: { opportunities: contentStorage, stories: storyStorage },
     generation: generationDeps,
+    chat: chatDeps,
     enqueueGeneration: async (job) => {
       const result = await getJobRuntime().enqueue({
         jobType: GENERATION_RUN_JOB_TYPE,

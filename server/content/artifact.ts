@@ -187,4 +187,37 @@ export function schedulableReadiness(): ArtifactReadiness {
   return "approved";
 }
 
+/**
+ * Human editing produces a NEW revision (Ticket 05 §8/§18): the AI-generated
+ * row is never overwritten, provenance records the human edit, and the new
+ * revision re-enters the readiness machine at `draft` (human edits never
+ * self-approve).
+ */
+export async function createHumanEditRevision(
+  priorArtifactId: number,
+  payload: JsonRecord,
+  deps: ArtifactDeps,
+  options: { actorNote?: string | null; attributionReason?: string | null } = {},
+): Promise<Artifact> {
+  const prior = await deps.artifacts.getArtifact(priorArtifactId);
+  if (!prior) throw new ArtifactNotFoundError(priorArtifactId);
+
+  return createArtifact(
+    {
+      userId: prior.userId ?? null,
+      generationJobId: null,
+      opportunityId: prior.opportunityId,
+      format: prior.format,
+      channel: prior.channel,
+      payload,
+      supersedesId: prior.id,
+      provenance: "human_edit",
+      attribution: prior.attribution,
+      attributionReason:
+        options.attributionReason ?? prior.attributionReason ?? options.actorNote ?? "human edit",
+    },
+    deps,
+  );
+}
+
 export type { ArtifactReadiness, GenerationJob };
