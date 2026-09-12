@@ -585,6 +585,7 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
         }
         draft.scheduledAt = slot;
         await storage.createPost(
+          1,
           {
             pillarId: draft.pillarId,
             postType: draft.postType,
@@ -712,6 +713,7 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
         }
         draft.scheduledAt = todaySlots[i];
         await storage.createPost(
+          1,
           {
             pillarId: draft.pillarId,
             postType: draft.postType,
@@ -771,6 +773,7 @@ export async function scheduleManualPost(
     draft.scheduledAt = scheduledAt;
 
     const post = await storage.createPost(
+      1,
       {
         pillarId: draft.pillarId,
         postType: draft.postType,
@@ -847,6 +850,7 @@ export async function generateWeekendContent(
 
     draft.scheduledAt = scheduledAt;
     const post = await storage.createPost(
+      1,
       { pillarId: null, postType: "weekly_recap", tone: "reflective", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
       draft.tweets as any,
     );
@@ -866,6 +870,7 @@ export async function generateWeekendContent(
 
   draft.scheduledAt = scheduledAt;
   const post = await storage.createPost(
+    1,
     { pillarId: best.pillarId, postType: "article_thread", tone: "educational", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
     draft.tweets as any,
   );

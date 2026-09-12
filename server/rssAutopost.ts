@@ -35,6 +35,7 @@ Separate tweets with "---". Do NOT add numbering (system adds it).`,
   }));
 
   await storage.createPost(
+    1,
     {
       pillarId: source.autopostPillarId ?? null,
       postType,

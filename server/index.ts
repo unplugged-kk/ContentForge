@@ -142,6 +142,12 @@ app.use((req, res, next) => {
   const { seedDatabase } = await import("./seed");
   await seedDatabase().catch((err) => console.error("Seed error:", err));
 
+  // Durable job runtime. Registers built-in providers + job types, then starts
+  // workers. pg-boss only — no Redis, no BullMQ.
+  const { startJobRuntime, stopJobRuntime } = await import("./jobs/bootstrap");
+  await startJobRuntime();
+  log("job runtime started", "jobs");
+
   // Audit log + CSRF token endpoint + CSRF verification are applied AFTER
   // session middleware (so they can read req.session) but BEFORE routes are
   // registered, so all routes in registerRoutes inherit the protection.
@@ -151,6 +157,21 @@ app.use((req, res, next) => {
   app.use(verifyCsrf);
 
   await registerRoutes(httpServer, app);
+
+  // Research API. Enqueues work onto the job runtime; never runs research inline.
+  const { createDefaultResearchRouter } = await import("./research/routes");
+  app.use("/api/research", await createDefaultResearchRouter());
+
+  // Story API. `ResearchJob → Story` is a cheap read of durable research: it
+  // never enqueues and never re-runs research.
+  const { createDefaultStoryRouter } = await import("./story/routes");
+  app.use("/api/stories", await createDefaultStoryRouter());
+
+  // Core content lifecycle API: Opportunity → GenerationJob → Artifact →
+  // (approval) → Schedule → Publication → Result. Persists intent and enqueues
+  // generation/publication; never runs them inline.
+  const { createDefaultContentRouter } = await import("./content/routes");
+  app.use("/api", await createDefaultContentRouter());
 
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
@@ -172,6 +193,24 @@ app.use((req, res, next) => {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
+
+  // Graceful shutdown: stop accepting connections, let in-flight jobs finish
+  // (pg-boss graceful stop), then exit.
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`received ${signal}, shutting down`, "server");
+    try {
+      await stopJobRuntime();
+    } catch (err) {
+      console.error("Failed to stop job runtime:", err);
+    }
+    httpServer.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 10_000).unref();
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 
   const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(

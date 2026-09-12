@@ -106,6 +106,7 @@ Separate tweets with "---". Do NOT add numbering.`,
       : null;
 
   await storage.createPost(
+    1,
     {
       pillarId: channel.autopostPillarId ?? null,
       postType,

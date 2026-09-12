@@ -154,6 +154,7 @@ export async function registerRoutes(
       const parsed = createPostBody.parse(req.body);
       const { tweets: tweetData, ...postData } = parsed;
       const result = await storage.createPost(
+        sessionUserId(req),
         {
           pillarId: postData.pillarId ?? null,
           postType: postData.postType,
@@ -174,7 +175,7 @@ export async function registerRoutes(
 
   app.put("/api/posts/:id", async (req, res) => {
     try {
-      const result = await storage.updatePost(parseInt(req.params.id), req.body);
+      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), req.body);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -183,7 +184,7 @@ export async function registerRoutes(
   app.patch("/api/posts/:id/status", async (req, res) => {
     try {
       const parsed = updateStatusBody.parse(req.body);
-      const result = await storage.updatePostStatus(parseInt(req.params.id), parsed.status, parsed.scheduledAt);
+      const result = await storage.updatePostStatus(sessionUserId(req), parseInt(req.params.id), parsed.status, parsed.scheduledAt);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) {
@@ -219,7 +220,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
-      const result = await storage.updatePost(id, { status: "ready", scheduledAt: null } as any);
+      const result = await storage.updatePost(sessionUserId(req), id, { status: "ready", scheduledAt: null } as any);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) {
@@ -274,6 +275,7 @@ export async function registerRoutes(
       if (!parsed?.tweets) return res.status(500).json({ message: "AI returned invalid response. Please try again." });
 
       const post = await storage.createPost(
+        sessionUserId(req),
         { pillarId: idea.pillarId, postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: MODELS.TEXT },
         parsed.tweets.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 }))
       );
@@ -828,6 +830,7 @@ export async function registerRoutes(
       if (!parsed?.tweets) return res.status(500).json({ message: "AI returned invalid response." });
 
       const post = await storage.createPost(
+        sessionUserId(req),
         { pillarId: article.pillarId, postType: "thread", tone: "educational", targetPlatform: "x", status: "draft", aiModel: MODELS.TEXT },
         parsed.tweets.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 }))
       );
@@ -2081,6 +2084,7 @@ Each tweet under ${charLimit} characters.` },
       }));
 
       const post = await storage.createPost(
+        sessionUserId(req),
         { postType, tone: "conversational", targetPlatform: "x", status: "draft", aiModel: MODELS.TEXT } as any,
         tweets,
       );

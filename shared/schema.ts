@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, decimal, index, uniqueIndex, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -481,4 +481,464 @@ export const auditLogs = pgTable("audit_logs", {
 
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export type AuditLog = typeof auditLogs.$inferSelect;
+
+// ── RESEARCH DOMAIN (Phase B) ─────────────────────────────────────────────────
+// Locked shapes from Wayfinder tickets 03/04: evidence and provenance live on
+// ResearchJob; completed jobs and their evidence are immutable; sources are
+// referenced by identity, never copied downstream.
+
+export const researchJobs = pgTable(
+  "research_jobs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** End-to-end correlation id; also the queue correlation id. */
+    correlationId: varchar("correlation_id", { length: 100 }).notNull().unique(),
+    /** Authoritative idempotency arbiter (Ticket 06 §7). */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    /** directed | autonomous | human_input */
+    kind: varchar("kind", { length: 20 }).notNull().default("directed"),
+    query: text("query"),
+    /** queued | running | complete | failed */
+    status: varchar("status", { length: 20 }).notNull().default("queued"),
+    /** Frozen initiation parameters (kind-specific), kept for reproducibility. */
+    initiation: jsonb("initiation").notNull().default({}),
+    /** Per-provider call diagnostics; never evidence. */
+    diagnostics: jsonb("diagnostics").notNull().default([]),
+    providerIds: text("provider_ids").array().default(sql`'{}'::text[]`),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("research_jobs_status_idx").on(table.status)],
+);
+
+export const researchSources = pgTable(
+  "research_sources",
+  {
+    id: serial("id").primaryKey(),
+    jobId: integer("job_id").notNull(),
+    provider: varchar("provider", { length: 50 }).notNull(),
+    backend: varchar("backend", { length: 50 }),
+    kind: varchar("kind", { length: 50 }).notNull(),
+    nativeId: varchar("native_id", { length: 500 }).notNull(),
+    canonicalUrl: text("canonical_url").notNull(),
+    title: text("title"),
+    author: jsonb("author"),
+    publishedAt: timestamp("published_at"),
+    retrievedAt: timestamp("retrieved_at").notNull(),
+    retrievalMethod: varchar("retrieval_method", { length: 30 }),
+    accessClass: varchar("access_class", { length: 30 }),
+    providerVersion: varchar("provider_version", { length: 50 }),
+    integrationVersion: varchar("integration_version", { length: 50 }),
+    contentHash: varchar("content_hash", { length: 64 }).notNull(),
+    excerpt: text("excerpt"),
+    metadata: jsonb("metadata").notNull().default({}),
+    warnings: text("warnings").array().default(sql`'{}'::text[]`),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_sources_job_url_uq").on(table.jobId, table.canonicalUrl),
+  ],
+);
+
+export const researchEvidence = pgTable(
+  "research_evidence",
+  {
+    id: serial("id").primaryKey(),
+    jobId: integer("job_id").notNull(),
+    /** Null only for `author_statement` evidence (human input, no source). */
+    sourceId: integer("source_id"),
+    /** excerpt | author_statement */
+    kind: varchar("kind", { length: 30 }).notNull().default("excerpt"),
+    /** sourced | generated — enforced by the engine (ticket 04 §6). */
+    origin: varchar("origin", { length: 20 }).notNull().default("sourced"),
+    excerpt: text("excerpt").notNull(),
+    /** Content-addressed: identity is (job_id, source_id, excerpt_hash). */
+    excerptHash: varchar("excerpt_hash", { length: 64 }).notNull(),
+    retrievedAt: timestamp("retrieved_at").notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_evidence_identity_uq").on(
+      table.jobId,
+      table.sourceId,
+      table.excerptHash,
+    ),
+  ],
+);
+
+export const insertResearchJobSchema = createInsertSchema(researchJobs).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertResearchSourceSchema = createInsertSchema(researchSources).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertResearchEvidenceSchema = createInsertSchema(researchEvidence).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type ResearchJob = typeof researchJobs.$inferSelect;
+export type InsertResearchJob = z.infer<typeof insertResearchJobSchema>;
+export type ResearchSource = typeof researchSources.$inferSelect;
+export type InsertResearchSource = z.infer<typeof insertResearchSourceSchema>;
+export type ResearchEvidence = typeof researchEvidence.$inferSelect;
+export type InsertResearchEvidence = z.infer<typeof insertResearchEvidenceSchema>;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+
+// ── STORY DOMAIN (Phase B) ────────────────────────────────────────────────────
+// Locked Ticket 05 §3 / 03 §2: a Story is the reusable unit of editorial meaning
+// synthesized from research (or human input). It references its originating
+// ResearchJob and that job's evidence BY ID — never copies raw source content.
+// Lifecycle is `draft → ready → used | archived`; there is deliberately no kill
+// state (killing is Opportunity-level), and `used` is informational so a Story
+// keeps spawning formats. `research_job_id` is nullable per the locked model
+// (human/imported provenance); the researched path requires a completed job.
+
+export const stories = pgTable(
+  "stories",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** Originating ResearchJob. FK protects provenance: research cannot be deleted out from under a Story. */
+    researchJobId: integer("research_job_id").references(() => researchJobs.id),
+    /** researched | human | imported */
+    provenance: varchar("provenance", { length: 20 }).notNull().default("researched"),
+    /** Working title. */
+    title: varchar("title", { length: 500 }).notNull(),
+    /** Synthesized thesis/narrative — generated interpretation, never a second evidence store. */
+    insightBody: text("insight_body").notNull(),
+    /** Marks `insight_body` as generated interpretation (Ticket 04 §6 origin separation). */
+    interpretationMarked: boolean("interpretation_marked").notNull().default(true),
+    /** Candidate framings offered to Opportunity selection (Ticket 05 §3). */
+    angles: jsonb("angles").$type<string[]>().notNull().default([]),
+    /** Research evidence IDs this Story rests on. IDs only, never copies (Ticket 03 §2). */
+    evidenceRefs: jsonb("evidence_refs").$type<number[]>().notNull().default([]),
+    /** draft | ready | used | archived */
+    status: varchar("status", { length: 20 }).notNull().default("draft"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("stories_research_job_idx").on(table.researchJobId),
+    index("stories_status_idx").on(table.status),
+  ],
+);
+
+export const insertStorySchema = createInsertSchema(stories).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type Story = typeof stories.$inferSelect;
+export type InsertStory = z.infer<typeof insertStorySchema>;
+
+// ── CORE CONTENT LIFECYCLE (Phase B) ──────────────────────────────────────────
+// Locked chain (Tickets 03/05/06/07):
+//   ResearchJob → Story → Opportunity → GenerationJob → Artifact
+//              → Schedule (series + occurrences) → Publication → Result
+// Ownership flows strictly downward; `format` × `channel` are the only
+// core content dimensions and every platform mechanic lives in a channel
+// adapter. No channel-specific columns anywhere below.
+
+/**
+ * Opportunity — a candidate content direction (Ticket 05 §4). Answers "what can
+ * we create from this Story?". A lean selector: it carries no content, no prompt
+ * and no model config. Many Opportunities per Story are legitimate (different
+ * angles, formats, channels). Killing happens here, never on Story.
+ */
+export const opportunities = pgTable(
+  "opportunities",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    storyId: integer("story_id").notNull().references(() => stories.id),
+    /** Content direction / concept. */
+    concept: text("concept").notNull(),
+    /** What this opportunity is for (e.g. "drive signups", "explain tradeoff"). */
+    objective: text("objective").notNull(),
+    /** Optional audience/context the angle speaks to. */
+    audience: text("audience"),
+    /** Generated hook/framing for this angle (Ticket 05 §4). */
+    angle: text("angle"),
+    /** Content shape: x_post, x_thread, linkedin_post, article, newsletter, … */
+    format: varchar("format", { length: 50 }).notNull(),
+    /** Distribution target: x, linkedin, web, video_factory, … */
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** proposed | selected | killed (Ticket 03 §2). Killing is terminal. */
+    status: varchar("status", { length: 20 }).notNull().default("proposed"),
+    /** Readiness/direction score; weights stay in the proposer, not the schema. */
+    score: decimal("score", { precision: 6, scale: 3 }),
+    scoreBreakdown: jsonb("score_breakdown").$type<Record<string, unknown>>().notNull().default({}),
+    /** human | autonomous — who proposed it (process treats both identically). */
+    proposer: varchar("proposer", { length: 20 }).notNull().default("human"),
+    killReason: text("kill_reason"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("opportunities_story_idx").on(table.storyId),
+    index("opportunities_status_idx").on(table.status),
+  ],
+);
+
+/**
+ * GenerationJob — one reproducible generation attempt for an Opportunity
+ * (Ticket 05 §5). Distinct from Artifact: this records *how* content was made
+ * (frozen policy, model, cost, attempts); the Artifact is the resulting content.
+ * Regenerations are siblings, never edits. No provider-specific columns.
+ */
+export const generationJobs = pgTable(
+  "generation_jobs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    opportunityId: integer("opportunity_id").notNull().references(() => opportunities.id),
+    /** Requested dimensions, copied from the Opportunity at creation time. */
+    format: varchar("format", { length: 50 }).notNull(),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** FROZEN policy: format policy ref + version, model, params, rendered prompts. */
+    policySnapshot: jsonb("policy_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    /** (opportunity + policy hash) — the authoritative idempotency arbiter. */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    /** queued | running | succeeded | failed */
+    status: varchar("status", { length: 20 }).notNull().default("queued"),
+    attempt: integer("attempt").notNull().default(1),
+    attempts: jsonb("attempts").$type<unknown[]>().notNull().default([]),
+    /** Model/provider metadata for provenance and future usage accounting. */
+    model: varchar("model", { length: 120 }),
+    provider: varchar("provider", { length: 60 }),
+    cost: decimal("cost", { precision: 12, scale: 6 }),
+    /** Regen link: the rejected artifact this attempt supersedes. */
+    priorArtifactId: integer("prior_artifact_id"),
+    rejectionReason: text("rejection_reason"),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("generation_jobs_opportunity_idx").on(table.opportunityId),
+    index("generation_jobs_status_idx").on(table.status),
+  ],
+);
+
+/**
+ * Artifact — the immutable, reviewable content revision (Ticket 05 §6).
+ * Content (payload/format/channel/opportunity) is frozen at insert; a database
+ * trigger enforces that (see migration 0007). Readiness is the only mutable
+ * axis. Any content change is a NEW row linked by `supersedes_id`; approving
+ * revision N never approves N+1.
+ */
+export const artifacts = pgTable(
+  "artifacts",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** Null only for human edits (provenance=human_edit). */
+    generationJobId: integer("generation_job_id").references(() => generationJobs.id),
+    opportunityId: integer("opportunity_id").notNull().references(() => opportunities.id),
+    format: varchar("format", { length: 50 }).notNull(),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** Validated at write against the format's registered payload schema. */
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    /** draft | in_review | approved | rejected */
+    readiness: varchar("readiness", { length: 20 }).notNull().default("draft"),
+    approvedAt: timestamp("approved_at"),
+    /** Revision chain — set for every revision after the first. */
+    supersedesId: integer("supersedes_id").references((): AnyPgColumn => artifacts.id),
+    /** generated | human_edit */
+    provenance: varchar("provenance", { length: 20 }).notNull().default("generated"),
+    /** MANDATORY attribution snippets (may be empty only with a stated reason). */
+    attribution: jsonb("attribution").$type<unknown[]>().notNull().default([]),
+    attributionReason: text("attribution_reason"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("artifacts_opportunity_idx").on(table.opportunityId),
+    index("artifacts_generation_job_idx").on(table.generationJobId),
+    index("artifacts_readiness_idx").on(table.readiness),
+    uniqueIndex("artifacts_supersedes_uq").on(table.supersedesId),
+  ],
+);
+
+/**
+ * Schedule — the intent to publish a specific approved Artifact revision, as a
+ * recurrence series (Ticket 03 §1, 06). A one-shot is simply `count = 1`.
+ * The scheduler owns WHEN; the publication worker owns EXECUTE.
+ */
+export const schedules = pgTable(
+  "schedules",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** Pinned to an exact immutable Artifact revision. */
+    artifactId: integer("artifact_id").notNull().references(() => artifacts.id),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** RRULE/cron string. A one-shot may use a plain ISO timestamp in `startAt`. */
+    recurrence: varchar("recurrence", { length: 200 }),
+    timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
+    /** Total occurrences for the series (one-shot = 1). */
+    count: integer("count").notNull().default(1),
+    /** When the first occurrence is due. */
+    startAt: timestamp("start_at").notNull(),
+    /** active | paused | exhausted | cancelled */
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("schedules_artifact_idx").on(table.artifactId),
+    index("schedules_status_idx").on(table.status),
+  ],
+);
+
+/**
+ * ScheduleOccurrence — one concrete execution instance materialized from a
+ * series (Ticket 03 §1). Each occurrence binds at most one Publication attempt
+ * chain. `(schedule_id, occurrence_time)` is unique so materialization is
+ * idempotent.
+ */
+export const scheduleOccurrences = pgTable(
+  "schedule_occurrences",
+  {
+    id: serial("id").primaryKey(),
+    scheduleId: integer("schedule_id").notNull().references(() => schedules.id),
+    occurrenceTime: timestamp("occurrence_time").notNull(),
+    /** pending | enqueued | published | failed | cancelled */
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("schedule_occurrences_schedule_time_uq").on(
+      table.scheduleId,
+      table.occurrenceTime,
+    ),
+    index("schedule_occurrences_status_idx").on(table.status),
+  ],
+);
+
+/**
+ * Publication — one distribution attempt binding
+ * (schedule × occurrence × exact artifact revision) to a channel adapter
+ * (Ticket 03 §1, 07). Durable idempotency + a single-flight publishing lease;
+ * unknown outcomes are reconcilable, never assumed successful.
+ */
+export const publications = pgTable(
+  "publications",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    scheduleId: integer("schedule_id").notNull().references(() => schedules.id),
+    occurrenceId: integer("occurrence_id").notNull().references(() => scheduleOccurrences.id),
+    /** Pinned Artifact revision — never "latest". */
+    artifactId: integer("artifact_id").notNull().references(() => artifacts.id),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** (schedule + occurrence + artifact revision) — durable idempotency arbiter. */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    /** scheduled | queued | publishing | published | failed | cancelled */
+    state: varchar("state", { length: 20 }).notNull().default("scheduled"),
+    attempt: integer("attempt").notNull().default(0),
+    /** Single-flight lease (Ticket 06 §10). */
+    leaseOwner: varchar("lease_owner", { length: 120 }),
+    leaseExpiresAt: timestamp("lease_expires_at"),
+    /** Set once the adapter has actually been invoked — gates blind retries. */
+    providerCalled: boolean("provider_called").notNull().default(false),
+    externalId: varchar("external_id", { length: 200 }),
+    lastError: text("last_error"),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("publications_schedule_idx").on(table.scheduleId),
+    index("publications_artifact_idx").on(table.artifactId),
+    index("publications_state_idx").on(table.state),
+  ],
+);
+
+/**
+ * Result — the outcome/proof of exactly one Publication (Ticket 03 §1).
+ * `publication_id` is UNIQUE, so "scheduled but unpublished" and "published but
+ * not yet recorded" remain distinguishable. Missing analytics never implies the
+ * publication did not happen.
+ */
+export const results = pgTable(
+  "results",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    publicationId: integer("publication_id").notNull().unique().references(() => publications.id),
+    /** published | failed | unknown */
+    outcome: varchar("outcome", { length: 20 }).notNull(),
+    externalId: varchar("external_id", { length: 200 }),
+    externalUrl: text("external_url"),
+    publishedAt: timestamp("published_at"),
+    metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull().default({}),
+    /** Adapter / analytics source that produced this record. */
+    source: varchar("source", { length: 60 }),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    correlationId: varchar("correlation_id", { length: 100 }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("results_outcome_idx").on(table.outcome)],
+);
+
+export const insertOpportunitySchema = createInsertSchema(opportunities).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertGenerationJobSchema = createInsertSchema(generationJobs).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertArtifactSchema = createInsertSchema(artifacts).omit({ id: true, createdAt: true });
+export const insertScheduleSchema = createInsertSchema(schedules).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertPublicationSchema = createInsertSchema(publications).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertResultSchema = createInsertSchema(results).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type Opportunity = typeof opportunities.$inferSelect;
+export type InsertOpportunity = z.infer<typeof insertOpportunitySchema>;
+export type GenerationJob = typeof generationJobs.$inferSelect;
+export type InsertGenerationJob = z.infer<typeof insertGenerationJobSchema>;
+export type Artifact = typeof artifacts.$inferSelect;
+export type InsertArtifact = z.infer<typeof insertArtifactSchema>;
+export type Schedule = typeof schedules.$inferSelect;
+export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
+export type ScheduleOccurrence = typeof scheduleOccurrences.$inferSelect;
+export type Publication = typeof publications.$inferSelect;
+export type InsertPublication = z.infer<typeof insertPublicationSchema>;
+export type Result = typeof results.$inferSelect;
+export type InsertResult = z.infer<typeof insertResultSchema>;
+export type OpportunityStatus = "proposed" | "selected" | "killed";
+export type ArtifactReadiness = "draft" | "in_review" | "approved" | "rejected";
+export type PublicationState =
+  | "scheduled"
+  | "queued"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";

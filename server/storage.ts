@@ -61,12 +61,12 @@ export interface IStorage {
   getPillars(): Promise<Pillar[]>;
   createPillar(pillar: InsertPillar): Promise<Pillar>;
 
-  getPosts(): Promise<(Post & { tweets: Tweet[] })[]>;
-  getPost(id: number): Promise<(Post & { tweets: Tweet[] }) | undefined>;
-  createPost(post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }>;
-  updatePost(id: number, post: Partial<InsertPost>): Promise<Post | undefined>;
-  updatePostStatus(id: number, status: string, scheduledAt?: string): Promise<Post | undefined>;
-  deletePost(id: number): Promise<void>;
+  getPosts(userId: number): Promise<(Post & { tweets: Tweet[] })[]>;
+  getPost(userId: number, id: number): Promise<(Post & { tweets: Tweet[] }) | undefined>;
+  createPost(userId: number, post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }>;
+  updatePost(userId: number, id: number, post: Partial<InsertPost>): Promise<Post | undefined>;
+  updatePostStatus(userId: number, id: number, status: string, scheduledAt?: string): Promise<Post | undefined>;
+  deletePost(userId: number, id: number): Promise<void>;
 
   getIdeas(): Promise<Idea[]>;
   getIdea(id: number): Promise<Idea | undefined>;
@@ -172,7 +172,7 @@ export class DatabaseStorage implements IStorage {
     return { ...post, tweets: postTweets };
   }
 
-  async createPost(post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }> {
+  async createPost(userId: number, post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }> {
     const [newPost] = await db.insert(posts).values(post).returning();
     const insertedTweets: Tweet[] = [];
     for (const t of tweetData) {
@@ -182,12 +182,12 @@ export class DatabaseStorage implements IStorage {
     return { ...newPost, tweets: insertedTweets };
   }
 
-  async updatePost(id: number, post: Partial<InsertPost>): Promise<Post | undefined> {
+  async updatePost(userId: number, id: number, post: Partial<InsertPost>): Promise<Post | undefined> {
     const [result] = await db.update(posts).set({ ...post, updatedAt: new Date() }).where(eq(posts.id, id)).returning();
     return result;
   }
 
-  async updatePostStatus(id: number, status: string, scheduledAt?: string): Promise<Post | undefined> {
+  async updatePostStatus(userId: number, id: number, status: string, scheduledAt?: string): Promise<Post | undefined> {
     const updates: any = { status, updatedAt: new Date() };
     if (scheduledAt) updates.scheduledAt = new Date(scheduledAt);
     if (status === "posted") updates.postedAt = new Date();

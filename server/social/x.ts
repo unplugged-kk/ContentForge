@@ -376,7 +376,7 @@ export async function tryPublishPostById(
 
   try {
     const result = await publishPostToX(post);
-    await storage.updatePost(postId, {
+    await storage.updatePost(1, postId, {
       status: "posted",
       postedAt: new Date(),
       externalIds: { ...(post.externalIds ?? {}), x: result.tweetIds },
@@ -390,7 +390,7 @@ export async function tryPublishPostById(
     return result;
   } catch (e: any) {
     const friendly = translateXError(e?.message || String(e));
-    await storage.updatePost(postId, {
+    await storage.updatePost(1, postId, {
       status: "failed",
       errorMessage: friendly,
     });

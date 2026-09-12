@@ -1,4 +1,4 @@
-CREATE TABLE "audit_logs" (
+CREATE TABLE IF NOT EXISTS "audit_logs" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer,
 	"method" varchar(10) NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE "audit_logs" (
 	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "canned_responses" (
+CREATE TABLE IF NOT EXISTS "canned_responses" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"title" varchar(200) NOT NULL,
 	"content" text NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE "canned_responses" (
 	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "youtube_channels" (
+CREATE TABLE IF NOT EXISTS "youtube_channels" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"channel_id" varchar(50) NOT NULL,
 	"channel_name" varchar(200),
@@ -42,9 +42,9 @@ CREATE TABLE "youtube_channels" (
 	CONSTRAINT "youtube_channels_channel_id_unique" UNIQUE("channel_id")
 );
 --> statement-breakpoint
-ALTER TABLE "rss_sources" ADD COLUMN "autopost" boolean DEFAULT false;--> statement-breakpoint
-ALTER TABLE "rss_sources" ADD COLUMN "autopost_platform" varchar(20) DEFAULT 'x';--> statement-breakpoint
-ALTER TABLE "rss_sources" ADD COLUMN "autopost_tone" varchar(20) DEFAULT 'educational';--> statement-breakpoint
-ALTER TABLE "rss_sources" ADD COLUMN "autopost_post_type" varchar(20) DEFAULT 'thread';--> statement-breakpoint
-ALTER TABLE "rss_sources" ADD COLUMN "autopost_pillar_id" integer;--> statement-breakpoint
-ALTER TABLE "user_profile" ADD COLUMN "messaging_pillars" text[] DEFAULT '{}'::text[];
+ALTER TABLE "rss_sources" ADD COLUMN IF NOT EXISTS "autopost" boolean DEFAULT false;--> statement-breakpoint
+ALTER TABLE "rss_sources" ADD COLUMN IF NOT EXISTS "autopost_platform" varchar(20) DEFAULT 'x';--> statement-breakpoint
+ALTER TABLE "rss_sources" ADD COLUMN IF NOT EXISTS "autopost_tone" varchar(20) DEFAULT 'educational';--> statement-breakpoint
+ALTER TABLE "rss_sources" ADD COLUMN IF NOT EXISTS "autopost_post_type" varchar(20) DEFAULT 'thread';--> statement-breakpoint
+ALTER TABLE "rss_sources" ADD COLUMN IF NOT EXISTS "autopost_pillar_id" integer;--> statement-breakpoint
+ALTER TABLE "user_profile" ADD COLUMN IF NOT EXISTS "messaging_pillars" text[] DEFAULT '{}'::text[];

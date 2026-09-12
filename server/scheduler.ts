@@ -60,7 +60,7 @@ export function startSchedulers() {
 
           console.log(`[scheduler] Retrying post=${p.id} attempt=${retryCount + 1}/${MAX_RETRIES}`);
           try {
-            await storage.updatePost(p.id, {
+            await storage.updatePost(1, p.id, {
               status: "scheduled",
               retryCount: retryCount + 1,
               lastRetryAt: new Date(),

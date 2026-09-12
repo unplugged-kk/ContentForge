@@ -23,3 +23,9 @@ e2e/.auth/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# discovery scratch
+research/_raw/
