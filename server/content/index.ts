@@ -143,6 +143,7 @@ export {
   contentStorage,
   createGenerationRunHandler,
   createPublicationRunHandler,
+  createVisualRunHandler,
   generationDeps,
   generationRunPayloadSchema,
   publicationDeps,
@@ -150,13 +151,67 @@ export {
   registerContentJobs,
   registerGenerationRunJob,
   registerPublicationRunJob,
+  registerVisualRunJob,
+  visualAssetStorage,
+  visualRunDeps,
+  visualRunPayloadSchema,
   GENERATION_RUN_JOB_TYPE,
   PUBLICATION_RUN_JOB_TYPE,
+  VISUAL_RUN_JOB_TYPE,
   type GenerationRunPayload,
   type PublicationRunPayload,
+  type VisualRunDeps,
+  type VisualRunPayload,
 } from "./service";
 
 export { CHAT_INTENT_MARKER, createGatewayChatIntent, createGatewayGenerationModel } from "./model";
+
+export {
+  createVisualGeneration,
+  runVisualGeneration,
+  createVisualAssetRevision,
+  createVisualGenerationSchema,
+  VisualServiceInputError,
+  type CreateVisualGenerationInput,
+  type VisualRunResult,
+  type VisualServiceDeps,
+} from "./visualService";
+
+export {
+  registerVisualProvider,
+  hasVisualProvider,
+  getVisualProvider,
+  resetVisualProviders,
+  createLocalAssetStorage,
+  validateVisualOutput,
+  assertSafeStorageKey,
+  hashIntent,
+  visualGenerationIdempotencyKey,
+  visualIntentSchema,
+  ALLOWED_VISUAL_MIMES,
+  MAX_VISUAL_BYTES,
+  MAX_VISUAL_DIMENSION,
+  InvalidVisualInputError,
+  VisualCapabilityUnsupportedError,
+  VisualProviderNotRegisteredError,
+  type AssetStoragePort,
+  type VisualCapability,
+  type VisualGenerationOutput,
+  type VisualGenerationRequest,
+  type VisualKind,
+  type VisualProviderPort,
+} from "./visual";
+
+export {
+  createFixtureVisualProvider,
+} from "./visualFixture";
+
+export type {
+  ClaimVisualGenerationResult,
+  InsertVisualAssetRefRow,
+  InsertVisualAssetRow,
+  InsertVisualGenerationRow,
+} from "./storage";
 
 export {
   createContentRouter,

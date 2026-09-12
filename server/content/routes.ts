@@ -10,7 +10,18 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import type { Artifact, GenerationJob, Opportunity, Publication, Schedule } from "@shared/schema";
+import type {
+  Artifact,
+  ContentTemplate,
+  GenerationJob,
+  GenerationPolicy,
+  Opportunity,
+  Publication,
+  Schedule,
+  VisualAsset,
+  VisualGeneration,
+  Voice,
+} from "@shared/schema";
 import { getUserId } from "../middleware/userContext";
 import type { ContentStoragePort } from "./storage";
 import {
@@ -60,6 +71,15 @@ import {
 } from "./scheduling";
 import { getChannelAdapter } from "./adapters";
 import {
+  createVisualGeneration,
+  VisualServiceInputError,
+} from "./visualService";
+import {
+  createLocalAssetStorage,
+  InvalidVisualInputError,
+  VisualCapabilityUnsupportedError,
+} from "./visual";
+import {
   ChatInputError,
   ChatStoryNotFoundError,
   handleChatRequest,
@@ -77,11 +97,102 @@ export interface ContentApiDeps {
   opportunities: OpportunityDeps;
   generation: GenerationDeps;
   chat: ChatDeps;
+  /** Byte store for visuals (local impl in tests; application wires its own). */
+  visualStorage: import("./visual").AssetStoragePort;
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
+  enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
 }
 
 // ── serializers ───────────────────────────────────────────────────────────────
+const serializeGenerationPolicy = (p: GenerationPolicy) => ({
+  id: p.id,
+  policyKey: p.policyKey,
+  version: p.version,
+  name: p.name,
+  format: p.format,
+  channel: p.channel,
+  voiceId: p.voiceId,
+  templateId: p.templateId,
+  objective: p.objective,
+  audience: p.audience,
+  constraints: p.constraints,
+  modelPreferences: p.modelPreferences,
+  specHash: p.specHash,
+  status: p.status,
+  createdAt: p.createdAt,
+});
+
+const serializeVoice = (v: Voice) => ({
+  id: v.id,
+  voiceKey: v.voiceKey,
+  version: v.version,
+  name: v.name,
+  description: v.description,
+  tone: v.tone,
+  vocabulary: v.vocabulary,
+  sentenceStyle: v.sentenceStyle,
+  formatting: v.formatting,
+  doRules: v.doRules,
+  dontRules: v.dontRules,
+  examples: v.examples,
+  status: v.status,
+  createdAt: v.createdAt,
+  updatedAt: v.updatedAt,
+});
+
+const serializeTemplate = (t: ContentTemplate) => ({
+  id: t.id,
+  templateKey: t.templateKey,
+  version: t.version,
+  name: t.name,
+  description: t.description,
+  supportedFormats: t.supportedFormats,
+  supportedChannels: t.supportedChannels,
+  structure: t.structure,
+  variables: t.variables,
+  constraints: t.constraints,
+  instructions: t.instructions,
+  status: t.status,
+  createdAt: t.createdAt,
+  updatedAt: t.updatedAt,
+});
+
+const serializeVisualGeneration = (g: VisualGeneration) => ({
+  id: g.id,
+  kind: g.kind,
+  providerId: g.providerId,
+  capability: g.capability,
+  status: g.status,
+  attempt: g.attempt,
+  opportunityId: g.opportunityId,
+  generationJobId: g.generationJobId,
+  errorClass: g.errorClass,
+  errorMessage: g.errorMessage,
+  correlationId: g.correlationId,
+  startedAt: g.startedAt,
+  finishedAt: g.finishedAt,
+  createdAt: g.createdAt,
+});
+
+const serializeVisualAsset = (a: VisualAsset) => ({
+  id: a.id,
+  kind: a.kind,
+  mime: a.mime,
+  width: a.width,
+  height: a.height,
+  byteSize: a.byteSize,
+  contentHash: a.contentHash,
+  altText: a.altText,
+  caption: a.caption,
+  role: a.role,
+  supersedesId: a.supersedesId,
+  provenance: a.provenance,
+  status: a.status,
+  visualGenerationId: a.visualGenerationId,
+  createdAt: a.createdAt,
+});
+
 const serializeOpportunity = (o: Opportunity) => ({
   id: o.id,
   storyId: o.storyId,
@@ -526,7 +637,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createVoiceBody.parse(req.body ?? {});
       const voice = await createVoice(getUserId(req) ?? 1, body, { content: deps.content });
-      return res.status(201).json(voice);
+      return res.status(201).json(serializeVoice(voice));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
@@ -540,7 +651,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
       const voice = await reviseVoice(id, req.body ?? {}, { content: deps.content });
-      return res.status(201).json(voice);
+      return res.status(201).json(serializeVoice(voice));
     } catch (error) {
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
       if (error instanceof VoiceNotFoundError) return res.status(404).json({ message: error.message });
@@ -552,7 +663,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
-      return res.json(await archiveVoice(id, { content: deps.content }));
+      const archived = await archiveVoice(id, { content: deps.content });
+      return res.json(serializeVoice(archived));
     } catch (error) {
       if (error instanceof VoiceNotFoundError) return res.status(404).json({ message: error.message });
       return next(error);
@@ -566,7 +678,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const voice = await deps.content.getVoice(id);
       if (!voice) return res.status(404).json({ message: "Voice not found" });
       const revisions = await listVoiceRevisions(voice.voiceKey ?? `voice:${voice.id}`, { content: deps.content });
-      return res.json(revisions);
+      return res.json(revisions.map(serializeVoice));
     } catch (error) {
       return next(error);
     }
@@ -574,7 +686,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
   router.get("/voices", async (_req, res, next) => {
     try {
-      return res.json(await deps.content.listVoices());
+      return res.json((await deps.content.listVoices()).map(serializeVoice));
     } catch (error) {
       return next(error);
     }
@@ -586,7 +698,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const voice = await deps.content.getVoice(id);
       if (!voice) return res.status(404).json({ message: "Voice not found" });
-      return res.json(voice);
+      return res.json(serializeVoice(voice));
     } catch (error) {
       return next(error);
     }
@@ -597,7 +709,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createTemplateBody.parse(req.body ?? {});
       const template = await createTemplate(getUserId(req) ?? 1, body, { content: deps.content });
-      return res.status(201).json(template);
+      return res.status(201).json(serializeTemplate(template));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
@@ -611,7 +723,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
       const template = await reviseTemplate(id, req.body ?? {}, { content: deps.content });
-      return res.status(201).json(template);
+      return res.status(201).json(serializeTemplate(template));
     } catch (error) {
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
       if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
@@ -623,7 +735,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
-      return res.json(await archiveTemplate(id, { content: deps.content }));
+      const archived = await archiveTemplate(id, { content: deps.content });
+      return res.json(serializeTemplate(archived));
     } catch (error) {
       if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
       return next(error);
@@ -640,7 +753,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         template.templateKey ?? `tpl:${template.id}`,
         { content: deps.content },
       );
-      return res.json(revisions);
+      return res.json(revisions.map(serializeTemplate));
     } catch (error) {
       return next(error);
     }
@@ -648,7 +761,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
   router.get("/templates", async (_req, res, next) => {
     try {
-      return res.json(await deps.content.listContentTemplates());
+      return res.json((await deps.content.listContentTemplates()).map(serializeTemplate));
     } catch (error) {
       return next(error);
     }
@@ -660,7 +773,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const template = await deps.content.getContentTemplate(id);
       if (!template) return res.status(404).json({ message: "Template not found" });
-      return res.json(template);
+      return res.json(serializeTemplate(template));
     } catch (error) {
       return next(error);
     }
@@ -669,7 +782,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   // ── Generation policies (immutable, content-addressed revisions) ─────────────
   router.get("/generation-policies", async (_req, res, next) => {
     try {
-      return res.json(await deps.content.listGenerationPolicies());
+      return res.json((await deps.content.listGenerationPolicies()).map(serializeGenerationPolicy));
     } catch (error) {
       return next(error);
     }
@@ -681,7 +794,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const policy = await deps.content.getGenerationPolicy(id);
       if (!policy) return res.status(404).json({ message: "Generation policy not found" });
-      return res.json(policy);
+      return res.json(serializeGenerationPolicy(policy));
     } catch (error) {
       return next(error);
     }
@@ -727,6 +840,135 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  // ── Visual generations ──────────────────────────────────────────────────────
+  /** Enqueue a durable visual generation; the worker produces the asset. */
+  router.post("/visual-generations", async (req, res, next) => {
+    try {
+      const { generation, created } = await createVisualGeneration(
+        getUserId(req) ?? 1,
+        req.body ?? {},
+        { content: deps.content, storage: deps.visualStorage },
+      );
+      if (generation.status === "requested") {
+        try {
+          await deps.enqueueVisual(generation);
+        } catch (error) {
+          return res.status(503).json({
+            message: "Visual queue unavailable",
+            id: generation.id,
+            correlationId: generation.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      return res.status(created ? 201 : 200).json(serializeVisualGeneration(generation));
+    } catch (error) {
+      if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof VisualCapabilityUnsupportedError) {
+        return res.status(409).json({ message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  router.get("/visual-generations/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid visual generation id" });
+    try {
+      const generation = await deps.content.getVisualGeneration(id);
+      if (!generation) return res.status(404).json({ message: "Visual generation not found" });
+      const asset = await deps.content.getLatestVisualAssetForGeneration(generation.id);
+      return res.json({ ...serializeVisualGeneration(generation), visualAssetId: asset?.id ?? null });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Visual assets ───────────────────────────────────────────────────────────
+  /** Owner-scoped listing. */
+  router.get("/visual-assets", async (req, res, next) => {
+    const requested = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
+    try {
+      const assets = await deps.content.listVisualAssets(getUserId(req) ?? 1, limit);
+      return res.json(assets.map(serializeVisualAsset));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  /** Owner-scoped read. */
+  router.get("/visual-assets/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
+    try {
+      const asset = await deps.content.getVisualAsset(id);
+      if (!asset || asset.userId !== null && asset.userId !== (getUserId(req) ?? 1)) {
+        return res.status(404).json({ message: "Visual asset not found" });
+      }
+      return res.json(serializeVisualAsset(asset));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Artifact ↔ visual attachment ────────────────────────────────────────────
+  const attachVisualBody = z.object({
+    visualAssetId: z.number().int().positive(),
+    role: z.string().trim().max(60).optional(),
+    position: z.number().int().min(0).max(1000).optional(),
+  });
+
+  /**
+   * Attach an owner-visible visual revision to an artifact. The artifact's own
+   * payload must also carry the reference — the ref row is the durable audit
+   * trail; the payload is what renderers consume.
+   */
+  router.post("/artifacts/:id/visuals", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const body = attachVisualBody.parse(req.body ?? {});
+      const userId = getUserId(req) ?? 1;
+      const [artifact, asset] = await Promise.all([
+        deps.content.getArtifact(id),
+        deps.content.getVisualAsset(body.visualAssetId),
+      ]);
+      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      if (!asset || asset.userId !== null && asset.userId !== userId) {
+        return res.status(404).json({ message: "Visual asset not found" });
+      }
+      if (asset.status !== "ready") {
+        return res.status(409).json({ message: `Visual asset ${asset.id} is "${asset.status}", not ready` });
+      }
+      const ref = await deps.content.insertVisualAssetRef({
+        userId,
+        artifactId: id,
+        visualAssetId: asset.id,
+        role: body.role ?? asset.role ?? null,
+        position: body.position ?? 0,
+      });
+      return res.status(201).json(ref);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      return next(error);
+    }
+  });
+
+  router.get("/artifacts/:id/visuals", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const artifact = await deps.content.getArtifact(id);
+      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      return res.json(await deps.content.listVisualAssetRefs(id));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   return router;
 }
 
@@ -737,11 +979,13 @@ export async function createDefaultContentRouter(): Promise<Router> {
   const [
     {
       contentStorage,
+      visualAssetStorage,
       generationDeps,
       chatDeps,
       registerContentJobs,
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
+      VISUAL_RUN_JOB_TYPE,
     },
     { storyStorage },
     { getJobRuntime },
@@ -758,6 +1002,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
     opportunities: { opportunities: contentStorage, stories: storyStorage },
     generation: generationDeps,
     chat: chatDeps,
+    visualStorage: visualAssetStorage,
     enqueueGeneration: async (job) => {
       const result = await getJobRuntime().enqueue({
         jobType: GENERATION_RUN_JOB_TYPE,
@@ -773,6 +1018,15 @@ export async function createDefaultContentRouter(): Promise<Router> {
         payload: { publicationId: publication.id },
         correlationId: publication.correlationId,
         idempotencyKey: publication.idempotencyKey,
+      });
+      return !result.deduplicated;
+    },
+    enqueueVisual: async (generation) => {
+      const result = await getJobRuntime().enqueue({
+        jobType: VISUAL_RUN_JOB_TYPE,
+        payload: { visualGenerationId: generation.id },
+        correlationId: generation.correlationId,
+        idempotencyKey: generation.idempotencyKey,
       });
       return !result.deduplicated;
     },

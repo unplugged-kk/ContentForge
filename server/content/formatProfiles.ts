@@ -27,6 +27,12 @@ export interface FormatProfile {
     hookFirst?: boolean;
     /** Whether a closing CTA is expected. */
     cta?: boolean;
+    /**
+     * Visual requirement for this format: "none" (text-only), "optional"
+     * (may degrade to text-only if generation fails), "required" (the
+     * Artifact is blocked until the visual exists).
+     */
+    visual?: "none" | "optional" | "required";
   };
 }
 
@@ -48,6 +54,32 @@ const PROFILES: readonly FormatProfile[] = [
       "Each following unit advances exactly one step of the argument; the last unit lands the takeaway. " +
       "Do not number the units — numbering is a publish-time adapter mechanic.",
     constraints: { maxCharacters: 280, minUnits: 2, maxUnits: 8, sequential: true, hookFirst: true, cta: true },
+  },
+  {
+    format: "image",
+    channel: "x",
+    guidance:
+      "A single supporting image for the post. It must reinforce the Artifact's thesis, " +
+      "stay readable at small sizes, and carry no misleading claims (no invented charts " +
+      "or fake data viz). Prefer high contrast and one focal subject.",
+    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required" },
+  },
+  {
+    format: "carousel",
+    channel: "x",
+    guidance:
+      "An ordered carousel of 2–10 slides telling one argument. Slide 1 is the hook. " +
+      "Each slide carries one idea with minimal text; the last slide lands the takeaway. " +
+      "Every slide keeps its own asset reference — never collapse slides into one image.",
+    constraints: { minUnits: 2, maxUnits: 10, sequential: true, hookFirst: true, visual: "required" },
+  },
+  {
+    format: "thumbnail",
+    channel: "x",
+    guidance:
+      "A single 16:9 thumbnail that reads at small sizes: one focal subject, large " +
+      "legible title text if any, no fine detail that collapses at 120px wide.",
+    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required" },
   },
 ];
 

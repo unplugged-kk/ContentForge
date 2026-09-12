@@ -85,6 +85,13 @@
       "when": 1789205265170,
       "tag": "0011_glamorous_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789217990256,
+      "tag": "0012_majestic_microbe",
+      "breakpoints": true
     }
   ]
 }

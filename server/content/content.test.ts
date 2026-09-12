@@ -352,7 +352,7 @@ describe("generation policy", () => {
   it("rejects formats without a payload schema or a format profile", async () => {
     const content = { listGenerationPolicies: async () => [] } as never;
     await assert.rejects(
-      () => resolveGenerationPolicy({ format: "carousel", channel: "x" }, { content }),
+      () => resolveGenerationPolicy({ format: "linkedin_post", channel: "linkedin" }, { content }),
       PolicyInputError,
     );
     await assert.rejects(
@@ -391,8 +391,15 @@ describe("generation policy", () => {
   it("only supports formats that are genuinely implemented", () => {
     assert.equal(hasFormatProfile("x_post", "x"), true);
     assert.equal(hasFormatProfile("x_thread", "x"), true);
+    assert.equal(hasFormatProfile("image", "x"), true);
+    assert.equal(hasFormatProfile("carousel", "x"), true);
+    assert.equal(hasFormatProfile("thumbnail", "x"), true);
     assert.equal(hasFormatProfile("linkedin_post", "linkedin"), false, "no fake placeholders");
-    assert.equal(hasFormatProfile("carousel", "x"), false);
+    assert.equal(hasFormatProfile("video_script", "video_factory"), false);
+    assert.deepEqual(
+      ["image", "carousel", "thumbnail"].map((f) => getFormatProfile(f, "x")?.constraints.visual),
+      ["required", "required", "required"],
+    );
   });
 });
 

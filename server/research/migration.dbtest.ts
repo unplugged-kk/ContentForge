@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 42, `expected 42 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 12, "all twelve migrations recorded");
+      assert.equal(tables.length, 45, `expected 45 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 13, "all thirteen migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -109,6 +109,9 @@ describeDb("migration chain (db)", () => {
         "voices",
         "content_templates",
         "generation_policies",
+        "visual_generations",
+        "visual_assets",
+        "visual_asset_refs",
         "rss_sources",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
@@ -123,14 +126,16 @@ describeDb("migration chain (db)", () => {
       assert.equal(storyFk.rows.length, 1, "stories.research_job_id has one FK");
 
       // Artifact content immutability is enforced by the database, not just by
-      // convention (0007 trigger).
+      // convention (0007 trigger). Same for visual assets (0012 trigger).
       const trigger = await pool.query<{ tgname: string }>(
         `select tgname from pg_trigger
-          where tgrelid = 'artifacts'::regclass and not tgisinternal`,
+          where tgrelid in ('artifacts'::regclass, 'visual_assets'::regclass)
+            and not tgisinternal
+          order by tgname`,
       );
       assert.deepEqual(
         trigger.rows.map((r) => r.tgname),
-        ["artifacts_no_content_mutation"],
+        ["artifacts_no_content_mutation", "visual_assets_no_mutation"],
       );
 
       // 0003's duplicate DDL targeted tables 0002 created, so a successful fresh
@@ -174,12 +179,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0011 without a db:push.
+      // The forward migration must apply 0003-0012 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 42, `expected 42 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 12, "0003-0011 recorded after upgrade");
+      assert.equal(tables.length, 45, `expected 45 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 13, "0003-0012 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");

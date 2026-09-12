@@ -156,6 +156,45 @@ export const X_FORMAT_LIMITS = {
   maxCharacters: 280,
 } as const;
 
+/**
+ * Visual payloads (Phase 3). Images reference a durable visual asset revision;
+ * a carousel is an ordered sequence of per-slide references. Units keep every
+ * slide independently addressable — a carousel is never flattened into one
+ * opaque image.
+ */
+export const imagePayloadSchema = z.object({
+  visualAssetId: z.number().int().positive(),
+  altText: z.string().trim().max(1000).optional(),
+  caption: z.string().trim().max(1000).optional(),
+  role: z.string().trim().max(60).optional(),
+  aspectRatio: z.enum(["1:1", "4:5", "16:9", "9:16"]).optional(),
+});
+
+export const carouselPayloadSchema = z.object({
+  slides: z
+    .array(
+      z.object({
+        visualAssetId: z.number().int().positive(),
+        altText: z.string().trim().max(1000).optional(),
+        caption: z.string().trim().max(1000).optional(),
+        role: z.string().trim().max(60).optional(),
+      }),
+    )
+    .min(1)
+    .max(25),
+  aspectRatio: z.enum(["1:1", "4:5", "16:9", "9:16"]).optional(),
+});
+
+export const thumbnailPayloadSchema = z.object({
+  visualAssetId: z.number().int().positive(),
+  altText: z.string().trim().max(1000).optional(),
+  role: z.string().trim().max(60).optional(),
+});
+
+export type ImagePayload = z.infer<typeof imagePayloadSchema>;
+export type CarouselPayload = z.infer<typeof carouselPayloadSchema>;
+export type ThumbnailPayload = z.infer<typeof thumbnailPayloadSchema>;
+
 export const payloadSchemaRegistry = new PayloadSchemaRegistry();
 
 payloadSchemaRegistry.register<XPostPayload>({
@@ -172,4 +211,26 @@ payloadSchemaRegistry.register<XThreadPayload>({
   description: "X thread; ordered, unnumbered units",
   limits: { maxUnits: 25, maxCharacters: X_FORMAT_LIMITS.maxCharacters },
   schema: xThreadPayloadSchema,
+});
+
+payloadSchemaRegistry.register<ImagePayload>({
+  format: "image",
+  version: 1,
+  description: "Image referencing an immutable visual asset revision",
+  schema: imagePayloadSchema,
+});
+
+payloadSchemaRegistry.register<CarouselPayload>({
+  format: "carousel",
+  version: 1,
+  description: "Carousel of ordered, independently addressable visual slides",
+  limits: { maxUnits: 25 },
+  schema: carouselPayloadSchema,
+});
+
+payloadSchemaRegistry.register<ThumbnailPayload>({
+  format: "thumbnail",
+  version: 1,
+  description: "Thumbnail referencing an immutable visual asset revision",
+  schema: thumbnailPayloadSchema,
 });

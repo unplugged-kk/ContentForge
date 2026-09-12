@@ -1099,6 +1099,149 @@ export type ContentTemplate = typeof contentTemplates.$inferSelect;
 export type InsertContentTemplate = z.infer<typeof insertContentTemplateSchema>;
 export type GenerationPolicy = typeof generationPolicies.$inferSelect;
 export type InsertGenerationPolicy = z.infer<typeof insertGenerationPolicySchema>;
+
+// ── VISUAL INTELLIGENCE (Phase 3) ─────────────────────────────────────────────
+// Locked separation: VisualIntent (what the content wants) vs VisualAsset (the
+// durable generated output) vs VisualProduction (the external mechanism).
+//
+// Visuals enter the lifecycle through generation, never attached to Stories:
+//   Opportunity → GenerationPolicy → GenerationJob → Artifact ─┬─ visual intent
+//                                                              └─▶ visual_generations → visual_assets → artifact.payload
+// An Artifact references a visual by (asset id + revision); approval still
+// belongs to the exact Artifact revision. Assets are immutable once referenced.
+
+/**
+ * A durable request to produce a visual. Distinct from the business Artifact:
+ * this records how the visual was requested and made; the asset is the output.
+ * Retries recover the same row; regenerations create a new row.
+ */
+export const visualGenerations = pgTable(
+  "visual_generations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /**
+     * What the content wants: subject, composition, aspect ratio, style, brand
+     * requirements, slide count, role relative to the Artifact.
+     */
+    intent: jsonb("intent").$type<Record<string, unknown>>().notNull(),
+    /** image | carousel_slide | thumbnail — only implemented kinds may be requested. */
+    kind: varchar("kind", { length: 30 }).notNull(),
+    /** Provider + capability that produced (or will produce) the asset. */
+    providerId: varchar("provider_id", { length: 80 }),
+    capability: varchar("capability", { length: 40 }),
+    providerVersion: varchar("provider_version", { length: 50 }),
+    /** Frozen provider request (params + prompt); providers never see business tables. */
+    requestSnapshot: jsonb("request_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    /** Authoritative idempotency arbiter (Ticket 06 §7 pattern). */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    /** requested | generating | ready | failed */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    attempt: integer("attempt").notNull().default(1),
+    model: varchar("model", { length: 120 }),
+    cost: decimal("cost", { precision: 12, scale: 6 }),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    /** Optional when no GenerationJob exists (direct visual request still routes through generation). */
+    generationJobId: integer("generation_job_id").references(() => generationJobs.id),
+    opportunityId: integer("opportunity_id").references(() => opportunities.id),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("visual_generations_status_idx").on(table.status),
+    index("visual_generations_opportunity_idx").on(table.opportunityId),
+  ],
+);
+
+/**
+ * A durable visual asset revision. Immutable once referenced by an Artifact or
+ * Publication: any change is a NEW row linked by `supersedes_id`. Binary bytes
+ * never live here — only a storage reference (`storageKey`) resolved through
+ * the AssetStorage seam.
+ */
+export const visualAssets = pgTable(
+  "visual_assets",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    visualGenerationId: integer("visual_generation_id").references(() => visualGenerations.id),
+    /** image | carousel_slide | thumbnail */
+    kind: varchar("kind", { length: 30 }).notNull(),
+    /** Provider-agnostic storage reference (e.g. `local:<sha>`); never a filesystem path. */
+    storageKey: varchar("storage_key", { length: 500 }).notNull(),
+    /** Validated MIME (image/png, image/jpeg, image/webp, image/gif). */
+    mime: varchar("mime", { length: 60 }).notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    byteSize: integer("byte_size"),
+    /** Content hash of the bytes (sha256 hex). */
+    contentHash: varchar("content_hash", { length: 64 }),
+    altText: text("alt_text"),
+    caption: text("caption"),
+    /** Role relative to the requesting content (hero, inline, slide-3…). */
+    role: varchar("role", { length: 60 }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    supersedesId: integer("supersedes_id").references((): AnyPgColumn => visualAssets.id),
+    provenance: varchar("provenance", { length: 20 }).notNull().default("generated"),
+    /** requested | generating | ready | failed | archived */
+    status: varchar("status", { length: 20 }).notNull().default("ready"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("visual_assets_generation_idx").on(table.visualGenerationId),
+    index("visual_assets_status_idx").on(table.status),
+    uniqueIndex("visual_assets_supersedes_uq").on(table.supersedesId),
+  ],
+);
+
+/**
+ * Explicit references from Artifacts to visual asset revisions. A separate
+ * table (not an array inside `payload`) so references are queryable and the
+ * asset pointed at can be validated as immutable. The payload ALSO carries the
+ * reference for renderer consumption; this table is the durable audit trail.
+ */
+export const visualAssetRefs = pgTable(
+  "visual_asset_refs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    artifactId: integer("artifact_id").notNull().references(() => artifacts.id),
+    visualAssetId: integer("visual_asset_id").notNull().references(() => visualAssets.id),
+    /** Why this asset is attached (hero, inline, slide). */
+    role: varchar("role", { length: 60 }),
+    position: integer("position").notNull().default(0),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("visual_asset_refs_artifact_idx").on(table.artifactId),
+    uniqueIndex("visual_asset_refs_artifact_asset_uq").on(table.artifactId, table.visualAssetId),
+  ],
+);
+
+export const insertVisualGenerationSchema = createInsertSchema(visualGenerations).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertVisualAssetSchema = createInsertSchema(visualAssets).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertVisualAssetRefSchema = createInsertSchema(visualAssetRefs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type VisualGeneration = typeof visualGenerations.$inferSelect;
+export type InsertVisualGeneration = z.infer<typeof insertVisualGenerationSchema>;
+export type VisualAsset = typeof visualAssets.$inferSelect;
+export type InsertVisualAsset = z.infer<typeof insertVisualAssetSchema>;
+export type VisualAssetRef = typeof visualAssetRefs.$inferSelect;
+export type InsertVisualAssetRef = z.infer<typeof insertVisualAssetRefSchema>;
+export type VisualGenerationStatus = "requested" | "generating" | "ready" | "failed";
+export type VisualAssetStatus = "requested" | "generating" | "ready" | "failed" | "archived";
 export type OpportunityStatus = "proposed" | "selected" | "killed";
 export type ArtifactReadiness = "draft" | "in_review" | "approved" | "rejected";
 export type PublicationState =

@@ -9,9 +9,16 @@ import {
 } from "./payloadSchemas";
 
 describe("payload schema registry", () => {
-  it("registers the Phase B X formats", () => {
-    assert.deepEqual(payloadSchemaRegistry.formats(), ["x_post", "x_thread"]);
+  it("registers the X formats and the Phase 3 visual formats", () => {
+    assert.deepEqual(payloadSchemaRegistry.formats(), [
+      "carousel",
+      "image",
+      "thumbnail",
+      "x_post",
+      "x_thread",
+    ]);
     assert.deepEqual(payloadSchemaRegistry.versions("x_post"), [1]);
+    assert.deepEqual(payloadSchemaRegistry.versions("image"), [1]);
   });
 
   it("validates a good x_post payload", () => {
@@ -56,10 +63,28 @@ describe("payload schema registry", () => {
 
   it("throws a typed error for an unregistered format", () => {
     assert.throws(
-      () => payloadSchemaRegistry.validate("carousel", {}),
+      () => payloadSchemaRegistry.validate("linkedin_post", {}),
       PayloadSchemaNotRegisteredError,
     );
-    assert.equal(payloadSchemaRegistry.has("carousel"), false);
+    assert.equal(payloadSchemaRegistry.has("linkedin_post"), false);
+  });
+
+  it("validates a good image payload referencing a visual asset", () => {
+    const parsed = payloadSchemaRegistry.validate<{ visualAssetId: number }>("image", {
+      visualAssetId: 7,
+    });
+    assert.equal(parsed.visualAssetId, 7);
+  });
+
+  it("validates an ordered carousel payload and rejects an empty one", () => {
+    const parsed = payloadSchemaRegistry.validate<{ slides: unknown[] }>("carousel", {
+      slides: [{ visualAssetId: 1 }, { visualAssetId: 2 }],
+    });
+    assert.equal(parsed.slides.length, 2);
+    assert.throws(
+      () => payloadSchemaRegistry.validate("carousel", { slides: [] }),
+      PayloadValidationError,
+    );
   });
 
   it("exposes advisory limits without enforcing them", () => {

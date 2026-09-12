@@ -147,14 +147,56 @@ Three layers, all green:
 
 | Check | Result |
 |---|---|
-| `npm run test:unit` | **200 passed / 0 failed** (39 suites) |
-| `npm run test:db` (real Postgres) | **74 passed / 0 failed / 0 skipped** (9 suites) |
-| `npm test` | **200 passed** |
+| `npm run test:unit` | **237 passed / 0 failed** (52 suites) |
+| `npm run test:db` (real Postgres) | **90 passed / 0 failed / 0 skipped** (11 suites) |
+| `npm test` | **237 passed** |
 | `npx tsc` | **0 errors** |
-| `npm run test:e2e:live` (real running app) | **59 passed / 0 failed** |
-| Migrations 0005–0010 | additive only — 0 ALTER/DROP of pre-existing columns |
-| Fresh DB migrate | bootstraps to 42 tables / 11 migrations from zero |
+| `npm run test:e2e:live` (real running app) | **65 passed / 0 failed** |
+| Migrations 0005–0012 | additive only — 0 ALTER/DROP of pre-existing columns |
+| Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
+
+## Phase 3 — visual intelligence foundation (in progress)
+
+Durable, provider-agnostic visual layer. Three locked concerns, kept separate:
+
+```
+VisualIntent (what content wants) → VisualProduction (external mechanism)
+→ VisualAsset (durable immutable revision) → artifact.payload reference
+```
+
+Visuals enter the lifecycle through generation, never attached to Stories.
+An Artifact references a visual by (asset id + revision); approval still belongs
+to the exact Artifact revision.
+
+| Module | Responsibility |
+|---|---|
+| `shared/schema.ts` + `migrations/0012_majestic_microbe.sql` | `visual_generations` (durable request, UNIQUE idempotency), `visual_assets` (immutable revisions via DB trigger), `visual_asset_refs` (artifact↔asset audit trail) |
+| `server/content/visual.ts` | Provider contract (declared capabilities, deterministic selection), output validation (MIME allowlist, SVG ban, size/dimension ceilings), local content-addressed storage seam |
+| `server/content/visualService.ts` | Async execution: validate → store → persist; idempotent claims; transient vs permanent; revisions via `supersedes_id` |
+| `server/content/service.ts` | `visual.run` job type + `visualAssetStorage` composition; registered at startup |
+| `server/content/routes.ts` | `POST/GET /visual-generations`, `GET /visual-assets`, attach + audit endpoints |
+| `server/content/visualFixture.ts` | Deterministic double emitting a real 1×1 PNG (test/E2E boundary) |
+| `server/artifacts/payloadSchemas.ts` + `formatProfiles.ts` | `image` / `carousel` / `thumbnail` schemas and profiles; carousel keeps slides independently addressable |
+
+Decisions:
+
+- **No binary blobs in Postgres** — only `storage_key` (`local:<sha>` for the
+  local impl; S3/R2 swap changes the port, not the domain).
+- **Immutable assets via trigger** (mirrors the artifacts trigger): content
+  columns frozen, lifecycle `status` mutable.
+- **Optional vs required visuals** live in the format-profile `visual`
+  constraint: `image`/`carousel`/`thumbnail` mark `required`; text formats have
+  none, so they degrade to text-only by default.
+- **Failure taxonomy matches the rest of the system**: transient → real pg-boss
+  retry; permanent/invalid → terminal; invalid provider output never persists.
+- **Carousel is structured**: ordered slides, each a real asset reference.
+- **video_script / Video Factory**: contract/boundary only; no rendering code,
+  no renderer imports.
+
+Verified in Phase 3: tsc 0 · unit 237/0 · DB 90/0/0 skipped · live E2E 65/0 ·
+fresh DB 46 tables/13 migrations · existing DB upgrade clean · external smoke
+(hnrss.org) non-gating.
 
 ## Phase 1.5 — creation intelligence hardening + product surface
 

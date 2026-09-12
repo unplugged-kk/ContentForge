@@ -22,6 +22,9 @@ import {
   results,
   scheduleOccurrences,
   schedules,
+  visualAssetRefs,
+  visualAssets,
+  visualGenerations,
   voices,
   type Artifact,
   type ArtifactReadiness,
@@ -35,6 +38,10 @@ import {
   type Result,
   type Schedule,
   type ScheduleOccurrence,
+  type VisualAsset,
+  type VisualAssetRef,
+  type VisualGeneration,
+  type VisualGenerationStatus,
   type Voice,
 } from "@shared/schema";
 import { db as defaultDb } from "../db";
@@ -184,7 +191,78 @@ export interface InsertPolicyRow {
   specHash: string;
 }
 
+// ── visual generations / assets / refs ───────────────────────────────────────
+export interface InsertVisualGenerationRow {
+  userId?: number | null;
+  intent: JsonRecord;
+  kind: string;
+  providerId?: string | null;
+  capability?: string | null;
+  providerVersion?: string | null;
+  requestSnapshot?: JsonRecord;
+  idempotencyKey: string;
+  generationJobId?: number | null;
+  opportunityId?: number | null;
+  correlationId: string;
+}
+
+export interface ClaimVisualGenerationResult {
+  generation: VisualGeneration;
+  created: boolean;
+}
+
+export interface InsertVisualAssetRow {
+  userId?: number | null;
+  visualGenerationId?: number | null;
+  kind: string;
+  storageKey: string;
+  mime: string;
+  width?: number | null;
+  height?: number | null;
+  byteSize?: number | null;
+  contentHash?: string | null;
+  altText?: string | null;
+  caption?: string | null;
+  role?: string | null;
+  metadata?: JsonRecord;
+  supersedesId?: number | null;
+  provenance?: string;
+}
+
+export interface InsertVisualAssetRefRow {
+  userId?: number | null;
+  artifactId: number;
+  visualAssetId: number;
+  role?: string | null;
+  position?: number;
+}
+
 export interface ContentStoragePort {
+  // ── visual generations / assets / refs ──────────────────────────────────────
+  claimVisualGeneration(row: InsertVisualGenerationRow): Promise<ClaimVisualGenerationResult>;
+  getVisualGeneration(id: number): Promise<VisualGeneration | undefined>;
+  getVisualGenerationByIdempotencyKey(key: string): Promise<VisualGeneration | undefined>;
+  listVisualGenerationsByOpportunity(opportunityId: number): Promise<VisualGeneration[]>;
+  markVisualGenerationRunning(id: number): Promise<void>;
+  markVisualGenerationReady(
+    id: number,
+    meta: { model: string | null; cost: string | null; attempt: number },
+  ): Promise<void>;
+  markVisualGenerationFailed(
+    id: number,
+    failureClass: string,
+    message: string,
+    attempt: number,
+  ): Promise<void>;
+
+  insertVisualAsset(row: InsertVisualAssetRow): Promise<VisualAsset>;
+  getVisualAsset(id: number): Promise<VisualAsset | undefined>;
+  getLatestVisualAssetForGeneration(visualGenerationId: number): Promise<VisualAsset | undefined>;
+  listVisualAssets(userId: number, limit: number): Promise<VisualAsset[]>;
+
+  insertVisualAssetRef(row: InsertVisualAssetRefRow): Promise<VisualAssetRef>;
+  listVisualAssetRefs(artifactId: number): Promise<VisualAssetRef[]>;
+
   // ── creation intelligence (voices / templates / policies) ──────────────────
   insertVoice(row: InsertVoiceRow): Promise<Voice>;
   getVoice(id: number): Promise<Voice | undefined>;
@@ -288,6 +366,206 @@ export interface ContentStoragePort {
 
 export class DatabaseContentStorage implements ContentStoragePort {
   constructor(private readonly database: ContentDatabase = defaultDb) {}
+
+  // ── Visual generations ──────────────────────────────────────────────────────
+  async claimVisualGeneration(
+    row: InsertVisualGenerationRow,
+  ): Promise<ClaimVisualGenerationResult> {
+    const inserted = await this.database
+      .insert(visualGenerations)
+      .values({
+        userId: row.userId ?? null,
+        intent: row.intent,
+        kind: row.kind,
+        providerId: row.providerId ?? null,
+        capability: row.capability ?? null,
+        providerVersion: row.providerVersion ?? null,
+        requestSnapshot: row.requestSnapshot ?? {},
+        idempotencyKey: row.idempotencyKey,
+        generationJobId: row.generationJobId ?? null,
+        opportunityId: row.opportunityId ?? null,
+        correlationId: row.correlationId,
+        status: "requested",
+      })
+      .onConflictDoNothing({ target: visualGenerations.idempotencyKey })
+      .returning();
+
+    if (inserted.length > 0) return { generation: inserted[0], created: true };
+
+    const [existing] = await this.database
+      .select()
+      .from(visualGenerations)
+      .where(eq(visualGenerations.idempotencyKey, row.idempotencyKey))
+      .limit(1);
+    return { generation: existing, created: false };
+  }
+
+  async getVisualGeneration(id: number): Promise<VisualGeneration | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(visualGenerations)
+      .where(eq(visualGenerations.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getVisualGenerationByIdempotencyKey(key: string): Promise<VisualGeneration | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(visualGenerations)
+      .where(eq(visualGenerations.idempotencyKey, key))
+      .limit(1);
+    return row;
+  }
+
+  async listVisualGenerationsByOpportunity(opportunityId: number): Promise<VisualGeneration[]> {
+    return this.database
+      .select()
+      .from(visualGenerations)
+      .where(eq(visualGenerations.opportunityId, opportunityId))
+      .orderBy(asc(visualGenerations.id));
+  }
+
+  async markVisualGenerationRunning(id: number): Promise<void> {
+    await this.database
+      .update(visualGenerations)
+      .set({ status: "generating", startedAt: new Date() })
+      .where(
+        and(
+          eq(visualGenerations.id, id),
+          inArray(visualGenerations.status, ["requested", "failed"]),
+        ),
+      );
+  }
+
+  async markVisualGenerationReady(
+    id: number,
+    meta: { model: string | null; cost: string | null; attempt: number },
+  ): Promise<void> {
+    await this.database
+      .update(visualGenerations)
+      .set({
+        status: "ready",
+        finishedAt: new Date(),
+        model: meta.model,
+        cost: meta.cost,
+        attempt: meta.attempt,
+        errorClass: null,
+        errorMessage: null,
+      })
+      .where(eq(visualGenerations.id, id));
+  }
+
+  async markVisualGenerationFailed(
+    id: number,
+    failureClass: string,
+    message: string,
+    attempt: number,
+  ): Promise<void> {
+    await this.database
+      .update(visualGenerations)
+      .set({
+        status: "failed",
+        finishedAt: new Date(),
+        errorClass: failureClass,
+        errorMessage: message,
+        attempt,
+      })
+      .where(eq(visualGenerations.id, id));
+  }
+
+  // ── Visual assets ───────────────────────────────────────────────────────────
+  async insertVisualAsset(row: InsertVisualAssetRow): Promise<VisualAsset> {
+    const [inserted] = await this.database
+      .insert(visualAssets)
+      .values({
+        userId: row.userId ?? null,
+        visualGenerationId: row.visualGenerationId ?? null,
+        kind: row.kind,
+        storageKey: row.storageKey,
+        mime: row.mime,
+        width: row.width ?? null,
+        height: row.height ?? null,
+        byteSize: row.byteSize ?? null,
+        contentHash: row.contentHash ?? null,
+        altText: row.altText ?? null,
+        caption: row.caption ?? null,
+        role: row.role ?? null,
+        metadata: row.metadata ?? {},
+        supersedesId: row.supersedesId ?? null,
+        provenance: row.provenance ?? "generated",
+        status: "ready",
+      })
+      .returning();
+    return inserted;
+  }
+
+  async getVisualAsset(id: number): Promise<VisualAsset | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(visualAssets)
+      .where(eq(visualAssets.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestVisualAssetForGeneration(
+    visualGenerationId: number,
+  ): Promise<VisualAsset | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(visualAssets)
+      .where(eq(visualAssets.visualGenerationId, visualGenerationId))
+      .orderBy(desc(visualAssets.id))
+      .limit(1);
+    return row;
+  }
+
+  async listVisualAssets(userId: number, limit: number): Promise<VisualAsset[]> {
+    return this.database
+      .select()
+      .from(visualAssets)
+      .where(eq(visualAssets.userId, userId))
+      .orderBy(desc(visualAssets.id))
+      .limit(Math.min(Math.max(limit, 1), 200));
+  }
+
+  // ── Visual asset refs ───────────────────────────────────────────────────────
+  async insertVisualAssetRef(row: InsertVisualAssetRefRow): Promise<VisualAssetRef> {
+    const inserted = await this.database
+      .insert(visualAssetRefs)
+      .values({
+        userId: row.userId ?? null,
+        artifactId: row.artifactId,
+        visualAssetId: row.visualAssetId,
+        role: row.role ?? null,
+        position: row.position ?? 0,
+      })
+      .onConflictDoNothing({
+        target: [visualAssetRefs.artifactId, visualAssetRefs.visualAssetId],
+      })
+      .returning();
+    if (inserted.length > 0) return inserted[0];
+    const [existing] = await this.database
+      .select()
+      .from(visualAssetRefs)
+      .where(
+        and(
+          eq(visualAssetRefs.artifactId, row.artifactId),
+          eq(visualAssetRefs.visualAssetId, row.visualAssetId),
+        ),
+      )
+      .limit(1);
+    return existing;
+  }
+
+  async listVisualAssetRefs(artifactId: number): Promise<VisualAssetRef[]> {
+    return this.database
+      .select()
+      .from(visualAssetRefs)
+      .where(eq(visualAssetRefs.artifactId, artifactId))
+      .orderBy(asc(visualAssetRefs.position));
+  }
 
   // ── Voices ──────────────────────────────────────────────────────────────────
   async insertVoice(row: InsertVoiceRow): Promise<Voice> {

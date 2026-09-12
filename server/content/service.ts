@@ -24,9 +24,23 @@ import type { ChatDeps } from "./chat";
 import { runPublication, reconcileStalePublications, type PublicationDeps } from "./publication";
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
+import { createLocalAssetStorage } from "./visual";
+import { runVisualGeneration } from "./visualService";
 import cron from "node-cron";
 
 export const contentStorage = new DatabaseContentStorage(db);
+
+export const visualAssetStorage = createLocalAssetStorage();
+
+export interface VisualRunDeps {
+  content: typeof contentStorage;
+  storage: typeof visualAssetStorage;
+}
+
+export const visualRunDeps: VisualRunDeps = {
+  content: contentStorage,
+  storage: visualAssetStorage,
+};
 
 export const generationDeps: GenerationDeps = {
   content: contentStorage,
@@ -170,11 +184,66 @@ export function registerPublicationRunJob(
   return definition;
 }
 
+// ── visual.run ────────────────────────────────────────────────────────────────
+export const VISUAL_RUN_JOB_TYPE = "visual.run";
+
+export const visualRunPayloadSchema = z.object({
+  visualGenerationId: z.number().int().positive(),
+});
+export type VisualRunPayload = z.infer<typeof visualRunPayloadSchema>;
+
+export function createVisualRunHandler(deps: VisualRunDeps) {
+  return async (payload: VisualRunPayload, ctx: JobContext): Promise<void> => {
+    const result = await runVisualGeneration(payload.visualGenerationId, deps);
+    if (result.status === "ready") {
+      ctx.logger.info(
+        {
+          visualGenerationId: result.visualGenerationId,
+          visualAssetId: result.visualAssetId,
+          reused: result.reused,
+        },
+        "visual generation complete",
+      );
+      return;
+    }
+    const failureClass = result.failureClass ?? "transient";
+    const message = result.failureMessage ?? "visual generation failed";
+    if (failureClass === "rate_limited") throw JobFailure.rateLimited(message);
+    if (failureClass === "transient") throw JobFailure.transient(message);
+    if (failureClass === "policy_human") throw JobFailure.policyHuman(message);
+    throw JobFailure.permanent(message);
+  };
+}
+
+export function registerVisualRunJob(
+  deps: VisualRunDeps = visualRunDeps,
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<VisualRunPayload> | undefined {
+  if (hasJob(VISUAL_RUN_JOB_TYPE)) return undefined;
+  const definition: JobDefinition<VisualRunPayload> = {
+    jobType: VISUAL_RUN_JOB_TYPE,
+    description: "Produce a visual asset for a persisted VisualGeneration",
+    payloadSchema: visualRunPayloadSchema,
+    queue: {
+      retryLimit: 3,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 10 * 60,
+      singletonSeconds: 30,
+      ...queueOverrides,
+    },
+    handler: createVisualRunHandler(deps),
+  };
+  registerJob(definition);
+  return definition;
+}
+
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
   registerGenerationRunJob();
   registerPublicationRunJob();
+  registerVisualRunJob();
 }
 
 // ── Durable scheduler tick ────────────────────────────────────────────────────

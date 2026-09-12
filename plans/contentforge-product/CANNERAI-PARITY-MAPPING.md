@@ -49,15 +49,40 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Publishing | Publication → ChannelAdapter | IMPLEMENTED for X (x_post/x_thread via existing xQuick); other channels ARCHITECTURALLY READY |
 | Publication reconciliation | Publication lease + `Result(unknown)` | PARTIALLY IMPLEMENTED — reconcile-first is enforced; the X `reconcile()` resolver is a stub |
 | Analytics | Publication → Result | PARTIALLY IMPLEMENTED — one durable Result per Publication; metric mappers deferred |
-| Image generation | new format + payload schema + model port | DEFERRED |
-| Carousel | new format + payload schema | DEFERRED |
-| Video script | format + frozen policy export | DEFERRED (Video Factory untouched) |
+| Image generation | Visual provider → VisualGeneration → VisualAsset → Artifact | PARTIALLY IMPLEMENTED — **durable pipeline complete**: provider contract with declared capabilities, async `visual.run` worker, `image` payload schema (asset reference + alt/caption/role), immutable asset revisions, cross-user isolation. The only producer is the deterministic fixture; **no real image vendor is wired**. Deferred: real provider, UI |
+| Carousel | Opportunity(format) → GenerationJob → Artifact | PARTIALLY IMPLEMENTED — **structured and durable**: ordered `slides`, each a real asset revision (`carousel_slide`), independently addressable refs, same Story without re-research. Deferred: slide-layout UI, auto-layout policy |
+| Carousel generation (visual slides) | Visual provider (`generate_slide`) → VisualAsset | PARTIALLY IMPLEMENTED — capability declared and the fixture produces deterministic slides. Deferred: real provider |
+| Image editing / transformation | new asset revision | ARCHITECTURALLY READY — the revision path (`supersedes_id`) exists and is tested; the `edit_image` capability is declared but unproduced. No fake editing API |
+| Thumbnail | VisualAsset → Artifact (`thumbnail` payload) | PARTIALLY IMPLEMENTED — payload schema + profile registered; produced exactly like images. Deferred: sizing/derivation policy |
+| Video script | format + frozen policy export | DEFERRED (Video Factory untouched; see contract note below) |
 | Second Brain / Context Vault | future context subsystem | DEFERRED — must feed policy/research context, **never bolted onto Story** |
 | Style analysis of real posts | observed-evidence layer | DEFERRED |
 | One-click transforms | new Artifact revision | DEFERRED |
 | Multi-brand / collaboration | identity model | DEFERRED |
 | Notifications, search, activity feed | new surfaces | DEFERRED |
 | Billing / subscriptions | — | DEFERRED (out of scope by design) |
+
+## Video Factory boundary (contract only)
+
+ContentForge owns the content/intent contract; Video Factory owns production.
+No rendering code, renderer imports, or Video Factory modifications exist.
+
+A future `video_script` flow would be:
+
+```
+Story → Opportunity → GenerationPolicy → GenerationJob
+      → video_script Artifact (payload: script + visual/audio requirements)
+      → external Video Factory (versioned request)
+      → video asset referenced back (never produced inside ContentForge)
+```
+
+Required contract surface (not yet sent anywhere): request identity,
+script payload, visual requirements, voice/audio requirements, aspect ratio,
+output expectations, correlation ID, idempotency, status/result. The contract
+is versioned in principle via the frozen generation policy + the format payload
+schema registry; no `video_script` schema is registered yet because nothing
+produces or consumes it — registering it without a consumer would be the fake
+support this map forbids.
 
 ## Reference integrations
 
