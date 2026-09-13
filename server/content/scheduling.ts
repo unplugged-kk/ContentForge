@@ -9,9 +9,27 @@
  * and enqueues `publication.run`, so the scheduler cannot scan every post every
  * minute and cannot become a second publisher.
  *
- * Phase B supports one-shot schedules only. Recurrence strings are stored but
- * not expanded yet — expanding RRULEs is deliberately left as future work rather
- * than inventing interval semantics here.
+ * Recurrence (Phase 4): a bounded fixed-interval grammar, not RRULE/cron —
+ * `every:<n><unit>` (unit one of m/h/d/w), e.g. `every:1d`, `every:6h`. The
+ * n-th occurrence's time is `startAt + n * interval`, computed once at create
+ * time in absolute (UTC instant) terms — the same way one-shot `startAt`
+ * already works. `timezone` remains stored metadata only (as it already was
+ * for one-shot); this phase does not add calendar-aware/DST-aware recurrence,
+ * since nothing in the existing model resolved wall-clock time from it either.
+ *
+ * The durable "next occurrence index" is derived, not stored: it is the count
+ * of ScheduleOccurrence rows already materialized for the schedule. No mutable
+ * cursor column exists or is needed — `(schedule_id, occurrence_time)` stays
+ * the single unique arbiter, so two concurrent ticks computing the same next
+ * index and the same next time collapse to one row exactly as one-shot always
+ * has (see `materializeOccurrence`'s `onConflictDoNothing`).
+ *
+ * Catch-up policy: at most one occurrence is materialized per schedule per
+ * tick, oldest-due-first (the derived index always points at the next
+ * unmaterialized slot). A schedule that missed N slots while the scheduler was
+ * offline catches up one slot per tick until it reaches `now`, then resumes
+ * normal cadence — bounded by `schedule.count`, never backfilled in a single
+ * burst, never silently skipped.
  */
 
 import { randomUUID } from "node:crypto";
@@ -58,6 +76,47 @@ export const createScheduleSchema = z.object({
 
 export type CreateScheduleInput = z.input<typeof createScheduleSchema>;
 
+/** `every:<n><unit>` — bounded fixed-interval recurrence, not RRULE/cron. */
+const RECURRENCE_PATTERN = /^every:([1-9][0-9]{0,3})(m|h|d|w)$/;
+const RECURRENCE_UNIT_MS: Record<string, number> = {
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  w: 604_800_000,
+};
+const RECURRENCE_MAX_MS = 90 * RECURRENCE_UNIT_MS.d;
+
+/** Parse `recurrence` into a fixed millisecond interval, or throw. */
+export function parseRecurrenceIntervalMs(recurrence: string): number {
+  const match = RECURRENCE_PATTERN.exec(recurrence);
+  if (!match) {
+    throw new ScheduleInputError([
+      `recurrence must match "every:<n><unit>" (unit one of m/h/d/w), got "${recurrence}"`,
+    ]);
+  }
+  const ms = Number(match[1]) * RECURRENCE_UNIT_MS[match[2]];
+  if (ms > RECURRENCE_MAX_MS) {
+    throw new ScheduleInputError([`recurrence interval too large (max 90 days), got "${recurrence}"`]);
+  }
+  return ms;
+}
+
+/**
+ * The absolute time of the `index`-th occurrence (0-based) in a series.
+ * One-shot schedules (`recurrence === null`) only ever have index 0.
+ */
+export function computeOccurrenceTime(
+  schedule: Pick<Schedule, "startAt" | "recurrence">,
+  index: number,
+): Date {
+  if (!schedule.recurrence) {
+    if (index !== 0) throw new Error("one-shot schedule has no occurrence beyond index 0");
+    return schedule.startAt;
+  }
+  const intervalMs = parseRecurrenceIntervalMs(schedule.recurrence);
+  return new Date(schedule.startAt.getTime() + index * intervalMs);
+}
+
 /**
  * Create the intent to publish an approved Artifact revision. Rejected artifacts
  * (and drafts/in-review) are refused here — the scheduler only ever sees
@@ -80,13 +139,16 @@ export async function createSchedule(
   const body = parsed.data;
 
   if (body.recurrence) {
+    // Throws ScheduleInputError on malformed/out-of-range recurrence.
+    parseRecurrenceIntervalMs(body.recurrence);
+    if (body.count < 2) {
+      throw new ScheduleInputError([
+        "recurrence requires count >= 2 (omit recurrence for a one-shot schedule)",
+      ]);
+    }
+  } else if (body.count !== 1) {
     throw new ScheduleInputError([
-      "recurrence is not supported yet; Phase B materializes one-shot schedules (count = 1)",
-    ]);
-  }
-  if (body.count !== 1) {
-    throw new ScheduleInputError([
-      "only count = 1 (one-shot) schedules are supported in Phase B",
+      "only count = 1 (one-shot) schedules are supported without recurrence",
     ]);
   }
 
@@ -101,7 +163,7 @@ export async function createSchedule(
     userId: artifact.userId ?? null,
     artifactId: artifact.id,
     channel: artifact.channel,
-    recurrence: null,
+    recurrence: body.recurrence ?? null,
     timezone: body.timezone,
     count: body.count,
     startAt,
@@ -144,14 +206,25 @@ export async function dispatchDueOccurrences(
 ): Promise<DispatchResult> {
   const result: DispatchResult = { materialized: 0, enqueued: 0, publications: [] };
 
-  // Materialize: an active one-shot whose start time has arrived but which has
-  // no occurrence yet. `(schedule_id, occurrence_time)` makes this idempotent.
+  // Materialize: for each active schedule, the next unmaterialized slot (the
+  // count of existing occurrences is the durable index — see module docs). At
+  // most one slot per schedule per tick, so an offline catch-up drains
+  // one-slot-per-tick rather than bursting. `(schedule_id, occurrence_time)`
+  // makes this idempotent under overlapping ticks.
   const active = await deps.content.listActiveSchedules(now, limit);
   for (const schedule of active) {
-    const existing = await deps.content.getOccurrenceByScheduleTime(schedule.id, schedule.startAt);
-    if (!existing) {
-      const created = await deps.content.materializeOccurrence(schedule.id, schedule.startAt);
-      if (created) result.materialized += 1;
+    const existingCount = await deps.content.countOccurrences(schedule.id);
+    if (existingCount >= schedule.count) continue; // series fully materialized
+
+    const nextTime = computeOccurrenceTime(schedule, existingCount);
+    if (nextTime.getTime() > now.getTime()) continue; // next slot not due yet
+
+    const created = await deps.content.materializeOccurrence(schedule.id, nextTime);
+    if (created) {
+      result.materialized += 1;
+      if (existingCount + 1 >= schedule.count) {
+        await deps.content.setScheduleStatus(schedule.id, "exhausted");
+      }
     }
   }
 

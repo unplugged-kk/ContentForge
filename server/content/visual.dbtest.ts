@@ -95,6 +95,28 @@ describeDb("visual intelligence (db)", () => {
 
     if (refRows.length)
       await db.delete(visualAssetRefs).where(inArray(visualAssetRefs.id, refRows.map((r) => r.id)));
+
+    // Some tests schedule/publish these artifacts (scheduling.ts / publication.ts);
+    // publications and schedules reference artifacts by FK, so they must clear
+    // before the artifact delete below, or it 23503s.
+    if (artIds.length) {
+      const schedRows = await db
+        .select({ id: schedules.id })
+        .from(schedules)
+        .where(inArray(schedules.artifactId, artIds));
+      const schedIds = schedRows.map((r) => r.id);
+      if (schedIds.length) {
+        const pubRows = await db
+          .select({ id: publications.id })
+          .from(publications)
+          .where(inArray(publications.scheduleId, schedIds));
+        const pubIds = pubRows.map((r) => r.id);
+        if (pubIds.length) await db.delete(results).where(inArray(results.publicationId, pubIds));
+        if (pubIds.length) await db.delete(publications).where(inArray(publications.id, pubIds));
+        await db.delete(scheduleOccurrences).where(inArray(scheduleOccurrences.scheduleId, schedIds));
+        await db.delete(schedules).where(inArray(schedules.id, schedIds));
+      }
+    }
     if (artIds.length) await db.delete(artifacts).where(inArray(artifacts.id, artIds));
     if (genIds.length) {
       const assetRows = await db

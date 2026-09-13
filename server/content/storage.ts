@@ -336,6 +336,8 @@ export interface ContentStoragePort {
   getOccurrence(id: number): Promise<ScheduleOccurrence | undefined>;
   getOccurrenceByScheduleTime(scheduleId: number, at: Date): Promise<ScheduleOccurrence | undefined>;
   listDueOccurrences(now: Date, limit: number): Promise<ScheduleOccurrence[]>;
+  /** Durable recurrence cursor: how many occurrences a series has already materialized. */
+  countOccurrences(scheduleId: number): Promise<number>;
   markOccurrenceStatus(id: number, status: string): Promise<void>;
   /** Conditional transition (compare-and-set) so only one tick may claim a due occurrence. */
   markOccurrenceStatusIf(id: number, from: string, to: string): Promise<boolean>;
@@ -1032,6 +1034,20 @@ export class DatabaseContentStorage implements ContentStoragePort {
       )
       .orderBy(asc(scheduleOccurrences.occurrenceTime))
       .limit(limit);
+  }
+
+  /**
+   * Recurrence cursor: the count of rows already materialized for this
+   * schedule is the durable "next index" — no separate mutable cursor column
+   * needed. The unique `(schedule_id, occurrence_time)` index makes concurrent
+   * ticks land on the same count safe (see `materializeOccurrence`).
+   */
+  async countOccurrences(scheduleId: number): Promise<number> {
+    const [row] = await this.database
+      .select({ count: sql<number>`count(*)::int` })
+      .from(scheduleOccurrences)
+      .where(eq(scheduleOccurrences.scheduleId, scheduleId));
+    return row?.count ?? 0;
   }
 
   async markOccurrenceStatus(id: number, status: string): Promise<void> {

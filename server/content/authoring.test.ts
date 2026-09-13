@@ -223,6 +223,10 @@ function schedulerStore() {
       materializedOnce = true;
       return occurrence;
     },
+    async countOccurrences() {
+      return materializedOnce ? 1 : 0;
+    },
+    async setScheduleStatus() {},
     async listDueOccurrences() {
       if (!materializedOnce) return [];
       // Mirrors the real query: non-terminal occurrences (pending | enqueued).

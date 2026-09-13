@@ -156,6 +156,63 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 4 — recurrence expansion (done)
+
+Expands the existing `Schedule → Occurrence` primitive to support durable
+recurring series. No new subsystem, no new table, no migration — the schema
+already anticipated this (`schedules.recurrence`, `schedules.count`) and the
+occurrence uniqueness constraint already made materialization idempotent.
+
+```
+Schedule (recurrence, count, startAt) → Occurrence[0..count-1] → Publication → Result
+```
+
+**Semantic decisions locked this phase:**
+
+- **Recurrence grammar**: `every:<n><unit>` (unit one of `m`/`h`/`d`/`w`), a
+  bounded fixed-interval representation — deliberately *not* RRULE/cron. Max
+  interval 90 days. `recurrence` absent ⇒ one-shot (`count` must be 1);
+  `recurrence` present ⇒ `count >= 2`.
+- **No mutable cursor column.** The durable "next occurrence index" is
+  *derived*: `count(ScheduleOccurrence rows for this schedule)`. The n-th
+  occurrence's time is `startAt + n * interval`, computed fresh every tick.
+  `(schedule_id, occurrence_time)` (pre-existing unique index) remains the
+  single arbiter — concurrent ticks computing the same index collapse to one
+  row via `ON CONFLICT DO NOTHING`, proven under real concurrent load against
+  Postgres and against the live running app.
+- **Catch-up policy: one slot per schedule per tick**, oldest-due-first. A
+  schedule that missed N slots while offline drains one slot per tick until
+  it reaches `now`, then resumes normal cadence. Never bursts, never silently
+  skips a slot — total occurrences remain bounded by `schedule.count`.
+- **Timezone**: `timezone` stays stored metadata only, exactly as it already
+  was for one-shot `startAt`. Recurrence advances the same absolute UTC
+  instant by a fixed duration; no calendar/DST-aware wall-clock semantics are
+  introduced (the existing one-shot model never had them either).
+- **Exhaustion**: a schedule transitions to `status = "exhausted"` the moment
+  its last occurrence materializes (this also fixes a latent inefficiency in
+  the pre-existing one-shot path, which never left `active` and was rescanned
+  every tick forever).
+- **Retry ≠ recurrence, regeneration ≠ recurrence** (both explicitly tested):
+  a publication retry never advances the recurrence cursor (the cursor is the
+  occurrence *count*, unaffected by an occurrence's publication status); the
+  scheduler never touches GenerationJob/Artifact — every recurring slot
+  publishes the exact same pinned Artifact revision.
+
+**Changed files** (no schema/migration changes):
+
+| File | Change |
+|---|---|
+| `server/content/scheduling.ts` | `parseRecurrenceIntervalMs`, `computeOccurrenceTime`, recurrence validation in `createSchedule`, one-slot-per-tick materialization + exhaustion in `dispatchDueOccurrences` |
+| `server/content/storage.ts` | `countOccurrences(scheduleId)` — the derived cursor read |
+| `server/content/recurrence.test.ts` | unit: grammar, index arithmetic, `createSchedule` validation, bounded catch-up, exhaustion, concurrent-tick dedup, retry-vs-recurrence |
+| `server/content/recurrence.dbtest.ts` | real Postgres: persistence, catch-up, exhaustion, concurrent dedup via the DB constraint, restart-equivalent recovery (fresh storage instance, same cursor), one-shot regression |
+| `server/content/visual.dbtest.ts` | unrelated pre-existing cleanup bug fixed in passing: `after()` deleted artifacts before publications/schedules referencing them, 23503 on any DB run that actually scheduled/published a visual-pipeline artifact |
+| `script/e2e-live.mjs` | new live phase: malformed recurrence rejected, bounded catch-up (3 overdue slots → 1 materializes), restart survival (kill/restart mid-series, cursor resumes correctly), concurrent-tick dedup over HTTP, 3 Publications → 3 Results all pinned to one Artifact revision |
+
+Verified in Phase 4: tsc 0 · unit 252/0 (56 suites) · DB 96/0/0 skipped (12
+suites) · live E2E 72/0 · fresh DB migration unchanged (13 migrations, no new
+one needed) · existing DB upgrade unaffected.
+
 ## Phase 3 — visual intelligence foundation (in progress)
 
 Durable, provider-agnostic visual layer. Three locked concerns, kept separate:

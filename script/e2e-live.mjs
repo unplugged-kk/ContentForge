@@ -1282,6 +1282,151 @@ const observed = {};
     return `idempotent (job ${first.body.generationJobId}) then regenerated (job ${regen.body.generationJobId})`;
   });
 
+  // ── Phase 4: recurrence — durable, bounded catch-up, restart-safe ───────────
+  phase("Phase 4: recurring Schedule -> bounded catch-up -> restart-safe -> Result, no regeneration");
+
+  const recurringArtifact = await check("one approved Artifact revision pinned for the whole recurring series", async () => {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "recurrence probe",
+      objective: "prove bounded catch-up",
+      format: "x_post",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "recurrence-probe generation" },
+    );
+    await http("POST", `/api/artifacts/${done.artifactId}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${done.artifactId}/approve`, {});
+    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return withDetail({ id: done.artifactId, payload: approved.body.payload }, `artifact ${done.artifactId} approved`);
+  });
+  const recurringArtifactId = recurringArtifact?.id;
+  observed.recurringArtifactId = recurringArtifactId;
+
+  await check("POST /api/schedules rejects malformed recurrence and never persists a row", async () => {
+    const res = await http("POST", "/api/schedules", {
+      artifactId: recurringArtifactId,
+      recurrence: "daily",
+      count: 3,
+    });
+    assert(res.status === 400, `expected 400, got ${res.status}: ${res.text}`);
+    const rows = await q("select count(*)::int c from schedules where artifact_id = $1", [recurringArtifactId]);
+    assert(rows[0].c === 0, "an invalid recurring schedule must never be persisted");
+    return "400, nothing persisted";
+  });
+
+  const recurringScheduleRes = await check(
+    "POST /api/schedules persists a 3-slot hourly series, 5 hours in the past (simulated long-offline start)",
+    async () => {
+      const startAt = new Date(Date.now() - 5 * 3_600_000).toISOString();
+      const res = await http("POST", "/api/schedules", {
+        artifactId: recurringArtifactId,
+        recurrence: "every:1h",
+        count: 3,
+        startAt,
+      });
+      assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+      assert(res.body.recurrence === "every:1h", `recurrence=${res.body.recurrence}`);
+      assert(res.body.count === 3, `count=${res.body.count}`);
+      return withDetail(res, `schedule ${res.body.id}, all 3 slots already due`);
+    },
+  );
+  const recurringScheduleId = recurringScheduleRes?.body?.id;
+  assert(Number.isInteger(recurringScheduleId), "harness error: recurring schedule id not captured");
+
+  await check(
+    "bounded catch-up: 3 overdue slots, one dispatch tick materializes exactly one, not all three",
+    async () => {
+      const before = await q("select count(*)::int c from schedule_occurrences where schedule_id = $1", [
+        recurringScheduleId,
+      ]);
+      assert(before[0].c === 0, "no occurrence should exist before the first tick");
+
+      const res = await http("POST", "/api/publications/dispatch", {});
+      assert(res.status === 200, `dispatch returned ${res.status}: ${res.text}`);
+
+      const after1 = await q(
+        "select occurrence_time from schedule_occurrences where schedule_id = $1 order by occurrence_time",
+        [recurringScheduleId],
+      );
+      assert(after1.length === 1, `expected exactly 1 occurrence after one tick, got ${after1.length}`);
+      return "1 of 3 overdue slots materialized";
+    },
+  );
+
+  // ── restart mid-series: the durable cursor (count of occurrences already
+  // materialized) must survive the process kill with no in-memory state ──────
+  await killApp("SIGKILL");
+  await startApp();
+  await setActiveFeed(`${FIXTURE_BASE}/feed.xml`);
+
+  await check("after restart: a second tick catches up slot 2 of 3, still not slot 3", async () => {
+    const res = await http("POST", "/api/publications/dispatch", {});
+    assert(res.status === 200, `dispatch returned ${res.status}: ${res.text}`);
+    const rows = await q(
+      "select occurrence_time from schedule_occurrences where schedule_id = $1 order by occurrence_time",
+      [recurringScheduleId],
+    );
+    assert(rows.length === 2, `expected exactly 2 occurrences after restart + 2nd tick, got ${rows.length}`);
+    const deltaMs = new Date(rows[1].occurrence_time).getTime() - new Date(rows[0].occurrence_time).getTime();
+    assert(deltaMs === 3_600_000, `expected a 1h gap between slots, got ${deltaMs}ms`);
+    return "recurrence cursor (derived from durable row count) survived the restart";
+  });
+
+  await check("concurrent dispatch ticks on the recurring schedule never double-materialize a slot", async () => {
+    const [r1, r2, r3] = await Promise.all([
+      http("POST", "/api/publications/dispatch", {}),
+      http("POST", "/api/publications/dispatch", {}),
+      http("POST", "/api/publications/dispatch", {}),
+    ]);
+    assert([r1, r2, r3].every((r) => r.status === 200), "all concurrent ticks must succeed (idempotent)");
+    const rows = await q("select id from schedule_occurrences where schedule_id = $1", [recurringScheduleId]);
+    assert(rows.length === 3, `expected exactly 3 occurrences (series bounded by count), got ${rows.length}`);
+    const sched = await http("GET", `/api/schedules/${recurringScheduleId}`).catch(() => null);
+    if (sched && sched.status === 200) {
+      assert(sched.body.status === "exhausted", `expected exhausted, got ${sched.body.status}`);
+    } else {
+      const row = await q("select status from schedules where id = $1", [recurringScheduleId]);
+      assert(row[0].status === "exhausted", `expected exhausted, got ${row[0].status}`);
+    }
+    return "3/3 slots, series exhausted, one unique row per slot under concurrent ticks";
+  });
+
+  await check("every occurrence publishes the SAME pinned Artifact revision — no regeneration per slot", async () => {
+    const pubs = await q(
+      "select artifact_id from publications where schedule_id = $1",
+      [recurringScheduleId],
+    );
+    assert(pubs.length === 3, `expected 3 publications, got ${pubs.length}`);
+    for (const row of pubs) {
+      assert(row.artifact_id === recurringArtifactId, "recurrence must never regenerate/re-point content");
+    }
+    const results_ = await waitFor(
+      async () => {
+        const rows = await q(
+          "select r.outcome from publications p join results r on r.publication_id = p.id where p.schedule_id = $1",
+          [recurringScheduleId],
+        );
+        return rows.length === 3 ? rows : false;
+      },
+      { timeoutMs: 90_000, intervalMs: 500, label: "3 recurring publications reaching a Result" },
+    );
+    assert(results_.every((r) => r.outcome === "published"), "every recurring slot must reach a published Result");
+
+    const researchCounts = await q("select count(*)::int c from research_jobs");
+    return `3 Publications -> 3 Results, all pinned to artifact ${recurringArtifactId} (research_jobs=${researchCounts[0].c}, unchanged by recurrence)`;
+  });
+
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
 
