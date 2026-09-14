@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 6) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 7) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,85 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **266 passed / 0 failed** (59 suites) |
-| `npm test` | **266 passed** |
-| `npm run test:db` (real PostgreSQL) | **108 passed / 0 failed / 0 skipped** (14 suites) |
-| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — all 4 Phase 6 LinkedIn checks green (golden path, ambiguous→unknown, reconcile→published, cross-channel independence), plus every Phase 4/5 check unaffected |
+| `npm run test:unit` | **272 passed / 0 failed** (59 suites) |
+| `npm test` | **272 passed** |
+| `npm run test:db` (real PostgreSQL) | **113 passed / 0 failed / 0 skipped** (15 suites, +1 file) |
+| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: every Phase 1–6 red arrow unaffected by the adapter-registry-as-compatibility-authority change and the media-resolution step inserted into `runPublication` |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **10 passed / 0 failed** |
 | Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 259 unit / 102 DB / 75-of-75 live E2E.
+Baseline before this phase: 266 unit / 108 DB / 79-of-79 live E2E.
+
+---
+
+## Visual delivery (new in this phase — Phase 7)
+
+```
+VisualAsset (immutable revision) → image/thumbnail Artifact → approval → Schedule
+        ↓
+Publication → resolvePublicationMedia() → visual_asset_refs → VisualAsset → AssetStoragePort.get()
+        ↓
+PublishRequest.media: PublishMedia[]  (ordered, N-capable, N=1 implemented)
+        ↓
+X adapter: uploadMediaToX(bytes) → media id → postContentToX([caption], {mediaIds}) → Result
+```
+
+Closes the gap where an approved image/thumbnail Artifact could reach
+Schedule → Occurrence → Publication and then fail permanently because the X
+adapter had no media transport. No new visual subsystem, no new table, no
+migration — everything needed already existed in `visual_assets` /
+`visual_asset_refs` / Artifact payload / `AssetStoragePort`.
+
+- **Exact revision pinning, proved**: the payload names an asset id, never
+  a query for "latest." A newer `VisualAsset` revision created after
+  Schedule/Occurrence materialization does not change what gets published —
+  `visualPublication.dbtest.ts`'s golden-path test creates a newer revision
+  between materialization and `runPublication` and asserts the original
+  bytes/id were published.
+- **Media resolution happens in the core, never the adapter**: the X adapter
+  receives already-resolved `PublishMedia[]` (bytes, mime, role, position);
+  it never reads `visual_assets`, `visual_asset_refs`, or an Artifact row.
+- **Two-step transport, two failure semantics**: a failed media *upload*
+  (before any post exists) is a plain classified failure (retry or
+  terminal), never `unknown`. A failed *post* after a successful upload is
+  ambiguous and reuses the **existing** Phase 5 unknown/reconcile machinery
+  unchanged — no second reconciliation system for media. The final
+  `externalId` on a resolved Publication is always the post id, never a
+  media id.
+- **Compatibility drift fixed**: `KNOWN_FORMAT_CHANNELS`, a second
+  hand-maintained allowlist in `opportunity.ts` that could (and had) drifted
+  from the adapter's real capability, is deleted. `channelSupportsFormat()`
+  (a thin read of the registered adapter's own `supports()`) is now the
+  single authority, consulted at both Opportunity creation and Schedule
+  creation — an undistributable `(format, channel)` pair is rejected
+  deterministically before any provider call or ambiguous Publication.
+- **Carousel is deliberately deferred**: the contract is already N-capable
+  (`PublishRequest.media` is an array; `image`/`carousel`/`thumbnail` each
+  declare ordered media references in the payload schema registry), but X's
+  adapter does not add `carousel` to its supported-format set, so
+  `channelSupportsFormat("x", "carousel")` is `false` and multi-media
+  delivery is enforced-absent, not merely undocumented.
+- **Thumbnail** reuses the identical `image` mechanism — no thumbnail-specific
+  adapter code.
+- **Live E2E scope, stated honestly**: there is still no HTTP-level path to
+  create an image-format Artifact (Artifacts come from a generation job's
+  AI-model completion, or — for visuals — directly through the domain layer,
+  which is how every visual DB test builds one; Phase 3 already documented
+  this boundary: "the visual E2E stops at approval"). This is a pre-existing
+  authoring-surface gap, not something Phase 7 was asked to fix. The
+  fixture's new media-upload boundary (`POST /x/media`,
+  `/control/x-media-mode`) is real, live infrastructure ready for that
+  future live-E2E phase; until an authoring endpoint exists, the golden
+  path / retry / ambiguity / reconciliation / recurrence / idempotency
+  proofs for image publication live at the real-Postgres tier
+  (`server/content/visualPublication.dbtest.ts`), and the 79/79 live E2E run
+  is a regression check that Phase 7's core changes broke nothing already
+  proven live.
+
+Full detail (exact contract shapes, resolution path, X transport, changed
+files): `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 7.
 
 ---
 
@@ -259,7 +328,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -283,14 +352,17 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   adapter over the existing xQuick transport.
 - **Recurrence** (Phase 4): as above.
 - **X reconciliation** (Phase 5): as above.
-- **LinkedIn channel adapter** (this phase): as above.
+- **LinkedIn channel adapter** (Phase 6): as above.
 - **Visuals** (Phase 3): as above.
+- **Visual delivery** (this phase, Phase 7): single-image publication to X —
+  as detailed above.
 
 ## Architecturally ready (not built)
 
-Non-X format payload schemas beyond image/carousel/thumbnail, additional
-non-X/non-LinkedIn channel adapters (Threads, Instagram), URL/web ingestion
-expansion, real image vendors, `edit_image` production — each is a
+Carousel/multi-image publishing (contract already N-capable; X's adapter
+deliberately does not declare support), additional non-X/non-LinkedIn
+channel adapters (Threads, Instagram), URL/web ingestion expansion, real
+image vendors, `edit_image` production, LinkedIn media — each is a
 registration/implementation against an existing seam, not a new pipeline.
 
 ## Deferred (deliberately, unchanged)
@@ -311,6 +383,16 @@ registration/implementation against an existing seam, not a new pipeline.
 
 ## Live E2E red arrows observed (real app, real Postgres, real pg-boss)
 
+- **Visual delivery** (new, proven at the real-Postgres tier this phase —
+  see "Visual delivery" above for why the live-E2E golden path itself is
+  deferred): image Artifact → media upload → media id → X post → Result,
+  exact revision pinned even after a newer VisualAsset revision exists;
+  transient media-upload failure retries the same Publication with no new
+  lineage rows; media upload succeeds + post creation ambiguous →
+  reconciliation → published with the real post `externalId` (never the
+  media id); recurring image Schedule publishes the same pinned Asset per
+  slot; concurrent duplicate delivery collapses to exactly one published
+  Result. The full 79/79 live E2E suite re-ran clean as a regression check.
 - Golden path: research → Story → Opportunity → policy → job → Artifact →
   approval → Schedule → Occurrence → Publication → X adapter → Result.
 - **X reconciliation** (new): ambiguous write → `unknown` (never falsely
