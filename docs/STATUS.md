@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 9) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 10) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,20 +13,82 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **290 passed / 0 failed** (64 suites) |
-| `npm test` | **290 passed** |
-| `npm run test:db` (real PostgreSQL) | **121 passed / 0 failed / 0 skipped** (18 suites) |
-| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: the generalized provider seam and the real image adapter broke nothing in Phases 1–8 |
-| `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed** — now includes standalone generation honoring a model preference, proven before any Artifact exists in the run |
-| Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
+| `npm run test:unit` | **302 passed / 0 failed** (66 suites) |
+| `npm test` | **302 passed** |
+| `npm run test:db` (real PostgreSQL) | **129 passed / 0 failed / 0 skipped** (19 suites) |
+| `npm run test:e2e:live` (real running app) | **82/82, 0 failed** — now includes 3 new Phase 10 checks (context A vs B, restart-frozen context) |
+| `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed**, unchanged regression |
+| Fresh DB migration | **14 migrations** from zero (+1: additive `generation_policies.context_snapshot`) |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 278 unit / 117 DB / 79-of-79 live E2E / 13-of-13 visual E2E.
+Baseline before this phase: 290 unit / 121 DB / 79-of-79 live E2E / 14-of-14 visual E2E.
 
 ---
 
-## Standalone media generation platform (new in this phase — Phase 9)
+## Context / Second Brain foundation (new in this phase — Phase 10)
+
+**One canonical ContextAssembly seam**, closing the gap where `user_profile`,
+`context_vault`, and `style_profiles` already held useful data but were read
+only by a disconnected legacy prompt builder — never by the real
+`Story → Opportunity → GenerationPolicy → GenerationJob` pipeline:
+
+```
+user_profile / context_vault / style_profiles
+        ↓ ContextStorageReader (owner-scoped, favorite-filtered)
+assembleContext(ownerId) → ContextAssembly { sources, renderedBlock, contextHash, sourceRefs }
+        ↓ (resolved ONCE, before the policy is built — never re-read at execution time)
+resolveGenerationPolicy → PolicySpec.contextHash → content-addressed GenerationPolicy
+        ↓
+assembleEffectiveRequest → context folded into systemPrompt (tagged: DATA, not instructions)
+        ↓
+GenerationJob.policySnapshot — FROZEN. The worker reads only this.
+```
+
+- **Canonical source decisions**: `user_profile`'s stable fields (brand
+  voice, niche, audience, content goals, writing notes, messaging pillars)
+  are the profile source. `memoryJson`/`brandingJson` on the same table are
+  **deliberately excluded** — they're populated by an existing legacy
+  learning flow this phase did not audit, and folding unaudited learned
+  state into a "stable profile" source would conflate two different things.
+  `context_vault` favorites are the reference source; `style_profiles`
+  favorites are the style source — read as durable rows, never newly
+  analyzed (style *learning* is Phase 11's job). Both tables reuse the
+  existing `isFavorite` flag as the deterministic inclusion signal rather
+  than adding a near-duplicate "active" column.
+- **Voice/Template unified, not duplicated**: their existing hashing
+  (`voiceHash`/`templateHash` on the policy spec) is untouched; this phase
+  only adds their identity to one unified provenance list alongside the
+  context sources, so "what shaped this policy" reads as one list.
+- **Deterministic, bounded, no embeddings**: fixed source order (profile →
+  references → style), a 500-char per-source cap, a 2000-char total budget
+  that drops later sources whole (never interleaved truncation) — no
+  ranking, no relevance scoring, no vector database.
+- **Snapshot boundary — the critical part**: context is resolved once,
+  inside `createGenerationJob`, before the job is even queued. The worker
+  (`runGenerationJob`) never re-resolves it — it reads only the frozen
+  `policySnapshot`. A context mutation after a job is queued, even across a
+  full app restart, provably never reaches that job's execution — proven at
+  the real-Postgres tier and live, through real HTTP + a real `SIGKILL` +
+  restart.
+- **Security unchanged**: the rendered context block always opens with the
+  same "DATA, not instructions" boundary `policy.ts` already used for
+  research evidence. Retrieved/stored content never becomes an instruction
+  by being included.
+- **Provenance without leaking bodies**: one additive column,
+  `generation_policies.context_snapshot`, stores only
+  `{ contextHash, sourceRefs: [{id, type, provenance}] }` — never raw
+  content. The frozen `policySnapshot` remains the actual reproducibility
+  boundary.
+- **API**: `GET /context` (owner-scoped preview of what the next generation
+  would assemble). Sources are still authored through their existing
+  surfaces; this is consumption, not a duplicate authoring island.
+
+Full detail: `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 10.
+
+---
+
+## Standalone media generation platform (Phase 9)
 
 **Media generation is a durable product capability, independent of Artifact
 — not an input to publishing.** This was mostly already true (Phase 3's
@@ -420,7 +482,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -450,9 +512,12 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   above.
 - **Visual Artifact HTTP authoring** (Phase 8): image Artifacts are reachable
   through a real HTTP request — as detailed above.
-- **Standalone media generation platform** (this phase, Phase 9): generation
-  is a durable capability independent of Artifact, with a generalized
-  provider seam and one real image provider — as detailed above.
+- **Standalone media generation platform** (Phase 9): generation is a
+  durable capability independent of Artifact, with a generalized provider
+  seam and one real image provider — as detailed above.
+- **Context / Second Brain foundation** (this phase, Phase 10): one
+  canonical ContextAssembly seam feeding real generation, with a frozen
+  snapshot boundary — as detailed above.
 
 ## Architecturally ready (not built)
 
@@ -460,13 +525,19 @@ Carousel/multi-image publishing (contract already N-capable; X's adapter
 deliberately does not declare support), video/audio modality (capability
 type exists, no provider registers it), additional non-X/non-LinkedIn
 channel adapters (Threads, Instagram), URL/web ingestion expansion,
-`edit_image` production, LinkedIn media — each is a registration/
-implementation against an existing seam, not a new pipeline.
+`edit_image` production, LinkedIn media, real style analysis (Phase 11) and
+feedback/analytics learning (P-8) against the now-real ContextAssembly seam
+— each is a registration/implementation against an existing seam, not a new
+pipeline.
 
 ## Deferred (deliberately, unchanged)
 
-- Voice **style analysis** of the user's real posts; all authoring/editing **UI**.
-- Second Brain / Context Vault.
+- Voice **style analysis** of the user's real posts (Phase 10 only reads
+  pre-existing style rows; analyzing new ones is Phase 11); all
+  authoring/editing **UI**.
+- Second Brain's full learning/personalization loop — the context
+  *foundation* is implemented (Phase 10); feedback/analytics-driven learning
+  is not.
 - Threads / Instagram and other non-X/non-LinkedIn publishing; LinkedIn
   media/articles/video/comments beyond the single text-post format.
 - Analytics metric mappers.
@@ -481,6 +552,17 @@ implementation against an existing seam, not a new pipeline.
 
 ## Live E2E red arrows observed (real app, real Postgres, real pg-boss)
 
+- **Context assembly** (new, Phase 10 — `test:e2e:live`, 82/82): a real
+  `context_vault` row (context A) is inserted, an Opportunity generates
+  through the real HTTP `/api/generation-jobs` route, and the frozen
+  `policySnapshot` genuinely contains context A's text. A second row
+  (context B) is then inserted and a second generation on the SAME
+  Opportunity picks it up — while re-fetching the FIRST job over the same
+  HTTP API proves its snapshot is byte-identical to before, untouched by the
+  later mutation. A third scenario queues a job with context frozen, inserts
+  a new context row, `SIGKILL`s and restarts the real application, and
+  proves the job executes against the ORIGINAL frozen context — the new row
+  never appears in its snapshot.
 - **Visual delivery** (Phase 7, proven at the real-Postgres tier): image
   Artifact → media upload → media id → X post → Result, exact revision
   pinned even after a newer VisualAsset revision exists; transient
@@ -584,10 +666,11 @@ implementation against an existing seam, not a new pipeline.
 
 ## Deferred (deliberately, unchanged)
 
-Second Brain / Context Vault, voice style analysis, all authoring UI, Threads /
-Instagram publishing, LinkedIn media/articles/video/comments, billing,
-collaboration, notifications, analytics metric mappers, full iCalendar/RRULE
-recurrence.
+Second Brain's full learning/personalization loop (the context *foundation*
+is implemented as of Phase 10 — see above), voice style analysis of real
+posts, all authoring UI, Threads / Instagram publishing, LinkedIn media/
+articles/video/comments, billing, collaboration, notifications, analytics
+metric mappers, full iCalendar/RRULE recurrence.
 
 ## Next boundary
 
