@@ -46,8 +46,24 @@ import {
   ArtifactStateError,
 } from "./artifact";
 import { publicationIdempotencyKey } from "./scheduling";
-import { classifyLinkedInFailure, classifyXFailure, createLinkedInChannelAdapter, createXChannelAdapter } from "./adapters";
-import { runPublication, type PublicationDeps } from "./publication";
+import {
+  channelSupportsFormat,
+  classifyLinkedInFailure,
+  classifyXFailure,
+  createLinkedInChannelAdapter,
+  createXChannelAdapter,
+  registerBuiltinChannelAdapters,
+} from "./adapters";
+import {
+  MediaResolutionError,
+  resolvePublicationMedia,
+  runPublication,
+  type PublicationDeps,
+} from "./publication";
+
+// The adapter registry is the single authority for (format, channel) validity,
+// so the domain tests must run with the built-in adapters registered.
+registerBuiltinChannelAdapters();
 
 // ── builders ──────────────────────────────────────────────────────────────────
 let seq = 0;
@@ -230,8 +246,12 @@ describe("opportunity boundary", () => {
 
   it("rejects a nonsense format × channel pair", async () => {
     assert.equal(formatChannelError("x_post", "x"), null);
-    assert.equal(formatChannelError("video_script", "video_factory"), null, "unknown formats are allowed");
+    // The registered adapter is the single source of truth; a pair no adapter
+    // supports is rejected, not silently allowed.
+    assert.match(String(formatChannelError("video_script", "video_factory")), /no registered adapter/);
     assert.match(String(formatChannelError("x_post", "linkedin")), /cannot target channel/);
+    assert.equal(formatChannelError("image", "x"), null, "X now supports the single-image format");
+    assert.match(String(formatChannelError("carousel", "x")), /cannot target channel/, "carousel delivery is deferred");
 
     const store = memoryStore();
     await assert.rejects(
@@ -489,7 +509,24 @@ describe("x channel adapter", () => {
     const adapter = createXChannelAdapter();
     assert.equal(adapter.supports("x_post"), true);
     assert.equal(adapter.supports("x_thread"), true);
+    assert.equal(adapter.supports("image"), true, "Phase 7: single-image delivery");
+    assert.equal(adapter.supports("thumbnail"), true, "thumbnail shares the single-image mechanic");
+    assert.equal(adapter.supports("carousel"), false, "multi-media delivery is deferred");
     assert.equal(adapter.supports("linkedin_post"), false);
+  });
+
+  it("refuses a visual format with no resolved media without invoking the transport", async () => {
+    const adapter = createXChannelAdapter();
+    const outcome = await adapter.publish({
+      format: "image",
+      channel: "x",
+      payload: { visualAssetId: 1 },
+      correlationId: "c",
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.equal(outcome.errorClass, "permanent");
+    assert.match(String(outcome.errorMessage), /no resolved visual media/);
   });
 
   it("refuses an unsupported format without invoking the transport", async () => {
@@ -706,6 +743,91 @@ describe("publication boundary", () => {
     assert.equal(result.status, "failed");
     assert.equal(result.failureClass, "policy_human");
     assert.equal(results[0].outcome, "failed");
+  });
+
+  it("resolves the pinned media from the artifact payload and passes it to the adapter", async () => {
+    const { record, deps } = publicationStore({});
+    deps.content.getArtifact = async () =>
+      ({ id: 1, userId: 1, readiness: "approved", format: "image", channel: "x", payload: { visualAssetId: 42, caption: "hero" } }) as unknown as Artifact;
+    deps.content.getVisualAsset = async (id) =>
+      ({ id, userId: 1, status: "ready", mime: "image/png", storageKey: `local:${"a".repeat(64)}`, role: "hero", altText: null }) as never;
+    deps.storage = {
+      get: async () => Buffer.from("png-bytes"),
+      put: async () => ({ storageKey: `local:${"a".repeat(64)}`, contentHash: "a".repeat(64), byteSize: 9 }),
+      archive: async () => {},
+    };
+    let seen: { media?: Array<{ visualAssetId: number; mime: string; bytes: Buffer }> } | undefined;
+    deps.adapterFor = () => ({
+      channel: "x",
+      supports: () => true,
+      publish: async (request) => {
+        seen = request;
+        return { ok: true, providerCalled: true, externalId: "t1", externalUrl: null, publishedAt: new Date() };
+      },
+      reconcile: async () => null,
+    });
+
+    const result = await runPublication(record.id, deps);
+    assert.equal(result.status, "published");
+    assert.equal(seen?.media?.length, 1);
+    assert.equal(seen?.media?.[0].visualAssetId, 42, "the exact revision is pinned");
+    assert.equal(seen?.media?.[0].mime, "image/png");
+    assert.equal(seen?.media?.[0].bytes.toString(), "png-bytes");
+  });
+
+  it("fails permanently before the transport when a referenced asset is missing", async () => {
+    const { record, results, deps } = publicationStore({});
+    deps.content.getArtifact = async () =>
+      ({ id: 1, userId: 1, readiness: "approved", format: "image", channel: "x", payload: { visualAssetId: 999 } }) as unknown as Artifact;
+    deps.content.getVisualAsset = async () => undefined;
+    deps.storage = { get: async () => Buffer.from(""), put: async () => ({ storageKey: "x", contentHash: "x", byteSize: 0 }), archive: async () => {} };
+    let invoked = false;
+    deps.adapterFor = () => ({
+      channel: "x",
+      supports: () => true,
+      publish: async () => {
+        invoked = true;
+        return { ok: true, providerCalled: true, externalId: null, externalUrl: null, publishedAt: null };
+      },
+      reconcile: async () => null,
+    });
+
+    const result = await runPublication(record.id, deps);
+    assert.equal(result.status, "failed");
+    assert.equal(result.failureClass, "permanent");
+    assert.equal(invoked, false, "the transport is never called when media cannot be resolved");
+    assert.equal(results[0].outcome, "failed");
+  });
+
+  it("rejects a media reference owned by another user (owner isolation)", async () => {
+    const { record, deps } = publicationStore({});
+    deps.content.getArtifact = async () =>
+      ({ id: 1, userId: 1, readiness: "approved", format: "image", channel: "x", payload: { visualAssetId: 42 } }) as unknown as Artifact;
+    deps.content.getVisualAsset = async (id) =>
+      ({ id, userId: 2, status: "ready", mime: "image/png", storageKey: `local:${"a".repeat(64)}` }) as never;
+    deps.storage = { get: async () => Buffer.from("x"), put: async () => ({ storageKey: "x", contentHash: "x", byteSize: 1 }), archive: async () => {} };
+
+    await assert.rejects(
+      () => resolvePublicationMedia({ id: 1, userId: 1, format: "image", payload: { visualAssetId: 42 } } as unknown as Artifact, deps),
+      MediaResolutionError,
+    );
+  });
+
+  it("pins the exact revision named by the payload, never the latest", async () => {
+    const requested: number[] = [];
+    const deps = publicationStore({}).deps;
+    deps.content.getVisualAsset = async (id) => {
+      requested.push(id);
+      return { id, userId: 1, status: "ready", mime: "image/png", storageKey: `local:${"a".repeat(64)}`, role: null, altText: null } as never;
+    };
+    deps.storage = { get: async () => Buffer.from("bytes"), put: async () => ({ storageKey: "x", contentHash: "x", byteSize: 1 }), archive: async () => {} };
+
+    const media = await resolvePublicationMedia(
+      { id: 1, userId: 1, format: "image", payload: { visualAssetId: 7 } } as unknown as Artifact,
+      deps,
+    );
+    assert.deepEqual(requested, [7], "only the payload's exact revision is fetched");
+    assert.equal(media[0].visualAssetId, 7);
   });
 });
 

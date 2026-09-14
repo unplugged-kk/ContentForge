@@ -22,6 +22,9 @@
  *                                        /x/tweets whose body.text contains matchSubstring to 202
  *   POST /control/x-resolve-write-action {id,status,tweetId?,message?} resolves a pending write
  *   GET /x/write-actions/:id             xQuick write-action status poll/reconcile endpoint
+ *   POST /control/x-media-mode           {mode:"fail",matchSubstring} arms the next POST /x/media
+ *                                        whose alt_text contains matchSubstring to a transient 503
+ *   POST /x/media                        xQuick media-upload endpoint (Phase 7 image delivery)
  *   POST /control/linkedin-mode          {mode:"network-fail",matchSubstring} arms the next POST
  *                                        /rest/posts whose body.commentary contains matchSubstring
  *                                        to drop the connection before responding (ambiguous outcome)
@@ -121,6 +124,15 @@ let xPendingMarker = null;
 let xPendingSeq = 0;
 /** writeActionId -> { status: "pending" | "success" | "failed", tweetId?, url?, message? } */
 const xWriteActions = new Map();
+/**
+ * Content-scoped arming for the Phase 7 media-upload boundary (`POST
+ * /x/media`), same one-shot-per-matching-request pattern as `xWriteMode`.
+ * "fail" makes the next upload whose alt_text contains `xMediaFailMarker`
+ * return a transient 503 instead of a media id.
+ */
+let xMediaMode = "immediate";
+let xMediaFailMarker = null;
+let xMediaSeq = 0;
 
 /** Same content-scoped arming pattern as xWriteMode, for the LinkedIn Posts API double. */
 let linkedinMode = "immediate";
@@ -284,6 +296,29 @@ async function handlePost(req, res, url) {
     tweetCounter += 1;
     const id = `tweet-${tweetCounter}`;
     return send(200, { id, tweetId: id, url: `https://x.com/cf_e2e/status/${id}`, username: "cf_e2e", status: "ok" });
+  }
+
+  // Arms the NEXT `POST /x/media` whose alt_text contains matchSubstring to a
+  // transient 503 — the media-upload transport's failure boundary, distinct
+  // from `/control/x-write-mode` (post creation).
+  if (url.pathname === "/control/x-media-mode") {
+    const body = await readBody(req);
+    xMediaMode = body.mode === "fail" ? "fail" : "immediate";
+    xMediaFailMarker = xMediaMode === "fail" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: xMediaMode, matchSubstring: xMediaFailMarker });
+  }
+
+  if (url.pathname === "/x/media") {
+    const body = await readBody(req);
+    const matchesArm =
+      xMediaMode === "fail" && xMediaFailMarker && typeof body.alt_text === "string" && body.alt_text.includes(xMediaFailMarker);
+    if (matchesArm) {
+      xMediaMode = "immediate"; // consumed only by the matching request
+      xMediaFailMarker = null;
+      return send(503, { message: "503 upstream media store unavailable" });
+    }
+    xMediaSeq += 1;
+    return send(200, { mediaId: `media-${RUN}-${xMediaSeq}` });
   }
 
   // Arms the NEXT `POST /rest/posts` whose commentary contains matchSubstring

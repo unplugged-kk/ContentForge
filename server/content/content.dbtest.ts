@@ -42,6 +42,11 @@ import { createSchedule, dispatchDueOccurrences } from "./scheduling";
 import { runPublication } from "./publication";
 import { registerBuiltinChannelAdapters, getChannelAdapter } from "./adapters";
 
+// The adapter registry is the single authority for (format, channel)
+// validity now, so opportunity/schedule creation in this suite needs it
+// registered before any test runs.
+registerBuiltinChannelAdapters();
+
 const CONNECTION = process.env.TEST_DATABASE_URL;
 const describeDb = CONNECTION ? describe : describe.skip;
 const RUN = `ct${Date.now().toString(36)}`;

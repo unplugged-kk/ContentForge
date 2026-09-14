@@ -91,6 +91,26 @@ describe("payload schema registry", () => {
     assert.equal(parsed.visualAssetId, 7);
   });
 
+  it("reports the exact ordered media references a payload names", () => {
+    assert.deepEqual(
+      payloadSchemaRegistry
+        .mediaRefs("image", { visualAssetId: 7, role: "hero", altText: "a hero" })
+        .map((m) => ({ visualAssetId: m.visualAssetId, position: m.position })),
+      [{ visualAssetId: 7, position: 0 }],
+    );
+    assert.deepEqual(
+      payloadSchemaRegistry
+        .mediaRefs("carousel", { slides: [{ visualAssetId: 3 }, { visualAssetId: 5, role: "slide-2" }] })
+        .map((m) => m.visualAssetId),
+      [3, 5],
+      "slide order is preserved",
+    );
+    assert.deepEqual(payloadSchemaRegistry.mediaRefs("thumbnail", { visualAssetId: 9 }), [
+      { visualAssetId: 9, role: null, position: 0, altText: null },
+    ]);
+    assert.deepEqual(payloadSchemaRegistry.mediaRefs("x_post", { text: "hi" }), [], "text formats carry no media");
+  });
+
   it("validates an ordered carousel payload and rejects an empty one", () => {
     const parsed = payloadSchemaRegistry.validate<{ slides: unknown[] }>("carousel", {
       slides: [{ visualAssetId: 1 }, { visualAssetId: 2 }],

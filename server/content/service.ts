@@ -81,6 +81,7 @@ export const generationDeps: GenerationDeps = {
 
 export const publicationDeps: PublicationDeps = {
   content: contentStorage,
+  storage: visualAssetStorage,
 };
 
 /** Chat-to-post: conversational input becomes a normal Story → Opportunity → job. */

@@ -42,6 +42,7 @@ import {
 } from "./generation";
 import { resolveGenerationPolicy, PolicyInputError } from "./policy";
 import { handleChatRequest } from "./chat";
+import { registerBuiltinChannelAdapters } from "./adapters";
 
 const CONNECTION = process.env.TEST_DATABASE_URL;
 const describeDb = CONNECTION ? describe : describe.skip;
@@ -166,6 +167,7 @@ describeDb("creation intelligence (db)", () => {
     if (!CONNECTION) return;
     pool = new pg.Pool({ connectionString: CONNECTION });
     db = drizzle(pool, { schema });
+    registerBuiltinChannelAdapters();
   });
 
   after(async () => {

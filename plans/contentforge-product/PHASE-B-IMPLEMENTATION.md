@@ -156,6 +156,190 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 7 — visual delivery: single-image publication to X (done, image/thumbnail; carousel deferred)
+
+Extends the existing `Artifact → Schedule → Occurrence → Publication →
+ChannelAdapter → Result` seam so a pinned Visual Intelligence Asset actually
+reaches a channel, instead of stopping at Artifact approval. No new visual
+subsystem, no new table, no migration.
+
+```
+VisualGeneration → VisualAsset (immutable revision)
+        ↓ (payload.visualAssetId — a REFERENCE, never bytes)
+image/thumbnail Artifact → approval → Schedule → Occurrence
+        ↓
+Publication  ──resolvePublicationMedia()──▶  visual_asset_refs → VisualAsset
+        │         (core layer, never the adapter)         → AssetStoragePort.get()
+        ↓
+PublishRequest.media: PublishMedia[]   (ordered, N-capable, N=1 implemented)
+        ↓
+X adapter: uploadMediaToX(bytes) → media id → postContentToX([caption], {mediaIds}) → Result
+```
+
+**Media-carrying publication contract** — `PublishRequest.media` extends the
+existing generic contract rather than a second media abstraction
+(`server/content/adapters.ts`):
+
+```ts
+interface PublishMedia {
+  visualAssetId: number;   // the EXACT pinned VisualAsset revision, never "latest"
+  mime: string;
+  role: string | null;
+  position: number;
+  altText: string | null;
+  bytes: Buffer;           // resolved bytes, in-memory only — never queued/persisted
+}
+```
+
+**Resolution path** (`resolvePublicationMedia` in `server/content/publication.ts`,
+runs BEFORE the adapter is ever invoked):
+`Artifact.payload → payloadSchemaRegistry.mediaRefs(format, payload)` (a new,
+format-declared, per-schema function — `image`/`carousel`/`thumbnail` each
+declare their own ordered `PayloadMediaRef[]`; text formats declare none) →
+`content.getVisualAsset(ref.visualAssetId)` → owner check (`asset.userId ===
+artifact.userId`) → `status === "ready"` check → `AssetStoragePort.get(asset.storageKey)`.
+The adapter never reads `visual_assets`, `visual_asset_refs`, or an Artifact
+row — it only receives the already-resolved `PublishMedia[]`.
+
+**Exact revision pinning**: the payload names an asset **id**, not a query.
+`resolvePublicationMedia` fetches that exact id every time; there is no
+"latest asset for this artifact" lookup anywhere in the resolution path. A
+later `createVisualAssetRevision` call creates a **new row** (`supersedes_id`
+chain, immutable via the existing trigger) — the Artifact's `visual_asset_refs`
+row still points at the original id, so publication keeps resolving the
+original bytes. Proven in `server/content/visualPublication.dbtest.ts`
+("golden path" test: a newer revision is created between Occurrence
+materialization and `runPublication`, and the published Result/refs still
+name the original asset).
+
+**Media resolution failure semantics**: a `MediaResolutionError` carries a
+`failureClass`. Missing asset / owner mismatch / not-ready → `permanent`
+(terminal, `recordTerminal`, never touches the transport). A storage-layer
+error classified transient (not "unavailable/not found/archived/unsafe/invalid")
+→ releases the lease back to `queued` and throws `JobFailure.transient` for a
+normal pg-boss retry — **the same mechanism a classified adapter failure
+already used**, not a new retry path.
+
+**X adapter** (`server/content/adapters.ts` `createXChannelAdapter`): `image`
+and `thumbnail` added to `supported` — both are single-image formats whose
+existing payload schema matches the transport 1:1. `carousel` is deliberately
+**not** added (multi-media upload is out of scope this phase).
+`publishWithMedia()` implements the two-step transport with different failure
+semantics per step:
+- **Media upload fails** (`uploadMediaToX` throws before any post exists) →
+  `providerCalled: false`, classified `transient`/`permanent` exactly like
+  any other pre-transport failure. Never `unknown` — nothing was created on
+  X's side yet.
+- **Post creation is ambiguous after a successful upload**
+  (`XWriteActionPendingError`) → identical `unknown` contract as a text post:
+  `providerCalled: true`, `ok: false`, `metrics.writeActionId` — reconciled by
+  the **existing** `reconcile()`/`reconcileUnknownPublications` machinery,
+  unchanged. No second reconciliation system for media.
+
+**X media transport** (`server/social/x.ts`): `uploadMediaToX(bytes, mime,
+altText)` posts base64 to a configurable `XQUIK_MEDIA_ENDPOINT` (default
+`/x/media`, same override convention as `XQUIK_POST_ENDPOINT` /
+`XQUIK_WRITE_ACTION_ENDPOINT`), extracts a provider media id via the same
+configurable-path convention as the post id (`XQUIK_MEDIA_ID_PATH`), and
+`postContentToX` gained an optional `{ mediaIds }` that attaches to the FIRST
+unit only (a single-image post never chains). **Media-upload idempotency**:
+xQuick's contract exposes no client-supplied idempotency key for this
+endpoint — a retried upload after a transient failure may create a second,
+orphaned media object with no post attached to it (harmless: X never
+publishes an unattached upload). This is documented, not invented as a
+stronger guarantee. `Publication.idempotencyKey` is never derived from a
+media id — the publication's own idempotency identity is untouched by this
+phase. The final `externalId` recorded on a Publication is always the POST
+id (`tweet-…`), never a media id — proven explicitly in the ambiguity test.
+
+**Compatibility source of truth (drift fixed)**: `KNOWN_FORMAT_CHANNELS` — a
+second, hand-maintained allowlist in `opportunity.ts` that could (and had)
+drifted from the adapter's real capability — is **deleted**.
+`formatChannelError` now calls `channelSupportsFormat(channel, format)`
+(`server/content/adapters.ts`), which is a thin read of the registered
+adapter's own `supports()`. There is exactly one authority. `createSchedule`
+(`server/content/scheduling.ts`) calls the same function **before** creating
+a Schedule/Occurrence/Publication, so an incompatible `(format, channel)`
+pair (e.g. `carousel` on `x` today) is rejected deterministically at
+Opportunity-creation time and again at Schedule-creation time — never
+reaching an ambiguous Publication or a futile retry. The Artifact itself is
+untouched and remains reusable for a channel that does support it.
+
+**Carousel**: intentionally deferred. The contract is already N-capable
+(`PublishRequest.media: PublishMedia[]`, `mediaRefs()` already returns an
+ordered array per slide for `carousel`'s payload schema) — implementing
+multi-media X delivery later needs no data-model or API change, only a new
+transport loop in the adapter. `channelSupportsFormat("x", "carousel")` is
+`false` today (X's adapter `supported` set deliberately omits it), so this is
+enforced, not merely documented.
+
+**Thumbnail**: reuses the exact same `publishWithMedia` X mechanism as
+`image` — no thumbnail-specific adapter code exists.
+
+**Changed files** (no schema/migration changes — everything needed already
+existed in `visual_assets` / `visual_asset_refs` / Artifact payload /
+`AssetStoragePort`):
+
+| File | Change |
+|---|---|
+| `server/content/adapters.ts` | `PublishMedia`; `PublishRequest.media`; `createXChannelAdapter` supports `image`/`thumbnail`, `publishWithMedia()` (upload → post, classified-vs-unknown split) |
+| `server/social/x.ts` | `uploadMediaToX`; `XQUIK_MEDIA_ENDPOINT` (configurable, default `/x/media`); `postContentToX` gains `{ mediaIds }` |
+| `server/content/publication.ts` | `resolvePublicationMedia`, `MediaResolutionError`; `runPublication` resolves media before invoking the adapter |
+| `server/artifacts/payloadSchemas.ts` | `PayloadMediaRef`; `PayloadSchema.mediaRefs()`; `image`/`carousel`/`thumbnail` each declare their ordered references |
+| `server/content/opportunity.ts` | `KNOWN_FORMAT_CHANNELS` deleted; `formatChannelError` derives from `channelSupportsFormat` (the adapter registry) |
+| `server/content/scheduling.ts` | `createSchedule` rejects an undistributable `(format, channel)` pair before creating any Schedule row |
+| `server/content/service.ts` | `publicationDeps.storage = visualAssetStorage` — the real `AssetStoragePort` wired into publication |
+| `server/content/content.test.ts`, `.../reconcile.test.ts` (existing) | unit coverage: media resolution, exact-revision pinning, owner isolation, adapter capability set, compatibility-authority tests |
+| `server/content/content.dbtest.ts`, `creation.dbtest.ts`, `phase15.dbtest.ts`, `recurrence.dbtest.ts`, `recurrence.test.ts`, `chat.test.ts` | register the built-in adapters in `before()`/module scope — required now that format×channel validity is adapter-derived, not a static table |
+| `server/content/visualPublication.dbtest.ts` | new — real Postgres + real X adapter + a local `http` double at the xQuick media/post/write-action boundary: golden path with exact-revision-survives-a-newer-revision proof, transient media-upload retry, ambiguous-post→reconcile→published with the real post externalId, recurring image Schedule (2 slots, same pinned Asset), concurrent-duplicate-delivery idempotency (distinct owners) |
+| `e2e/fixture/rss-fixture.mjs` | `POST /x/media`, `POST /control/x-media-mode` — doubles the xQuick media-upload boundary, same content-scoped one-shot-arming convention as `/control/x-write-mode` |
+
+**Verified in Phase 7**: tsc 0 · unit 272/0 (59 suites, unchanged count —
+Phase 7 coverage added to existing suites) · DB 113/0/0 skipped (15 suites,
++1 file, +5 tests) · live E2E 79/79, 0 failed (regression check only — see
+below) · fresh DB migration unchanged (13 migrations, no new one needed,
+confirming the "zero migrations" prediction).
+
+**Live E2E scope, honestly stated**: the existing `script/e2e-live.mjs` has
+**no HTTP-level path to create an image-format Artifact** — Artifacts are
+created either by a generation job (AI-model text completion) or, for
+visuals, directly through the domain layer (`createArtifact` +
+`insertVisualAssetRef`), which is how every visual DB test builds one. This
+is a **pre-existing gap in the authoring surface** (Phase 3 documented the
+same boundary: "the visual E2E stops at approval"), not something this phase
+introduced or was asked to fix — Phase 7's mandate is the adapter/publication
+seam, not an authoring endpoint for image Artifacts. The fixture's
+media-upload boundary (`POST /x/media`, `/control/x-media-mode`) is real,
+live infrastructure ready for that live-E2E phase once an HTTP path to
+create an image Artifact exists; until then, the golden
+path/retry/ambiguity/reconciliation/recurrence/idempotency proofs for image
+publication live at the **real-Postgres** tier
+(`visualPublication.dbtest.ts`), which is the deepest tier this phase's
+scope actually required — exactly the same tradeoff Phase 6 made explicitly
+for LinkedIn recurrence ("proven at the real-Postgres layer... rather than
+repeating every already-proven recurrence scenario a second time"). The
+79/79 live E2E run above is a **regression check**: it proves Phase 7's
+changes (adapter registry as compatibility authority, `formatChannelError`
+rewrite, `resolvePublicationMedia` inserted into `runPublication`) broke
+nothing in the five already-live-E2E-proven phases.
+
+**Status labels**:
+- Single-image delivery to X (upload → post → Result, retry, ambiguity,
+  reconciliation, exact-revision pinning, recurrence, idempotency): **IMPLEMENTED**,
+  proven with real PostgreSQL + real adapter code + a genuine external-boundary
+  double.
+- Thumbnail on X: **IMPLEMENTED** (identical mechanism to image).
+- Compatibility source-of-truth (single authority, no drift): **IMPLEMENTED**.
+- Carousel / multi-image delivery: **ARCHITECTURALLY READY** (N-capable
+  contract, `channelSupportsFormat` correctly returns `false`) but
+  **DEFERRED** — not implemented.
+- Real image-generation vendor: **DEFERRED**, unchanged from Phase 3 (still
+  the deterministic fixture provider).
+- Live E2E for the image golden path specifically: **DEFERRED** pending an
+  HTTP authoring path for image Artifacts (pre-existing gap); the real-Postgres
+  tier carries this proof instead.
+- Threads / Instagram / LinkedIn media: **not attempted**, out of scope.
+
 ## Phase 6 — first non-X channel adapter: LinkedIn text publishing (done)
 
 Proves the `Artifact → Schedule → Occurrence → Publication → ChannelAdapter →

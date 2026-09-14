@@ -10,21 +10,105 @@
  *     thread cannot be un-sent).
  */
 
-import type { Publication } from "@shared/schema";
+import type { Artifact, Publication } from "@shared/schema";
 import { JobFailure } from "../jobs/failures";
-import { getChannelAdapter, type ChannelAdapter, type PublishOutcome } from "./adapters";
+import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
+import { getChannelAdapter, type ChannelAdapter, type PublishMedia, type PublishOutcome } from "./adapters";
+import type { AssetStoragePort } from "./visual";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
 export const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 
 export interface PublicationDeps {
   content: ContentStoragePort;
+  /**
+   * Resolves pinned visual media bytes. Optional at the type level so
+   * text-only callers/tests need not supply it; a format that carries media
+   * fails cleanly (never silently) when it is absent.
+   */
+  storage?: AssetStoragePort;
   /** Overridable for tests; defaults to the channel adapter registry. */
   adapterFor?: (channel: string) => ChannelAdapter;
   now?: () => Date;
   leaseMs?: number;
   /** Identifies this worker for the lease. */
   owner?: string;
+}
+
+/** A media reference could not be resolved to a publishable, pinned attachment. */
+export class MediaResolutionError extends Error {
+  readonly failureClass: "transient" | "permanent" | "policy_human";
+  constructor(failureClass: "transient" | "permanent" | "policy_human", message: string) {
+    super(message);
+    this.name = "MediaResolutionError";
+    this.failureClass = failureClass;
+  }
+}
+
+/**
+ * Resolve an Artifact's pinned visual references to concrete, ordered media.
+ *
+ * The payload names the exact immutable revision (`mediaRefs`); this resolves
+ * each id against `visual_assets` (never "latest") and loads its bytes through
+ * the `AssetStoragePort`. The core resolves; the adapter only consumes. Owner
+ * isolation is enforced here, so a Publication can never publish another
+ * owner's asset.
+ */
+export async function resolvePublicationMedia(
+  artifact: Pick<Artifact, "id" | "userId" | "format" | "payload">,
+  deps: PublicationDeps,
+): Promise<PublishMedia[]> {
+  const refs = payloadSchemaRegistry.mediaRefs(artifact.format, artifact.payload);
+  if (refs.length === 0) return [];
+  if (!deps.storage) {
+    throw new MediaResolutionError(
+      "permanent",
+      `media storage is not configured for format "${artifact.format}"`,
+    );
+  }
+
+  const ordered = [...refs].sort((a, b) => a.position - b.position);
+  const media: PublishMedia[] = [];
+  for (const ref of ordered) {
+    const asset = await deps.content.getVisualAsset(ref.visualAssetId);
+    if (!asset) {
+      throw new MediaResolutionError(
+        "permanent",
+        `visual asset ${ref.visualAssetId} referenced by artifact ${artifact.id} was not found`,
+      );
+    }
+    if (asset.userId !== null && asset.userId !== artifact.userId) {
+      throw new MediaResolutionError(
+        "permanent",
+        `visual asset ${asset.id} does not belong to the artifact owner`,
+      );
+    }
+    if (asset.status !== "ready") {
+      throw new MediaResolutionError("permanent", `visual asset ${asset.id} is "${asset.status}", not ready`);
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = await deps.storage.get(asset.storageKey);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const permanent = /unavailable|not found|archived|unsafe|invalid/i.test(message);
+      throw new MediaResolutionError(
+        permanent ? "permanent" : "transient",
+        `could not load visual asset ${asset.id}: ${message}`,
+      );
+    }
+
+    media.push({
+      visualAssetId: asset.id,
+      mime: asset.mime,
+      role: ref.role ?? asset.role ?? null,
+      position: ref.position,
+      altText: ref.altText ?? asset.altText ?? null,
+      bytes,
+    });
+  }
+  return media;
 }
 
 export type PublicationRunStatus = "published" | "failed" | "retry" | "skipped";
@@ -134,12 +218,38 @@ export async function runPublication(
     });
   }
 
+  // Resolve the exact pinned media (if this format carries any) BEFORE invoking
+  // the transport. A resolution failure is a classified failure, never an
+  // ambiguous Publication, and the transport is never called.
+  let media: PublishMedia[];
+  try {
+    media = await resolvePublicationMedia(artifact, deps);
+  } catch (error) {
+    if (error instanceof MediaResolutionError) {
+      if (error.failureClass === "transient") {
+        await deps.content.updatePublication(leased.id, {
+          state: "queued",
+          providerCalled: false,
+          lastError: error.message,
+          releaseLease: true,
+        });
+        throw JobFailure.transient(error.message);
+      }
+      return await recordTerminal(leased, deps, {
+        failureClass: error.failureClass,
+        message: error.message,
+      });
+    }
+    throw error;
+  }
+
   const outcome = await adapter.publish({
     format: artifact.format,
     channel: leased.channel,
     payload: artifact.payload as JsonRecord,
     correlationId: leased.correlationId,
     externalId: leased.externalId,
+    media,
   });
 
   if (outcome.ok) {

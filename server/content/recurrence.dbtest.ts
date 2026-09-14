@@ -31,6 +31,7 @@ import { DatabaseStoryStorage } from "../story/storage";
 import { createOpportunityFromStory } from "./opportunity";
 import { approveArtifact, createArtifact, submitArtifactForReview } from "./artifact";
 import { createSchedule, dispatchDueOccurrences, ScheduleInputError } from "./scheduling";
+import { registerBuiltinChannelAdapters } from "./adapters";
 
 const CONNECTION = process.env.TEST_DATABASE_URL;
 const describeDb = CONNECTION ? describe : describe.skip;
@@ -46,6 +47,7 @@ describeDb("recurrence (db)", () => {
     if (!CONNECTION) return;
     pool = new pg.Pool({ connectionString: CONNECTION });
     db = drizzle(pool, { schema });
+    registerBuiltinChannelAdapters();
   });
 
   after(async () => {

@@ -11,7 +11,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Opportunity, Story } from "@shared/schema";
 import { handleChatRequest, ChatInputError, ChatStoryNotFoundError, type ChatDeps } from "./chat";
+import { registerBuiltinChannelAdapters } from "./adapters";
 import type { ContentStoragePort } from "./storage";
+
+// The adapter registry is the single authority for (format, channel) validity.
+registerBuiltinChannelAdapters();
 
 let seq = 0;
 const next = () => ++seq;

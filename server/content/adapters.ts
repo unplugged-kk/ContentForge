@@ -17,6 +17,7 @@ import {
   postContentToX,
   reconcileXQuickWriteAction,
   translateXError,
+  uploadMediaToX,
   XWriteActionPendingError,
 } from "../social/x";
 import {
@@ -28,6 +29,23 @@ import {
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
+/**
+ * One resolved media attachment on a publish request, pinned to an exact
+ * immutable VisualAsset revision. The core resolves the reference and the bytes
+ * (through `AssetStoragePort`); the adapter only consumes them. `bytes` are
+ * in-memory only and never persisted or placed on the queue.
+ */
+export interface PublishMedia {
+  /** Exact VisualAsset revision this media pins — never "latest". */
+  visualAssetId: number;
+  mime: string;
+  role: string | null;
+  position: number;
+  altText: string | null;
+  /** Resolved bytes of that exact revision. */
+  bytes: Buffer;
+}
+
 export interface PublishRequest {
   format: string;
   channel: string;
@@ -35,6 +53,11 @@ export interface PublishRequest {
   correlationId: string;
   /** Present when reconciling a previously attempted publication. */
   externalId?: string | null;
+  /**
+   * Ordered, already-resolved media attachments for formats that carry visuals.
+   * Shaped for N items; a single-image transport implements N=1 today.
+   */
+  media?: PublishMedia[];
   /**
    * Opaque, adapter-specific continuity data captured from an earlier ambiguous
    * `publish()` attempt (e.g. a provider write-action id). Generic at this
@@ -101,7 +124,9 @@ export function classifyXFailure(message: string): AdapterFailureClass {
  * and are reached through `postContentToX`.
  */
 export function createXChannelAdapter(): ChannelAdapter {
-  const supported = new Set(["x_post", "x_thread"]);
+  // image/thumbnail are single-image formats; carousel (multi-media) is
+  // deliberately NOT supported by this transport yet.
+  const supported = new Set(["x_post", "x_thread", "image", "thumbnail"]);
 
   function unitsFor(format: string, payload: JsonRecord): string[] | null {
     if (format === "x_post") {
@@ -120,12 +145,124 @@ export function createXChannelAdapter(): ChannelAdapter {
     return classifyXFailure(message);
   }
 
+  /** The post body that accompanies a single image/thumbnail attachment. */
+  function mediaTextFor(format: string, payload: JsonRecord): string {
+    if (format === "image") {
+      const caption = typeof payload.caption === "string" ? payload.caption : null;
+      const alt = typeof payload.altText === "string" ? payload.altText : null;
+      return (caption ?? alt ?? "").trim();
+    }
+    if (format === "thumbnail") {
+      const alt = typeof payload.altText === "string" ? payload.altText : null;
+      return (alt ?? "").trim();
+    }
+    return "";
+  }
+
+  /**
+   * Single-image delivery: upload the pinned media, then create the post with
+   * its provider media id. The two provider calls have different semantics — a
+   * failed *upload* leaves no post behind, so it is a plain classified failure
+   * (never `unknown`); a failed *post* after a successful upload is ambiguous
+   * and follows the same unknown/reconcile path as a text post. The contract is
+   * N-capable; this transport is deliberately N=1 for now.
+   */
+  async function publishWithMedia(request: PublishRequest): Promise<PublishOutcome> {
+    const media = request.media ?? [];
+    if (media.length === 0) {
+      return {
+        ok: false,
+        providerCalled: false,
+        externalId: null,
+        externalUrl: null,
+        publishedAt: null,
+        errorClass: "permanent",
+        errorMessage: `${request.format} payload references no resolved visual media`,
+      };
+    }
+    if (media.length > 1) {
+      return {
+        ok: false,
+        providerCalled: false,
+        externalId: null,
+        externalUrl: null,
+        publishedAt: null,
+        errorClass: "permanent",
+        errorMessage: `x media transport supports one attachment, got ${media.length}`,
+      };
+    }
+
+    const attachment = media[0];
+    let mediaId: string;
+    try {
+      mediaId = await uploadMediaToX({
+        bytes: attachment.bytes,
+        mime: attachment.mime,
+        altText: attachment.altText,
+      });
+    } catch (error) {
+      // No post exists yet: a failed upload is retryable or terminal, never unknown.
+      const raw = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        providerCalled: false,
+        externalId: null,
+        externalUrl: null,
+        publishedAt: null,
+        errorClass: classify(raw),
+        errorMessage: translateXError(raw),
+      };
+    }
+
+    try {
+      const result = await postContentToX([mediaTextFor(request.format, request.payload)], {
+        mediaIds: [mediaId],
+      });
+      return {
+        ok: true,
+        providerCalled: true,
+        externalId: result.tweetIds.join(","),
+        externalUrl: result.urls[0] ?? null,
+        publishedAt: new Date(),
+        metrics: { unitCount: result.tweetIds.length, mediaCount: 1, username: result.username },
+      };
+    } catch (error) {
+      // Same ambiguity contract as a text post: the media is uploaded, the post
+      // call's outcome is unknown, and the durable handle is the writeActionId.
+      if (error instanceof XWriteActionPendingError) {
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorMessage: error.message,
+          metrics: { writeActionId: error.writeActionId },
+        };
+      }
+      const raw = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        providerCalled: true,
+        externalId: null,
+        externalUrl: null,
+        publishedAt: null,
+        errorClass: classify(raw),
+        errorMessage: translateXError(raw),
+      };
+    }
+  }
+
   return {
     channel: "x",
     supports: (format) => supported.has(format),
 
     async publish(request: PublishRequest): Promise<PublishOutcome> {
       if (!supported.has(request.format)) return unavailable(request.format, "x");
+
+      if (request.format === "image" || request.format === "thumbnail") {
+        return publishWithMedia(request);
+      }
 
       const texts = unitsFor(request.format, request.payload);
       if (!texts) {
@@ -394,6 +531,16 @@ export function getChannelAdapter(channel: string): ChannelAdapter {
   const adapter = registry.get(channel);
   if (!adapter) throw new ChannelAdapterNotRegisteredError(channel);
   return adapter;
+}
+
+/**
+ * The single authoritative `(format, channel)` distributability decision. Both
+ * Opportunity validity and Schedule creation consult this — never a second,
+ * hand-maintained allowlist that can drift from the adapter's real capability.
+ */
+export function channelSupportsFormat(channel: string, format: string): boolean {
+  const adapter = registry.get(channel);
+  return adapter ? adapter.supports(format) : false;
 }
 
 export function listChannelAdapters(): ChannelAdapter[] {

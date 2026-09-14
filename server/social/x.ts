@@ -16,6 +16,8 @@ export function translateXError(body: string): string {
     return "xQuick credentials missing: set XQUIK_API_KEY and XQUIK_ACCOUNT, or connect an xQuick token in Settings.";
   if (body.includes("XQUICK_POST_ID_MISSING"))
     return "xQuick accepted the request but did not return a post id. Check XQUICK_POST_ID_PATH / response mapping.";
+  if (body.includes("XQUIK_MEDIA_ID_MISSING"))
+    return "xQuick accepted the media upload but did not return a media id. Check XQUIK_MEDIA_ID_PATH / response mapping.";
   if (body.includes("usage-capped"))
     return "X API usage cap reached. Try again later.";
   if (body.includes("duplicate-rules") || body.includes("duplicate content"))
@@ -90,6 +92,16 @@ type XQuickPostResponse = {
   user?: { username?: string };
 };
 
+type XQuickMediaResponse = {
+  id?: string;
+  mediaId?: string;
+  media_id?: string;
+  error?: string;
+  message?: string;
+  data?: XQuickMediaResponse;
+  result?: XQuickMediaResponse;
+};
+
 function getXQuickBaseUrl(): string | null {
   return (
     process.env.XQUIK_API_BASE_URL?.trim() ||
@@ -100,6 +112,14 @@ function getXQuickBaseUrl(): string | null {
 
 function getXQuickPostEndpoint(): string {
   return process.env.XQUIK_POST_ENDPOINT?.trim() || process.env.XQUICK_POST_ENDPOINT?.trim() || "/x/tweets";
+}
+
+/**
+ * Media-upload endpoint. Configurable exactly like the post/write-action/read
+ * endpoints — the transport shape is a provider contract we do not hard-code.
+ */
+function getXQuickMediaEndpoint(): string {
+  return process.env.XQUIK_MEDIA_ENDPOINT?.trim() || process.env.XQUICK_MEDIA_ENDPOINT?.trim() || "/x/media";
 }
 
 function getXQuickWriteActionEndpoint(): string {
@@ -207,9 +227,17 @@ function buildXQuickPostPayload(
   account: string,
   text: string,
   lastId: string | undefined,
+  mediaIds: string[] = [],
 ): Record<string, unknown> {
-  const body: { account: string; text: string; reply_to_tweet_id?: string } = { account, text };
+  const body: {
+    account: string;
+    text: string;
+    reply_to_tweet_id?: string;
+    media_ids?: string[];
+  } = { account, text };
   if (lastId) body.reply_to_tweet_id = lastId;
+  // Media attaches to the FIRST unit only (a single-image post does not chain).
+  if (mediaIds.length > 0) body.media_ids = mediaIds;
   return body;
 }
 
@@ -349,7 +377,10 @@ export async function fetchTweetTextByIdViaOfficialApi(tweetId: string): Promise
 }
 
 /** Post a thread or single tweet to X through xQuick. Tweet texts must be non-empty, ≤280 chars each. */
-export async function postContentToX(texts: string[]): Promise<XPublishResult> {
+export async function postContentToX(
+  texts: string[],
+  options: { mediaIds?: string[] } = {},
+): Promise<XPublishResult> {
   const config = await getXQuickClientConfig();
   if (!config) {
     throw new Error(
@@ -357,9 +388,16 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
     );
   }
 
+  const mediaIds = (options.mediaIds ?? []).filter((id) => typeof id === "string" && id.length > 0);
+
   // Step 1: clean input
   let tweets = texts.map((t) => t.trim()).filter(Boolean);
-  if (tweets.length === 0) throw new Error("No tweet text to post.");
+  if (tweets.length === 0) {
+    // A media-only post (no caption/text) is legitimate; a text-less post with
+    // no media is not.
+    if (mediaIds.length === 0) throw new Error("No tweet text to post.");
+    tweets = [""];
+  }
 
   // Step 2: apply thread numbering to content tweets (before finisher)
   tweets = addThreadNumbering(tweets);
@@ -384,7 +422,12 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
   let lastId: string | undefined;
 
   for (let index = 0; index < tweets.length; index++) {
-    const payload = buildXQuickPostPayload(config.account, tweets[index].slice(0, 280), lastId);
+    const payload = buildXQuickPostPayload(
+      config.account,
+      tweets[index].slice(0, 280),
+      lastId,
+      index === 0 ? mediaIds : [],
+    );
     const sent = await postViaXQuick(config, payload);
     const id = extractXQuickPostId(sent);
     if (!id) throw new Error("XQUICK_POST_ID_MISSING");
@@ -396,6 +439,66 @@ export async function postContentToX(texts: string[]): Promise<XPublishResult> {
   const handle = username || "i";
   const urls = tweetIds.map((id) => `https://x.com/${handle}/status/${id}`);
   return { tweetIds, urls, username };
+}
+
+/**
+ * Upload one media attachment to X via xQuick and return the provider media id.
+ *
+ * This is a *transport* step distinct from post creation: a failed upload leaves
+ * no post behind, so the publication layer treats it as a classified failure
+ * (retry or terminal), never as an ambiguous outcome. xQuick exposes no
+ * client-supplied media-upload idempotency key, so a retry may re-upload; a
+ * duplicate media object with no post is harmless. The publication's own
+ * idempotency identity is never derived from this id.
+ */
+export async function uploadMediaToX(media: {
+  bytes: Buffer;
+  mime: string;
+  altText?: string | null;
+}): Promise<string> {
+  const config = await getXQuickClientConfig();
+  if (!config) throw new Error("XQUICK_CONFIG_MISSING");
+
+  const body: Record<string, unknown> = {
+    account: config.account,
+    media: media.bytes.toString("base64"),
+    media_type: media.mime,
+  };
+  if (media.altText) body.alt_text = media.altText;
+
+  const res = await fetch(joinUrl(config.baseUrl, getXQuickMediaEndpoint()), {
+    method: "POST",
+    headers: buildXQuickHeaders(config.token),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
+  });
+  const bodyText = await res.text();
+  let parsed: XQuickMediaResponse | any = {};
+  if (bodyText) {
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      parsed = { message: bodyText };
+    }
+  }
+  if (!res.ok) {
+    throw new Error(parsed?.message || parsed?.error || bodyText || `xQuick media upload returned HTTP ${res.status}`);
+  }
+
+  const configured = getPathValue(parsed, process.env.XQUIK_MEDIA_ID_PATH || process.env.XQUICK_MEDIA_ID_PATH);
+  const id =
+    configured ??
+    parsed?.mediaId ??
+    parsed?.media_id ??
+    parsed?.id ??
+    parsed?.data?.mediaId ??
+    parsed?.data?.media_id ??
+    parsed?.data?.id ??
+    parsed?.result?.mediaId ??
+    parsed?.result?.media_id ??
+    parsed?.result?.id;
+  if (!id) throw new Error("XQUIK_MEDIA_ID_MISSING");
+  return String(id);
 }
 
 export async function publishPostToX(post: Post & { tweets: Tweet[] }): Promise<XPublishResult> {

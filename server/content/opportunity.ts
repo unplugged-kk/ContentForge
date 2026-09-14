@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { Opportunity, Story } from "@shared/schema";
 import type { OpportunityStatus } from "@shared/schema";
 import type { ContentStoragePort } from "./storage";
+import { channelSupportsFormat, hasChannelAdapter } from "./adapters";
 
 /** Read/write surface this boundary needs from the Story domain. */
 export interface StoryPort {
@@ -28,23 +29,17 @@ export interface OpportunityDeps {
 }
 
 /**
- * Validity matrix for known format × channel pairs (Ticket 05 §7). Unknown
- * formats are allowed so new formats never require core changes — they are
- * registered, not hardcoded here.
+ * Validity for known format × channel pairs. The REGISTERED channel adapter is
+ * the single source of truth: a pair is valid only if an adapter is registered
+ * for the channel and it declares support for the format. There is no separate
+ * hand-maintained allowlist to drift.
  */
-const KNOWN_FORMAT_CHANNELS: Readonly<Record<string, readonly string[]>> = {
-  x_post: ["x"],
-  x_thread: ["x"],
-  linkedin_post: ["linkedin"],
-  image: ["x"],
-  thumbnail: ["x"],
-  carousel: ["x"],
-};
-
 export function formatChannelError(format: string, channel: string): string | null {
-  const allowed = KNOWN_FORMAT_CHANNELS[format];
-  if (allowed && !allowed.includes(channel)) {
-    return `format "${format}" cannot target channel "${channel}" (expected: ${allowed.join(", ")})`;
+  if (!hasChannelAdapter(channel)) {
+    return `channel "${channel}" has no registered adapter`;
+  }
+  if (!channelSupportsFormat(channel, format)) {
+    return `format "${format}" cannot target channel "${channel}" (the ${channel} adapter does not support it)`;
   }
   return null;
 }

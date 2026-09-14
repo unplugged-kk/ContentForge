@@ -41,6 +41,7 @@ import {
   ScheduleInputError,
 } from "./scheduling";
 import { runPublication } from "./publication";
+import { registerBuiltinChannelAdapters } from "./adapters";
 import { createTemplate, createVoice, reviseVoice, reviseTemplate } from "./authoring";
 import { handleChatRequest } from "./chat";
 
@@ -111,6 +112,7 @@ describeDb("phase 1.5 hardening (db)", () => {
     if (!CONNECTION) return;
     pool = new pg.Pool({ connectionString: CONNECTION });
     db = drizzle(pool, { schema });
+    registerBuiltinChannelAdapters();
   });
 
   after(async () => {

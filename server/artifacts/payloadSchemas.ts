@@ -12,6 +12,19 @@
 
 import { z } from "zod";
 
+/**
+ * An ordered reference to one exact, immutable visual asset revision named by a
+ * payload. This is only a *reference* — the publication/core layer resolves it
+ * against `visual_assets` + `AssetStoragePort`; nothing here loads bytes or
+ * touches a business table.
+ */
+export interface PayloadMediaRef {
+  visualAssetId: number;
+  role?: string | null;
+  position: number;
+  altText?: string | null;
+}
+
 export interface PayloadSchema<T = unknown> {
   /** Format key, e.g. `x_post`. Matches the Artifact `format` dimension. */
   readonly format: string;
@@ -21,6 +34,12 @@ export interface PayloadSchema<T = unknown> {
   /** Advisory limits (characters, item counts) surfaced to generation/policy. */
   readonly limits?: Readonly<Record<string, number>>;
   readonly schema: z.ZodType<T>;
+  /**
+   * Ordered references to the exact visual asset revisions this payload names
+   * (empty for text-only formats). Format knowledge stays co-located with the
+   * schema registration — the publication domain never branches per format.
+   */
+  readonly mediaRefs?: (payload: T) => readonly PayloadMediaRef[];
 }
 
 export class PayloadValidationError extends Error {
@@ -127,6 +146,16 @@ export class PayloadSchemaRegistry {
       );
     }
     return result.data as T;
+  }
+
+  /**
+   * Ordered media references a payload names for its format. Never resolves
+   * assets or bytes — it only reports the exact revisions the payload points at.
+   */
+  mediaRefs(format: string, payload: unknown, version?: number): PayloadMediaRef[] {
+    const entry = this.get(format, version);
+    if (!entry.mediaRefs) return [];
+    return [...entry.mediaRefs(payload)];
   }
 
   reset(): void {
@@ -241,6 +270,14 @@ payloadSchemaRegistry.register<ImagePayload>({
   version: 1,
   description: "Image referencing an immutable visual asset revision",
   schema: imagePayloadSchema,
+  mediaRefs: (payload) => [
+    {
+      visualAssetId: payload.visualAssetId,
+      role: payload.role ?? null,
+      position: 0,
+      altText: payload.altText ?? null,
+    },
+  ],
 });
 
 payloadSchemaRegistry.register<CarouselPayload>({
@@ -249,6 +286,13 @@ payloadSchemaRegistry.register<CarouselPayload>({
   description: "Carousel of ordered, independently addressable visual slides",
   limits: { maxUnits: 25 },
   schema: carouselPayloadSchema,
+  mediaRefs: (payload) =>
+    payload.slides.map((slide, position) => ({
+      visualAssetId: slide.visualAssetId,
+      role: slide.role ?? null,
+      position,
+      altText: slide.altText ?? null,
+    })),
 });
 
 payloadSchemaRegistry.register<ThumbnailPayload>({
@@ -256,4 +300,12 @@ payloadSchemaRegistry.register<ThumbnailPayload>({
   version: 1,
   description: "Thumbnail referencing an immutable visual asset revision",
   schema: thumbnailPayloadSchema,
+  mediaRefs: (payload) => [
+    {
+      visualAssetId: payload.visualAssetId,
+      role: payload.role ?? null,
+      position: 0,
+      altText: payload.altText ?? null,
+    },
+  ],
 });

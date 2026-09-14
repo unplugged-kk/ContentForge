@@ -36,6 +36,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Artifact, Publication, Schedule, ScheduleOccurrence } from "@shared/schema";
 import type { ContentStoragePort } from "./storage";
+import { channelSupportsFormat } from "./adapters";
 
 export interface SchedulingDeps {
   content: ContentStoragePort;
@@ -156,6 +157,16 @@ export async function createSchedule(
   if (!artifact) throw new ArtifactNotSchedulableError(artifactId, "missing");
   if (artifact.readiness !== "approved") {
     throw new ArtifactNotSchedulableError(artifactId, artifact.readiness);
+  }
+
+  // A scheduled pipeline must be distributable: reject a pair no registered
+  // adapter can actually publish BEFORE creating a Schedule/Occurrence/
+  // Publication that could only ever fail. The adapter registry is the single
+  // authority (see `channelSupportsFormat`).
+  if (!channelSupportsFormat(artifact.channel, artifact.format)) {
+    throw new ScheduleInputError([
+      `format "${artifact.format}" cannot be distributed on channel "${artifact.channel}" — no registered adapter supports it`,
+    ]);
   }
 
   const startAt = body.startAt ? new Date(body.startAt) : new Date();

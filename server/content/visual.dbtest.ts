@@ -43,6 +43,7 @@ import {
   resetVisualProviders,
 } from "./visual";
 import { createFixtureVisualProvider } from "./visualFixture";
+import { registerBuiltinChannelAdapters } from "./adapters";
 import {
   createVisualAssetRevision,
   createVisualGeneration,
@@ -67,6 +68,7 @@ describeDb("visual intelligence (db)", () => {
 
     resetVisualProviders();
     registerVisualProvider(createFixtureVisualProvider());
+    registerBuiltinChannelAdapters();
   });
 
   after(async () => {

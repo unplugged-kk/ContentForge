@@ -117,8 +117,10 @@ export {
 
 export {
   MAX_RECONCILE_ATTEMPTS,
+  MediaResolutionError,
   reconcileStalePublications,
   reconcileUnknownPublications,
+  resolvePublicationMedia,
   runPublication,
   DEFAULT_LEASE_MS,
   type PublicationDeps,
@@ -133,6 +135,7 @@ export {
   createLinkedInChannelAdapter,
   classifyXFailure,
   classifyLinkedInFailure,
+  channelSupportsFormat,
   getChannelAdapter,
   hasChannelAdapter,
   listChannelAdapters,
@@ -141,6 +144,7 @@ export {
   resetChannelAdapters,
   ChannelAdapterNotRegisteredError,
   type ChannelAdapter,
+  type PublishMedia,
   type PublishOutcome,
   type PublishRequest,
 } from "./adapters";

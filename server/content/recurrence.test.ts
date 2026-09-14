@@ -15,7 +15,11 @@ import {
   parseRecurrenceIntervalMs,
   ScheduleInputError,
 } from "./scheduling";
+import { registerBuiltinChannelAdapters } from "./adapters";
 import type { ContentStoragePort } from "./storage";
+
+// Scheduling validates (format, channel) against the adapter registry.
+registerBuiltinChannelAdapters();
 
 describe("parseRecurrenceIntervalMs", () => {
   it("accepts every:<n><unit> for m/h/d/w", () => {
