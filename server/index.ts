@@ -8,7 +8,17 @@ import { createServer } from "http";
 import { pool, db } from "./db";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
+import { fileURLToPath } from "url";
 import { existsSync } from "fs";
+
+// Module directory that works in both runtimes: the esbuild CJS bundle (prod)
+// exposes the CJS `__dirname` global, while under tsx (dev, "type":"module")
+// it is absent and `import.meta.url` must be used instead. `typeof` guards the
+// undeclared-identifier case without throwing.
+const moduleDir =
+  typeof __dirname !== "undefined"
+    ? __dirname
+    : path.dirname(fileURLToPath(import.meta.url));
 import { securityHeaders } from "./middleware/security";
 import { globalLimiter } from "./middleware/rateLimit";
 import { auditLog } from "./middleware/audit";
@@ -132,9 +142,18 @@ app.use((req, res, next) => {
   // Run drizzle migrations automatically on every startup.
   // Migration files live in ./migrations/ (committed to repo, copied to dist/migrations/ by build).
   // drizzle tracks applied migrations in __drizzle_migrations — only new ones run.
-  const migrationsFolder = path.join(__dirname, "migrations");
-  if (!existsSync(migrationsFolder)) {
-    throw new Error(`Missing migrations folder at startup: ${migrationsFolder}`);
+  // Resolve migrations across layouts: the prod bundle sits next to
+  // dist/migrations, while under tsx (dev) __dirname is server/, so the
+  // committed repo-root ./migrations must be found via ../ or cwd.
+  const migrationsFolder = [
+    path.join(moduleDir, "migrations"),
+    path.resolve(moduleDir, "..", "migrations"),
+    path.resolve(process.cwd(), "migrations"),
+  ].find((candidate) => existsSync(candidate));
+  if (!migrationsFolder) {
+    throw new Error(
+      `Missing migrations folder at startup (looked next to the bundle, in ../, and in ${process.cwd()})`,
+    );
   }
   await migrate(db, { migrationsFolder });
   log("database migrations applied", "db");
