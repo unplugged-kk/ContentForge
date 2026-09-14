@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-13 · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,16 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **252 passed / 0 failed** (56 suites) |
-| `npm test` | **252 passed** |
-| `npm run test:db` (real PostgreSQL) | **96 passed / 0 failed / 0 skipped** (12 suites) |
-| `npm run test:e2e:live` (real running app) | **72 passed / 0 failed** |
+| `npm run test:unit` | **259 passed / 0 failed** (58 suites) |
+| `npm test` | **259 passed** |
+| `npm run test:db` (real PostgreSQL) | **102 passed / 0 failed / 0 skipped** (13 suites) |
+| `npm run test:e2e:live` (real running app) | **75/75 across two consecutive full runs** — all 3 Phase 5 reconciliation checks green both times; a pre-existing, unrelated pg-boss/research-queue timing flake (documented before this phase) surfaced once per run in an earlier phase, never in reconciliation |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **10 passed / 0 failed** |
 | Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 237 unit / 90 DB / 65 live E2E.
+Baseline before this phase: 252 unit / 96 DB / 72 live E2E.
 
 ---
 
@@ -77,6 +77,65 @@ materialization idempotent).
   (bounded by count), series exhausted; 3 Publications → 3 Results, all
   pinned to the one approved Artifact revision, research row counts
   unchanged.
+
+## X publication reconciliation (new in this phase — Phase 5)
+
+```
+publish() ambiguous (transport invoked, outcome unconfirmed)
+        ↓
+Publication: state=failed, providerCalled=true   Result: outcome=unknown, metrics={writeActionId}
+        ↓ (periodic tick / manual dispatch, reuses the existing publication lease)
+adapter.reconcile() — tri-state
+        ├─ null         → still unknown; durably bounded by the existing attempt counter
+        ├─ {ok: true}   → SAME Result row resolved unknown→published, never a second row
+        └─ {ok: false}  → confirmed NOT published: unknown Result deleted, SAME Publication
+                           row reset to queued, re-queued through the existing durable job
+```
+
+`reconcile()` is no longer a stub. No new abstraction, no new table, no
+migration — the tri-state reuses the existing `PublishOutcome | null`
+contract, and the durable identifier (an xQuick `writeActionId`) rides on
+the existing `Result.metrics` column via a new, generic,
+adapter-opaque `PublishRequest.reconciliationHint` field.
+
+- **What enters `unknown`** (unchanged definition, finally acted on): the
+  adapter's transport was invoked and the outcome could not be established
+  — for X, xQuick accepted a write (202 + `writeActionId`) but polling gave
+  up before it resolved. Ordinary deterministic failures are unaffected.
+- **Tri-state, no new type**: `null` = still unknown, `{ok:true}` = confirmed
+  published, `{ok:false}` = confirmed NOT published. A read-API miss is
+  treated as still unknown, never as proof of absence.
+- **Result stays durable, `unknown` is provisional**: `insertResult` now
+  upserts into an existing `unknown` Result only
+  (`ON CONFLICT ... WHERE outcome = 'unknown'`); a `published`/`failed`
+  Result remains immutable exactly as before. Confirmed-not-published
+  deletes the provisional row so the eventual real outcome gets a clean one.
+- **Safe next action on confirmed-not-published**: reset the *same*
+  Publication row (same idempotency key, no new Occurrence) to `queued` and
+  re-queue through the existing durable job — identical in spirit to an
+  ordinary transient-failure retry. The queue-level dedup key for that retry
+  is distinguished from the Publication's permanent identity (pg-boss's own
+  singleton window would otherwise silently drop the re-send of an
+  already-completed job) — the Publication's real `idempotencyKey` column is
+  never changed.
+- **Concurrency**: reconciliation reuses the existing single-flight
+  publication lease (which already allowed leasing from `state = "failed"` —
+  a seam that pre-existed and had simply never been wired to an adapter
+  call). PostgreSQL is the sole arbiter; no in-memory lock.
+- **Durable bound**: the existing `publications.attempt` column (already
+  incremented by every lease acquisition) — after 5 reconciliation attempts,
+  a Publication is left `unknown` for an operator rather than checked
+  forever.
+- **Where it runs**: the existing periodic content-scheduler tick and the
+  existing manual `/api/publications/dispatch` endpoint — no new job type,
+  no new scheduler, no new endpoint.
+- **Verified live** (two consecutive full runs): a write accepted but never
+  resolved becomes `unknown` without ever being falsely published;
+  reconciliation discovers the external post and resolves the *same* Result
+  row (never a duplicate); reconciliation confirms non-publication and the
+  retried publish reaches exactly one final Result with no second
+  Occurrence; proven against real Postgres with real concurrent
+  reconciliation passes and a process restart mid-unknown.
 
 ## Research architecture (one engine, interchangeable providers)
 
@@ -142,7 +201,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -162,24 +221,25 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   durable idempotency (`chat_key` UNIQUE) and explicit regeneration.
 - **Schedule / Occurrence / Publication / Result**: durable scheduler tick
   (cron → compare-and-set claim → idempotent publication claim → pg-boss),
-  single-flight publication lease, reconcile-first unknown handling, exactly one
-  Result per Publication, X adapter over the existing xQuick transport.
-- **Recurrence** (this phase): as above.
+  single-flight publication lease, exactly one Result per Publication, X
+  adapter over the existing xQuick transport.
+- **Recurrence** (Phase 4): as above.
+- **X reconciliation** (this phase): as above.
 - **Visuals** (Phase 3): as above.
 
 ## Architecturally ready (not built)
 
 Non-X format payload schemas beyond image/carousel/thumbnail, non-X channel
 adapters, URL/web ingestion expansion, real image vendors, `edit_image`
-production, X adapter `reconcile()` — each is a registration/implementation
-against an existing seam, not a new pipeline.
+production — each is a registration/implementation against an existing seam,
+not a new pipeline.
 
 ## Deferred (deliberately, unchanged)
 
 - Voice **style analysis** of the user's real posts; all authoring/editing **UI**.
 - Second Brain / Context Vault.
 - LinkedIn / Threads / Instagram and other non-X publishing.
-- Analytics metric mappers; X adapter `reconcile()` implementation.
+- Analytics metric mappers.
 - last30days and Agent-Reach (behind the `SourceProvider` seam).
 - Billing, subscriptions, collaboration, notifications, large UI work.
 - Video Factory rendering or integration of any kind.
@@ -193,7 +253,12 @@ against an existing seam, not a new pipeline.
 
 - Golden path: research → Story → Opportunity → policy → job → Artifact →
   approval → Schedule → Occurrence → Publication → X adapter → Result.
-- **Recurrence** (new): malformed recurrence rejected pre-persistence; 3
+- **X reconciliation** (new): ambiguous write → `unknown` (never falsely
+  published) → reconciliation → published, same Result row; ambiguous write
+  → confirmed not published → re-queued (same Publication, same idempotency
+  identity) → retried → published, exactly one final Result, no second
+  Occurrence.
+- **Recurrence**: malformed recurrence rejected pre-persistence; 3
   overdue hourly slots → bounded one-per-tick catch-up; process kill/restart
   mid-series → durable cursor resumes correctly; 3 concurrent dispatch ticks
   → exactly 3 occurrences, series exhausted; 3 Publications → 3 Results, all
@@ -241,8 +306,10 @@ against an existing seam, not a new pipeline.
 - last30days / Agent-Reach remain references — nothing vendored, no AGPL code.
 - Generation `cost` stays `null`; no authoring/editing UI exists.
 - **Video Factory**: no rendering, no integration — contract only.
-- X adapter `reconcile()` remains a stub (returns `null`) — ambiguous outcomes
-  stay `unknown`, requiring operator reconciliation.
+- **X reconciliation**: bounded at 5 attempts per Publication before being
+  left `unknown` permanently for an operator; xQuick's read-lookup fallback
+  (`fetchTweetTextByIdViaOfficialApi`) depends on a configured read endpoint
+  and is not exercised unless a `writeActionId` is unavailable.
 
 ## Deferred (deliberately, unchanged)
 
