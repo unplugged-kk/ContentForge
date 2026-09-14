@@ -44,10 +44,12 @@ import {
 } from "./generation";
 import {
   approveArtifact,
+  createArtifact,
   createHumanEditRevision,
   getArtifactHistory,
   rejectArtifact,
   submitArtifactForReview,
+  ArtifactMediaReferenceError,
   ArtifactNotFoundError,
   ArtifactStateError,
   InvalidArtifactPayloadError,
@@ -310,6 +312,19 @@ const reviseArtifactBody = z.object({
   attributionReason: z.string().trim().min(1).max(500).optional(),
 });
 
+/**
+ * Format-driven Artifact authoring (Ticket 07 §media contract). `format` and
+ * `channel` are never taken from the request — they are the Opportunity's own,
+ * exactly as generation already does — so this route can never create an
+ * Artifact whose (format, channel) pair was not already validated at
+ * Opportunity creation.
+ */
+const createArtifactBody = z.object({
+  payload: z.record(z.unknown()),
+  attribution: z.array(z.unknown()).optional(),
+  attributionReason: z.string().trim().min(1).max(500).optional(),
+});
+
 const createVoiceBody = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(2000).optional(),
@@ -427,6 +442,47 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const rows = await deps.content.listArtifactsByOpportunity(id);
       return res.json(rows.map(serializeArtifact));
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  /**
+   * Author a draft Artifact under this Opportunity. Format-driven: the same
+   * route handles `x_post`, `linkedin_post`, `image`, `thumbnail`, and any
+   * future registered format, because `format`/`channel` come from the
+   * Opportunity (already validated against the adapter registry at Opportunity
+   * creation) and `payload` is validated against that format's registered
+   * schema — never a second, format-specific endpoint or business path.
+   */
+  router.post("/opportunities/:id/artifacts", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid opportunity id" });
+    try {
+      const body = createArtifactBody.parse(req.body ?? {});
+      const opportunity = await deps.content.getOpportunity(id);
+      if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+      const artifact = await createArtifact(
+        {
+          userId: getUserId(req) ?? 1,
+          generationJobId: null,
+          opportunityId: opportunity.id,
+          format: opportunity.format,
+          channel: opportunity.channel,
+          payload: body.payload,
+          provenance: "human_edit",
+          attribution: body.attribution,
+          attributionReason: body.attributionReason ?? null,
+        },
+        { artifacts: deps.content },
+      );
+      return res.status(201).json(serializeArtifact(artifact));
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof InvalidArtifactPayloadError) return res.status(422).json({ message: error.message });
+      if (error instanceof ArtifactMediaReferenceError) {
+        const notFound = /not found/.test(error.message);
+        return res.status(notFound ? 404 : 409).json({ message: error.message });
+      }
       return next(error);
     }
   });

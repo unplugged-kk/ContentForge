@@ -280,7 +280,8 @@ describeDb("visual delivery — image publication through X (db)", () => {
       },
       { artifacts: store },
     );
-    await store.insertVisualAssetRef({ userId: 1, artifactId: artifact.id, visualAssetId: asset, role: "hero", position: 0 });
+    // createArtifact itself inserts the visualAssetRef audit row now (Phase
+    // 8) — the same authoring path the HTTP route uses.
     await submitArtifactForReview(artifact.id, { artifacts: store });
     const approved = await approveArtifact(artifact.id, { artifacts: store });
 
@@ -405,7 +406,6 @@ describeDb("visual delivery — image publication through X (db)", () => {
       },
       { artifacts: store },
     );
-    await store.insertVisualAssetRef({ userId: 1, artifactId: artifact.id, visualAssetId: assetId, role: "hero", position: 0 });
     await submitArtifactForReview(artifact.id, { artifacts: store });
     const approved = await approveArtifact(artifact.id, { artifacts: store });
 
@@ -453,5 +453,110 @@ describeDb("visual delivery — image publication through X (db)", () => {
     const resultRows = await db.select().from(results).where(eq(results.publicationId, publication.id));
     assert.equal(resultRows.length, 1, "exactly one logical Result survives duplicate delivery");
     assert.equal(resultRows[0].outcome, "published");
+  });
+
+  // ── Phase 8: image Artifact authoring (the domain call the HTTP route uses) ──
+  describe("image artifact authoring — validates against real VisualAsset rows", () => {
+    it("creates a draft image Artifact and a durable visualAssetRef row, pinning the exact revision", async () => {
+      const { opportunity } = await seedOpportunity("author-ok");
+      const assetId = await seedAsset(opportunity.id, "author-ok");
+      const store = content();
+
+      const artifact = await createArtifact(
+        {
+          userId: 1,
+          generationJobId: null,
+          opportunityId: opportunity.id,
+          format: "image",
+          channel: "x",
+          payload: { visualAssetId: assetId, altText: `${RUN} author-ok` },
+          provenance: "human_edit",
+          attribution: [],
+          attributionReason: "HTTP authoring",
+        },
+        { artifacts: store },
+      );
+      assert.equal(artifact.readiness, "draft");
+      assert.equal((artifact.payload as { visualAssetId: number }).visualAssetId, assetId);
+
+      const refs = await store.listVisualAssetRefs(artifact.id);
+      assert.deepEqual(refs.map((r) => r.visualAssetId), [assetId], "the audit-trail ref names the same pinned revision");
+    });
+
+    it("rejects a nonexistent VisualAsset before any Artifact row is created", async () => {
+      const { opportunity } = await seedOpportunity("author-missing");
+      const store = content();
+      const before = await db.select().from(artifacts).where(eq(artifacts.opportunityId, opportunity.id));
+
+      await assert.rejects(
+        () =>
+          createArtifact(
+            {
+              userId: 1,
+              generationJobId: null,
+              opportunityId: opportunity.id,
+              format: "image",
+              channel: "x",
+              payload: { visualAssetId: 999_999_999 },
+              provenance: "human_edit",
+              attribution: [],
+              attributionReason: "HTTP authoring",
+            },
+            { artifacts: store },
+          ),
+        /not found/,
+      );
+      const after = await db.select().from(artifacts).where(eq(artifacts.opportunityId, opportunity.id));
+      assert.equal(after.length, before.length, "no Artifact row created for an invalid media reference");
+    });
+
+    it("rejects a VisualAsset owned by a different user (owner isolation)", async () => {
+      const { opportunity: ownerOpp } = await seedOpportunity("author-owner-a");
+      const assetId = await seedAsset(ownerOpp.id, "author-owner-a");
+      const { opportunity: otherOpp } = await seedOpportunity("author-owner-b");
+      const store = content();
+
+      await assert.rejects(
+        () =>
+          createArtifact(
+            {
+              userId: 2, // a different owner than the VisualAsset's userId (1)
+              generationJobId: null,
+              opportunityId: otherOpp.id,
+              format: "image",
+              channel: "x",
+              payload: { visualAssetId: assetId },
+              provenance: "human_edit",
+              attribution: [],
+              attributionReason: "HTTP authoring",
+            },
+            { artifacts: store },
+          ),
+        /not found/,
+      );
+    });
+
+    it("creating an image Artifact does not require a channel that supports it — reuse independent of channel", async () => {
+      const { opportunity } = await seedOpportunity("author-reuse");
+      const assetId = await seedAsset(opportunity.id, "author-reuse");
+      const store = content();
+
+      const artifact = await createArtifact(
+        {
+          userId: 1,
+          generationJobId: null,
+          opportunityId: opportunity.id,
+          format: "image",
+          channel: "x", // (format, channel) compatibility is enforced at Schedule
+          // creation, never at authoring — an image Artifact stays reusable.
+          payload: { visualAssetId: assetId },
+          provenance: "human_edit",
+          attribution: [],
+          attributionReason: "HTTP authoring",
+        },
+        { artifacts: store },
+      );
+      assert.equal(artifact.readiness, "draft");
+    });
   });
 });

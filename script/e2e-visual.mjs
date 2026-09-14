@@ -29,6 +29,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream } from "node:fs";
+import nodeHttp from "node:http";
 import path from "node:path";
 import process from "node:process";
 import pg from "pg";
@@ -50,6 +51,7 @@ const results = [];
 let appChild = null;
 let appLogPath = null;
 let pool = null;
+let xFixtureHandle = null;
 
 function record(name, ok, detail) {
   results.push({ name, ok, detail });
@@ -175,6 +177,47 @@ async function startApp(extraEnv = {}) {
   csrfToken = res.body?.csrfToken;
 }
 
+/**
+ * Deterministic double for xQuick's media-upload and post-creation endpoints —
+ * the ONLY thing this harness doubles beyond the visual provider. Everything
+ * else (HTTP app, Postgres, pg-boss, publication/media-resolution logic) is
+ * real, exactly like `e2e/fixture/rss-fixture.mjs` is to `e2e-live.mjs`.
+ */
+function startXFixture() {
+  let tweetSeq = 0;
+  let mediaSeq = 0;
+  const server = nodeHttp.createServer((req, res) => {
+    const send = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (req.method === "POST" && url.pathname === "/x/media") {
+      req.resume();
+      req.on("end", () => {
+        mediaSeq += 1;
+        send(200, { mediaId: `media-${RUN}-${mediaSeq}` });
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/x/tweets") {
+      req.resume();
+      req.on("end", () => {
+        tweetSeq += 1;
+        const id = `tweet-${RUN}-${tweetSeq}`;
+        send(200, { id, tweetId: id, url: `https://x.com/i/status/${id}`, username: "cf_test" });
+      });
+      return;
+    }
+    send(404, { message: "not found" });
+  });
+  return {
+    start: () =>
+      new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port))),
+    stop: () => new Promise((resolve) => server.close(() => resolve())),
+  };
+}
+
 async function killApp(signal = "SIGKILL") {
   if (!appChild) return;
   const child = appChild;
@@ -201,8 +244,17 @@ async function killApp(signal = "SIGKILL") {
 
   pool = new pg.Pool({ connectionString: DB_URL, max: 4, statement_timeout: 15_000, query_timeout: 15_000 });
 
+  xFixtureHandle = startXFixture();
+  const xFixturePort = await xFixtureHandle.start();
+  const xEnv = {
+    XQUICK_API_BASE_URL: `http://127.0.0.1:${xFixturePort}`,
+    XQUICK_API_KEY: "fixture-key",
+    XQUICK_ACCOUNT: "cf_test",
+    XQUICK_TIMEOUT_MS: "5000",
+  };
+
   phase("Startup");
-  await startApp();
+  await startApp(xEnv);
   record("real application started (dist/index.cjs)", true, APP_BASE);
 
   // Visuals enter through generation: a human story + opportunity chain.
@@ -272,38 +324,131 @@ async function killApp(signal = "SIGKILL") {
     return "same generation, one asset";
   });
 
-  await check("an image Artifact pins the asset revision and approves independently", async () => {
+  let publishOpportunityId, publishArtifactId, publishAssetId;
+  await check(
+    "POST /api/opportunities/:id/artifacts creates an image Artifact through real HTTP, pinning the exact asset revision",
+    async () => {
+      const opp = await http("POST", "/api/opportunities", {
+        storyId,
+        concept: "hero visual",
+        objective: "illustrate",
+        format: "image",
+        channel: "x",
+      });
+      assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+      publishOpportunityId = opp.body.id;
+
+      const gen = await http("GET", `/api/visual-generations/${visualGenerationId}`);
+      const assetId = gen.body.visualAssetId;
+      publishAssetId = assetId;
+
+      // The image Artifact is authored through the same generic, format-driven
+      // route every other format uses — never a special "visual artifact"
+      // endpoint, and never a direct database insert.
+      const created = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+        payload: { visualAssetId: assetId, altText: "hero", aspectRatio: "1:1" },
+        attributionReason: "visual e2e",
+      });
+      assert(created.status === 201, `create artifact ${created.status}: ${created.text}`);
+      assert(created.body.readiness === "draft", `readiness=${created.body.readiness}`);
+      const artifactId = created.body.id;
+      publishArtifactId = artifactId;
+
+      await http("POST", `/api/artifacts/${artifactId}/submit-review`, {});
+      const approved = await http("POST", `/api/artifacts/${artifactId}/approve`, {});
+      assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+
+      // The ref audit-trail row is created automatically by authoring — no
+      // separate /visuals attach call is needed for the payload to be pinned.
+      const refs = await http("GET", `/api/artifacts/${artifactId}/visuals`);
+      assert(refs.body.length === 1 && refs.body[0].visualAssetId === assetId, "ref audit trail");
+      return `artifact ${artifactId} approved through HTTP, pinned to asset ${assetId}`;
+    },
+  );
+
+  await check("HTTP authoring rejects a nonexistent VisualAsset before any Artifact row is created", async () => {
     const opp = await http("POST", "/api/opportunities", {
       storyId,
-      concept: "hero visual",
+      concept: "invalid visual ref",
       objective: "illustrate",
       format: "image",
       channel: "x",
     });
-    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
-
-    const gen = await http("GET", `/api/visual-generations/${visualGenerationId}`);
-    const assetId = gen.body.visualAssetId;
-    const art = await q(
-      `insert into artifacts (user_id, opportunity_id, format, channel, payload, readiness, provenance, attribution, attribution_reason)
-       values (1, $1, 'image', 'x', $2, 'draft', 'generated', '[]'::jsonb, 'visual e2e')
-       returning id`,
-      [opp.body.id, JSON.stringify({ visualAssetId: assetId, altText: "hero", aspectRatio: "1:1" })],
-    );
-    const artifactId = art[0].id;
-    const attach = await http("POST", `/api/artifacts/${artifactId}/visuals`, {
-      visualAssetId: assetId,
-      role: "hero",
+    assert(opp.status === 201, `opportunity ${opp.status}`);
+    const before = await q("select count(*)::int c from artifacts where opportunity_id = $1", [opp.body.id]);
+    const res = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      payload: { visualAssetId: 999_999_999 },
+      attributionReason: "should fail",
     });
-    assert(attach.status === 201, `attach ${attach.status}: ${attach.text}`);
+    assert(res.status === 404, `expected 404 for a nonexistent visual asset, got ${res.status}: ${res.text}`);
+    const after = await q("select count(*)::int c from artifacts where opportunity_id = $1", [opp.body.id]);
+    assert(after[0].c === before[0].c, "no partial Artifact row created");
+    return "invalid reference refused, no durable side effect";
+  });
 
-    await http("POST", `/api/artifacts/${artifactId}/submit-review`, {});
-    const approved = await http("POST", `/api/artifacts/${artifactId}/approve`, {});
-    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+  await check("HTTP authoring refuses another owner's VisualAsset with the same 404 shape as not-found", async () => {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "foreign visual ref",
+      objective: "illustrate",
+      format: "image",
+      channel: "x",
+    });
+    const decoy = await q(
+      `insert into visual_assets (user_id, kind, storage_key, mime, status)
+       values (999999, 'image', 'local:deadbeef', 'image/png', 'ready') returning id`,
+    );
+    const res = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      payload: { visualAssetId: decoy[0].id },
+      attributionReason: "should fail",
+    });
+    assert(res.status === 404, `expected 404, got ${res.status}: ${res.text}`);
+    await q("delete from visual_assets where id = $1", [decoy[0].id]);
+    return "foreign asset refused via the generic authoring route";
+  });
 
-    const refs = await http("GET", `/api/artifacts/${artifactId}/visuals`);
-    assert(refs.body.length === 1 && refs.body[0].visualAssetId === assetId, "ref audit trail");
-    return `artifact ${artifactId} approved, pinned to asset ${assetId}`;
+  phase("Visual publication E2E: HTTP-authored image Artifact -> Schedule -> Occurrence -> Publication -> X -> Result");
+
+  await check("Schedule + dispatch + publication deliver the HTTP-authored image to X, pinning the exact asset revision", async () => {
+    const schedule = await http("POST", "/api/schedules", {
+      artifactId: publishArtifactId,
+      startAt: new Date().toISOString(),
+    });
+    assert(schedule.status === 201, `schedule ${schedule.status}: ${schedule.text}`);
+
+    const dispatch = await http("POST", "/api/publications/dispatch", {});
+    assert(dispatch.status === 200, `dispatch ${dispatch.status}: ${dispatch.text}`);
+
+    const publicationRow = await waitFor(
+      async () => {
+        const rows = await q("select * from publications where schedule_id = $1", [schedule.body.id]);
+        return rows[0] ?? false;
+      },
+      { timeoutMs: 20_000, intervalMs: 300, label: "publication row materialized" },
+    );
+
+    const published = await waitFor(
+      async () => {
+        const p = await http("GET", `/api/publications/${publicationRow.id}`);
+        if (p.body.state === "published") return p.body;
+        if (p.body.state === "failed") throw new Error(`publication failed: ${p.body.lastError}`);
+        return false;
+      },
+      { timeoutMs: 30_000, intervalMs: 300, label: "publication published" },
+    );
+    assert(typeof published.externalId === "string" && published.externalId.length > 0, "no external post id");
+
+    const result = await http("GET", `/api/publications/${publicationRow.id}/result`);
+    assert(result.status === 200, `result ${result.status}: ${result.text}`);
+    assert(result.body.outcome === "published", `outcome=${result.body.outcome}`);
+    assert(result.body.metrics?.mediaCount === 1, `mediaCount=${result.body.metrics?.mediaCount}`);
+
+    const artifactRow = await http("GET", `/api/artifacts/${publishArtifactId}`);
+    assert(
+      artifactRow.body.payload.visualAssetId === publishAssetId,
+      "the published Artifact's payload still names the exact original asset revision",
+    );
+    return `Publication ${publicationRow.id} published, externalId=${published.externalId}`;
   });
 
   await check("cross-user asset access is refused (404, no existence leak)", async () => {
@@ -373,7 +518,7 @@ async function killApp(signal = "SIGKILL") {
     );
     record("pg-boss visual job row survived the kill", queueAtKill.length >= 1, `queue state=${queueAtKill[0]?.state ?? "missing"}`);
 
-    await startApp();
+    await startApp(xEnv);
     const row = await waitFor(
       async () => {
         const r = await http("GET", `/api/visual-generations/${id}`);
@@ -409,5 +554,6 @@ async function killApp(signal = "SIGKILL") {
       /* ignore */
     }
     if (pool) await pool.end().catch(() => {});
+    if (xFixtureHandle) await xFixtureHandle.stop().catch(() => {});
     process.exit(process.exitCode ?? 0);
   });

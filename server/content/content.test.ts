@@ -42,6 +42,7 @@ import {
   createArtifact,
   rejectArtifact,
   submitArtifactForReview,
+  ArtifactMediaReferenceError,
   InvalidArtifactPayloadError,
   ArtifactStateError,
 } from "./artifact";
@@ -500,6 +501,100 @@ describe("artifact boundary", () => {
       { artifacts: store },
     );
     assert.equal(second.readiness, "draft", "a new revision starts unapproved");
+  });
+});
+
+// ── image Artifact authoring (format-driven, same createArtifact) ──────────────
+describe("image artifact authoring", () => {
+  const base = {
+    userId: 1,
+    generationJobId: null,
+    opportunityId: 1,
+    format: "image",
+    channel: "x",
+    attributionReason: "generated image",
+  };
+
+  it("creates a draft image Artifact from a ready, owned VisualAsset and pins the exact revision", async () => {
+    const store = memoryStore() as unknown as ContentStoragePort & {
+      refs: unknown[];
+    };
+    (store as any).getVisualAsset = async (id: number) =>
+      ({ id, userId: 1, status: "ready", mime: "image/png", storageKey: `local:${"a".repeat(64)}`, role: null, altText: null }) as never;
+    (store as any).refs = [];
+    (store as any).insertVisualAssetRef = async (row: Record<string, unknown>) => {
+      (store as any).refs.push(row);
+      return { id: 1, ...row } as never;
+    };
+
+    const artifact = await createArtifact(
+      { ...base, payload: { visualAssetId: 42 } },
+      { artifacts: store },
+    );
+    assert.equal(artifact.readiness, "draft");
+    assert.equal((artifact.payload as { visualAssetId: number }).visualAssetId, 42);
+    assert.deepEqual((store as any).refs.map((r: any) => r.visualAssetId), [42]);
+  });
+
+  it("rejects a nonexistent VisualAsset before creating any Artifact row", async () => {
+    const store = memoryStore();
+    (store as any).getVisualAsset = async () => undefined;
+    await assert.rejects(
+      () => createArtifact({ ...base, payload: { visualAssetId: 999 } }, { artifacts: store }),
+      ArtifactMediaReferenceError,
+    );
+    assert.equal(store.arts.length, 0, "no partial Artifact row on invalid media reference");
+  });
+
+  it("rejects a VisualAsset owned by another user, same 404-shaped message as not-found", async () => {
+    const store = memoryStore();
+    (store as any).getVisualAsset = async (id: number) =>
+      ({ id, userId: 2, status: "ready", mime: "image/png" }) as never;
+    await assert.rejects(
+      () => createArtifact({ ...base, payload: { visualAssetId: 42 } }, { artifacts: store }),
+      (error: unknown) => error instanceof ArtifactMediaReferenceError && /not found/.test(error.message),
+    );
+    assert.equal(store.arts.length, 0);
+  });
+
+  it("rejects a VisualAsset that is not ready", async () => {
+    const store = memoryStore();
+    (store as any).getVisualAsset = async (id: number) =>
+      ({ id, userId: 1, status: "processing", mime: "image/png" }) as never;
+    await assert.rejects(
+      () => createArtifact({ ...base, payload: { visualAssetId: 42 } }, { artifacts: store }),
+      /not ready/,
+    );
+    assert.equal(store.arts.length, 0);
+  });
+
+  it("rejects a malformed image payload before touching any visual asset lookup", async () => {
+    const store = memoryStore();
+    let looked = false;
+    (store as any).getVisualAsset = async () => {
+      looked = true;
+      return undefined;
+    };
+    await assert.rejects(
+      () => createArtifact({ ...base, payload: {} }, { artifacts: store }),
+      InvalidArtifactPayloadError,
+    );
+    assert.equal(looked, false, "schema validation runs before media resolution");
+  });
+
+  it("a later VisualAsset revision does not alter an already-created Artifact's payload", async () => {
+    const store = memoryStore();
+    (store as any).getVisualAsset = async (id: number) =>
+      ({ id, userId: 1, status: "ready", mime: "image/png" }) as never;
+    (store as any).insertVisualAssetRef = async (row: Record<string, unknown>) => row as never;
+
+    const artifact = await createArtifact(
+      { ...base, payload: { visualAssetId: 5 } },
+      { artifacts: store },
+    );
+    // A newer revision existing elsewhere never changes what this Artifact
+    // named — the payload holds the exact id, never a query for "latest".
+    assert.equal((artifact.payload as { visualAssetId: number }).visualAssetId, 5);
   });
 });
 

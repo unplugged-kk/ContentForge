@@ -335,9 +335,97 @@ nothing in the five already-live-E2E-proven phases.
   **DEFERRED** — not implemented.
 - Real image-generation vendor: **DEFERRED**, unchanged from Phase 3 (still
   the deterministic fixture provider).
-- Live E2E for the image golden path specifically: **DEFERRED** pending an
-  HTTP authoring path for image Artifacts (pre-existing gap); the real-Postgres
-  tier carries this proof instead.
+- Live E2E for the image golden path specifically: closed in Phase 8 below.
+- Threads / Instagram / LinkedIn media: **not attempted**, out of scope.
+
+## Phase 8 — visual Artifact HTTP authoring: the missing product path closed (done)
+
+Phase 7 closed the *delivery* seam (VisualAsset → media → X). The remaining
+gap was authoring: no HTTP request could create an image Artifact, so the
+live application could never exercise the visual path end to end — every
+prior visual E2E stopped at a raw SQL insert standing in for the missing
+route. Phase 8 closes that gap with the smallest possible extension: one new
+generic route, reusing the existing format-driven Artifact contract.
+
+```
+POST /api/opportunities/:id/artifacts
+  { payload: { visualAssetId, altText?, caption?, role?, aspectRatio? },
+    attribution?, attributionReason? }
+        ↓ (format/channel taken from the Opportunity — never the request body,
+        ↓  so compatibility was already checked at Opportunity creation)
+createArtifact()
+  1. payloadSchemaRegistry.validate(format, payload)      — schema shape
+  2. payloadSchemaRegistry.mediaRefs(format, payload)      — Phase 7 mechanism
+  3. for each ref: getVisualAsset → exists? owned? "ready"?   (BEFORE any row)
+  4. insertArtifact (draft)
+  5. insertVisualAssetRef  — durable audit trail, same pinned revision
+        ↓
+approve → Schedule → Occurrence → Publication → resolvePublicationMedia
+        → X media upload → X post → Result           (Phase 7, unchanged)
+```
+
+**No new endpoint shape, no new subsystem.** `POST /opportunities/:id/artifacts`
+is the sibling of the existing `GET /opportunities/:id/artifacts`; it calls
+the same `createArtifact()` that generation-job completion already calls
+(`server/content/generation.ts`). The only change to `createArtifact` itself
+(`server/content/artifact.ts`) is the media-reference validation step above —
+reusing Phase 7's `payloadSchemaRegistry.mediaRefs()` declaration and the same
+existence/ownership/readiness checks `resolvePublicationMedia` already makes
+at publish time (defense in depth, not a second implementation). A payload
+naming no visual asset (e.g. `x_post`, `linkedin_post`) takes the identical
+path it always did — `mediaRefs()` returns `[]`.
+
+**Validation boundary**: schema validation runs first (a malformed payload
+never reaches a visual-asset lookup); an unresolved reference throws
+`ArtifactMediaReferenceError` **before** `insertArtifact` — no partial
+Artifact row, no Schedule, no Publication. Owner mismatch and nonexistent
+asset both produce the identical `"not found"` message (mapped to HTTP 404),
+so the route never leaks whether a foreign asset id exists — the same
+convention the existing `/artifacts/:id/visuals` route already followed.
+
+**Compatibility**: unchanged from Phase 7. `format`/`channel` come from the
+Opportunity, whose (format, channel) pair was already checked against the
+adapter registry at Opportunity creation (`channelSupportsFormat`). An image
+Artifact stays reusable independent of any one channel's support — the
+authoritative compatibility gate is still only at Schedule creation.
+
+**Approval / revision / idempotency**: all unchanged — the normal Artifact
+readiness machine (`draft → in_review → approved`), the normal revision chain
+(`/artifacts/:id/revise`), and the existing "repeated authoring creates a new
+draft revision" behavior (no synthetic idempotency was invented here; the
+route is a thin `createArtifact` call, same as generation, which has never
+promised de-duplication for human-initiated creation).
+
+**Live E2E — the previously-missing path, now exercised for real**
+(`script/e2e-visual.mjs`, extended): the image Artifact in this harness is now
+created via `POST /api/opportunities/:id/artifacts` over real HTTP (the raw
+SQL insert this harness used before is gone), then carried all the way through
+`approve → Schedule → dispatch → Publication → Result` against a real running
+app, real PostgreSQL (`cf_e2e_live`), real pg-boss, and a new minimal xQuick
+double (`/x/media`, `/x/tweets`) local to this harness — the only doubled
+boundary, exactly mirroring how `e2e/fixture/rss-fixture.mjs` doubles the same
+boundary for `e2e-live.mjs`. 13/13 checks pass, including: nonexistent/foreign
+VisualAsset rejected by the new route (404, before any row); the published
+Result carries `metrics.mediaCount === 1`; the final Artifact's payload still
+names the exact original `visualAssetId` after publication.
+
+**Verification**: `tsc` 0 errors; unit 278/278 (+6: image-authoring validation
+cases in `content.test.ts`); real PostgreSQL 117/117 (+4: authoring
+existence/owner/readiness/reuse cases in `visualPublication.dbtest.ts`, real
+rows); `test:e2e:visual` 13/13 (new: the HTTP authoring path itself);
+`test:e2e:live` regression unchanged at 79/79. Zero migrations — `Artifact`,
+`visual_assets`, `visual_asset_refs`, and the adapter registry already carried
+everything this phase needed.
+
+**Status labels**:
+- Visual generation: **IMPLEMENTED** (Phase 3, unchanged).
+- Visual Artifact HTTP authoring: **IMPLEMENTED** — the product path from an
+  external client request through to an approved, schedulable image Artifact.
+- X image/thumbnail delivery: **IMPLEMENTED** (Phase 7, unchanged; now proven
+  live from HTTP authoring rather than from a DB-seeded Artifact).
+- Carousel: **ARCHITECTURALLY READY / DEFERRED** (unchanged from Phase 7).
+- Real image-generation vendor: **DEFERRED** (unchanged; still the fixture
+  provider).
 - Threads / Instagram / LinkedIn media: **not attempted**, out of scope.
 
 ## Phase 6 — first non-X channel adapter: LinkedIn text publishing (done)

@@ -95,6 +95,7 @@ export {
   rejectArtifact,
   schedulableReadiness,
   submitArtifactForReview,
+  ArtifactMediaReferenceError,
   ArtifactNotFoundError,
   ArtifactStateError,
   InvalidArtifactPayloadError,

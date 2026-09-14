@@ -56,6 +56,18 @@ export class InvalidArtifactPayloadError extends Error {
   }
 }
 
+/** A visual media reference named by the payload does not resolve to a usable asset. */
+export class ArtifactMediaReferenceError extends Error {
+  constructor(
+    readonly format: string,
+    readonly visualAssetId: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ArtifactMediaReferenceError";
+  }
+}
+
 /** Provenance pointer for the research this content rests on (IDs, not copies). */
 export const attributionSchema = z.object({
   kind: z.literal("research_evidence"),
@@ -108,7 +120,37 @@ export async function createArtifact(
     ]);
   }
 
-  return deps.artifacts.insertArtifact({
+  // A payload naming a visual asset must resolve to a real, owned, ready
+  // asset BEFORE any Artifact row exists — never a partially-created row
+  // pointing at an invalid reference (Ticket 07 §media contract).
+  const mediaRefs = payloadSchemaRegistry.mediaRefs(input.format, validated);
+  const ownerId = input.userId ?? null;
+  for (const ref of mediaRefs) {
+    const asset = await deps.artifacts.getVisualAsset(ref.visualAssetId);
+    if (!asset) {
+      throw new ArtifactMediaReferenceError(
+        input.format,
+        ref.visualAssetId,
+        `visual asset ${ref.visualAssetId} not found`,
+      );
+    }
+    if (asset.userId !== null && asset.userId !== ownerId) {
+      throw new ArtifactMediaReferenceError(
+        input.format,
+        ref.visualAssetId,
+        `visual asset ${ref.visualAssetId} not found`,
+      );
+    }
+    if (asset.status !== "ready") {
+      throw new ArtifactMediaReferenceError(
+        input.format,
+        ref.visualAssetId,
+        `visual asset ${ref.visualAssetId} is "${asset.status}", not ready`,
+      );
+    }
+  }
+
+  const artifact = await deps.artifacts.insertArtifact({
     userId: input.userId ?? null,
     generationJobId: input.generationJobId,
     opportunityId: input.opportunityId,
@@ -121,6 +163,20 @@ export async function createArtifact(
     attribution,
     attributionReason: input.attributionReason ?? null,
   });
+
+  // The ref row is the durable audit trail (Phase 3); the payload above is
+  // what publication resolves. Both name the exact same pinned revision.
+  for (const ref of mediaRefs) {
+    await deps.artifacts.insertVisualAssetRef({
+      userId: ownerId,
+      artifactId: artifact.id,
+      visualAssetId: ref.visualAssetId,
+      role: ref.role ?? null,
+      position: ref.position,
+    });
+  }
+
+  return artifact;
 }
 
 /**
