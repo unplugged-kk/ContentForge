@@ -72,6 +72,7 @@ import {
   ScheduleInputError,
 } from "./scheduling";
 import { reconcileUnknownPublications } from "./publication";
+import { assembleContext } from "./context";
 import { getChannelAdapter } from "./adapters";
 import {
   createVisualGeneration,
@@ -1032,6 +1033,28 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const artifact = await deps.content.getArtifact(id);
       if (!artifact) return res.status(404).json({ message: "Artifact not found" });
       return res.json(await deps.content.listVisualAssetRefs(id));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Context assembly (inspection only — sources are authored through their
+  // existing owner-scoped surfaces: /api/profile, /api/vault, style profiles).
+  /**
+   * Owner-scoped preview of what `resolveGenerationPolicy` would currently
+   * assemble. Read-only: this never mutates a source and never affects a
+   * historical GenerationJob — it shows the SAME live state a *new*
+   * generation would freeze, nothing more.
+   */
+  router.get("/context", async (req, res, next) => {
+    try {
+      const userId = getUserId(req) ?? 1;
+      if (!deps.generation.contextReader) return res.json({ sources: [], contextHash: "no-context" });
+      const assembly = await assembleContext(userId, deps.generation.contextReader);
+      return res.json({
+        sources: assembly.sources.map((s) => ({ id: s.id, type: s.type, content: s.content, provenance: s.provenance })),
+        contextHash: assembly.contextHash,
+      });
     } catch (error) {
       return next(error);
     }

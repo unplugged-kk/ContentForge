@@ -1788,6 +1788,136 @@ const observed = {};
     },
   );
 
+  // ── 6c. PHASE 10 RED ARROWS (context assembly foundation) ───────────────────
+  phase("Phase 10: context assembly -> GenerationPolicy -> GenerationJob -> Artifact, context A vs B");
+
+  const ctxOwner = 1; // stories in this harness are seeded with user_id 1 throughout
+
+  await check(
+    "HTTP generation with real context A produces a policy/job whose frozen snapshot carries context A",
+    async () => {
+      const markerA = `${RUN}-CTX-MARKER-A`;
+      await q(
+        `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e context A', $2, true)`,
+        [ctxOwner, markerA],
+      );
+
+      const opp = await http("POST", "/api/opportunities", {
+        storyId,
+        concept: "context assembly probe A",
+        objective: "prove context shapes generation",
+        format: "x_post",
+        channel: "x",
+      });
+      assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+      const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+      assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+      const jobA = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 300, label: "context-A generation" },
+      );
+      assert(
+        jobA.policySnapshot?.systemPrompt?.includes(markerA),
+        "the frozen policy snapshot must actually contain context A's content",
+      );
+      observed.contextJobA = jobA;
+      observed.contextOpportunityId = opp.body.id;
+      return `job ${jobA.id} frozen with context A (policy ${jobA.policyId})`;
+    },
+  );
+
+  await check(
+    "context mutation: a SECOND job on the same Opportunity after context changes to B sees B, but job A's HTTP-visible snapshot is untouched",
+    async () => {
+      const markerB = `${RUN}-CTX-MARKER-B`;
+      await q(
+        `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e context B', $2, true)`,
+        [ctxOwner, markerB],
+      );
+
+      const gen = await http("POST", "/api/generation-jobs", {
+        opportunityId: observed.contextOpportunityId,
+        regenerate: true,
+      });
+      assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+      const jobB = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 300, label: "context-B generation" },
+      );
+      assert(jobB.policySnapshot?.systemPrompt?.includes(markerB), "job B must see the new context B");
+      assert(jobB.policyId !== observed.contextJobA.policyId, "a changed context must yield a different policy identity");
+
+      // Re-fetch job A over the SAME HTTP API — its frozen snapshot must be
+      // byte-identical to what it was before context B ever existed.
+      const reloadedA = await http("GET", `/api/generation-jobs/${observed.contextJobA.id}`);
+      assert(
+        JSON.stringify(reloadedA.body.policySnapshot) === JSON.stringify(observed.contextJobA.policySnapshot),
+        "job A's frozen snapshot must be unaffected by the later context mutation",
+      );
+      return `job ${jobB.id} sees context B; job ${observed.contextJobA.id} remains frozen at context A`;
+    },
+  );
+
+  await check(
+    "restart proof: a job queued before a context mutation, then executed after restart, still used the FROZEN context",
+    async () => {
+      const markerFrozen = `${RUN}-CTX-RESTART-FROZEN`;
+      await q(
+        `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e restart frozen', $2, true)`,
+        [ctxOwner, markerFrozen],
+      );
+      const opp = await http("POST", "/api/opportunities", {
+        storyId,
+        concept: "context restart probe",
+        objective: "prove frozen context survives restart",
+        format: "x_post",
+        channel: "x",
+      });
+      const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+      assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+
+      // The job is created (and its policy/context frozen) synchronously by
+      // this HTTP call, BEFORE the worker ever runs it — so mutating context
+      // now, then killing/restarting the app, proves the eventual execution
+      // still used the context frozen at creation time, not whatever exists
+      // after restart.
+      const markerAfter = `${RUN}-CTX-RESTART-AFTER`;
+      await q(
+        `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e restart after', $2, true)`,
+        [ctxOwner, markerAfter],
+      );
+
+      await killApp("SIGKILL");
+      await startApp();
+
+      const job = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 500, label: "post-restart context generation" },
+      );
+      assert(job.policySnapshot?.systemPrompt?.includes(markerFrozen), "must still carry the context frozen before restart");
+      assert(
+        !job.policySnapshot?.systemPrompt?.includes(markerAfter),
+        "must NEVER pick up context added after the job was queued",
+      );
+      return `job ${job.id} executed post-restart with the context frozen at queue time`;
+    },
+  );
+
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
 

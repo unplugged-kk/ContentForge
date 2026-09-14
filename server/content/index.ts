@@ -69,6 +69,21 @@ export {
 } from "./policy";
 
 export {
+  assembleContext,
+  createDatabaseContextReader,
+  EMPTY_CONTEXT_ASSEMBLY,
+  MAX_CHARS_PER_SOURCE,
+  MAX_STYLE_SOURCES,
+  MAX_TOTAL_CONTEXT_CHARS,
+  MAX_VAULT_SOURCES,
+  type ContextAssembly,
+  type ContextSource,
+  type ContextSourceRef,
+  type ContextSourceType,
+  type ContextStorageReader,
+} from "./context";
+
+export {
   getFormatProfile,
   hasFormatProfile,
   listFormatProfiles,

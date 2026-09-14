@@ -31,6 +31,7 @@ import {
   VoiceNotFoundError,
   type EffectiveGenerationRequest,
 } from "./policy";
+import { assembleContext, EMPTY_CONTEXT_ASSEMBLY, type ContextStorageReader } from "./context";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
 // ── Model gateway port ────────────────────────────────────────────────────────
@@ -86,6 +87,12 @@ export interface GenerationDeps {
   model: GenerationModelPort;
   /** Model id used when a request does not pin one (e.g. MODELS.TEXT). */
   defaultModel: string;
+  /**
+   * Ticket 10: resolves the canonical ContextAssembly. Optional so existing
+   * callers/tests that supply none behave exactly as before this phase
+   * (an empty assembly — no context block, no change to policy identity).
+   */
+  contextReader?: ContextStorageReader;
 }
 
 export interface CreateGenerationJobInput {
@@ -205,6 +212,12 @@ export async function createGenerationJob(
 
   const { story, context } = await loadGenerationContext(opportunity, deps);
 
+  // Ticket 10: resolved ONCE here, then frozen into the policy spec and the
+  // effective request — never re-read when the job later executes.
+  const contextAssembly = deps.contextReader
+    ? await assembleContext(opportunity.userId ?? null, deps.contextReader)
+    : EMPTY_CONTEXT_ASSEMBLY;
+
   const resolved = await resolveGenerationPolicy(
     composeGenerationPolicyInput(
       opportunity,
@@ -215,6 +228,7 @@ export async function createGenerationJob(
         audience: input.audience ?? null,
         constraints: input.constraints ?? {},
         model: input.model ?? null,
+        context: contextAssembly,
       },
       deps.defaultModel,
     ),

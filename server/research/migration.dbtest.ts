@@ -92,7 +92,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 45, `expected 45 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 13, "all thirteen migrations recorded");
+      assert.equal(await migrationCount(pool), 14, "all fourteen migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -184,7 +184,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 45, `expected 45 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 13, "0003-0012 recorded after upgrade");
+      assert.equal(await migrationCount(pool), 14, "0003-0013 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");

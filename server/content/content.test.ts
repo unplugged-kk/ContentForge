@@ -37,6 +37,7 @@ import {
   type PolicySpec,
 } from "./policy";
 import { getFormatProfile, hasFormatProfile } from "./formatProfiles";
+import { EMPTY_CONTEXT_ASSEMBLY } from "./context";
 import {
   approveArtifact,
   createArtifact,
@@ -390,6 +391,7 @@ describe("generation policy", () => {
       profile: getFormatProfile("x_post", "x")!,
       specHash: "a".repeat(64),
       created: false,
+      context: EMPTY_CONTEXT_ASSEMBLY,
     } as never;
     const ctx = {
       story: { id: 1, title: "Scheduling", insightBody: "policy surface", angles: [] },

@@ -189,6 +189,8 @@ export interface InsertPolicyRow {
   constraints: JsonRecord;
   modelPreferences: JsonRecord;
   specHash: string;
+  /** Ticket 10 provenance: `{ contextHash, sourceRefs }`. Never raw source bodies. */
+  contextSnapshot?: JsonRecord;
 }
 
 // ── visual generations / assets / refs ───────────────────────────────────────
@@ -712,6 +714,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         constraints: row.constraints,
         modelPreferences: row.modelPreferences,
         specHash: row.specHash,
+        contextSnapshot: row.contextSnapshot ?? {},
       })
       .onConflictDoNothing({ target: generationPolicies.specHash })
       .returning();

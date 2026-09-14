@@ -817,6 +817,13 @@ export const generationPolicies = pgTable(
     modelPreferences: jsonb("model_preferences").$type<Record<string, unknown>>().notNull().default({}),
     /** Deterministic hash of the resolved spec; the idempotency input. */
     specHash: varchar("spec_hash", { length: 64 }).notNull(),
+    /**
+     * Durable provenance of what ContextAssembly (Ticket 10) contributed:
+     * `{ contextHash, sourceRefs: [{id, type, provenance}] }`. Never raw
+     * source bodies — the frozen `policySnapshot` on GenerationJob is the
+     * reproducibility boundary; this is inspection/audit only.
+     */
+    contextSnapshot: jsonb("context_snapshot").$type<Record<string, unknown>>().notNull().default({}),
     /** active | archived */
     status: varchar("status", { length: 20 }).notNull().default("active"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),

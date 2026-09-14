@@ -21,6 +21,7 @@ import type { ContentTemplate, GenerationPolicy, Opportunity, Story, Voice } fro
 import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
 import { getFormatProfile, type FormatProfile } from "./formatProfiles";
 import { renderTemplateStructure, undeclaredVariables } from "./templateRender";
+import { EMPTY_CONTEXT_ASSEMBLY, type ContextAssembly, type ContextSourceRef } from "./context";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
 export class PolicyInputError extends Error {
@@ -70,6 +71,8 @@ export interface ResolvePolicyInput {
   /** Model id preference (providers stay infrastructure). */
   model?: string | null;
   name?: string | null;
+  /** Resolved once by the caller (Ticket 10) — this module never re-resolves it. */
+  context?: ContextAssembly;
 }
 
 export interface PolicyDeps {
@@ -84,6 +87,8 @@ export interface ResolvedPolicy {
   specHash: string;
   /** true when this call created the revision; false when an identical spec existed. */
   created: boolean;
+  /** Resolved context (Ticket 10) — carried through so `assembleEffectiveRequest` can render it. */
+  context: ContextAssembly;
 }
 
 /** Stable JSON (sorted keys) so hashes are order-independent. */
@@ -147,6 +152,8 @@ export interface PolicySpec {
   audience: string | null;
   constraints: JsonRecord;
   model: string | null;
+  /** Ticket 10: a changed context source must produce a different policy identity. */
+  contextHash: string;
 }
 
 export function policySpecHash(spec: PolicySpec): string {
@@ -161,6 +168,7 @@ export interface ComposePolicyOverrides {
   constraints?: JsonRecord;
   model?: string | null;
   name?: string | null;
+  context?: ContextAssembly;
 }
 
 /**
@@ -189,6 +197,7 @@ export function composeGenerationPolicyInput(
     constraints: overrides.constraints ?? {},
     model: overrides.model ?? defaultModel,
     name: overrides.name ?? null,
+    context: overrides.context,
   };
 }
 
@@ -251,6 +260,8 @@ export async function resolveGenerationPolicy(
     ...(input.constraints ?? {}),
   };
 
+  const context = input.context ?? EMPTY_CONTEXT_ASSEMBLY;
+
   const spec: PolicySpec = {
     format: input.format,
     channel: input.channel,
@@ -263,6 +274,7 @@ export async function resolveGenerationPolicy(
     audience: input.audience ?? null,
     constraints,
     model: input.model ?? null,
+    contextHash: context.contextHash,
   };
   const specHash = policySpecHash(spec);
 
@@ -270,8 +282,20 @@ export async function resolveGenerationPolicy(
   // Indexed lookup by the content-addressed identity (no full-table scan).
   const sameHash = await deps.content.getGenerationPolicyBySpecHash(specHash);
   if (sameHash) {
-    return { policy: sameHash, voice, template, profile, specHash, created: false };
+    return { policy: sameHash, voice, template, profile, specHash, created: false, context };
   }
+
+  // Unified provenance: everything that shaped this policy, in one list —
+  // the context sources plus the resolved voice/template identities. Voice/
+  // template keep their OWN hash fields on the policy row unchanged; this is
+  // inspection/audit only, never a second hashing mechanism.
+  const sourceRefs: ContextSourceRef[] = [
+    ...context.sourceRefs,
+    ...(voice ? [{ id: `voice:${voice.id}`, type: "voice" as const, provenance: `voices#${voice.id}` }] : []),
+    ...(template
+      ? [{ id: `template:${template.id}`, type: "template" as const, provenance: `content_templates#${template.id}` }]
+      : []),
+  ];
 
   const version = await deps.content.nextPolicyVersion(policyKey);
   const { policy, created } = await deps.content.findOrCreateGenerationPolicy({
@@ -288,9 +312,10 @@ export async function resolveGenerationPolicy(
     constraints,
     modelPreferences: input.model ? { model: input.model } : {},
     specHash,
+    contextSnapshot: { contextHash: context.contextHash, sourceRefs },
   });
 
-  return { policy, voice, template, profile, specHash, created };
+  return { policy, voice, template, profile, specHash, created, context };
 }
 
 // ── Effective request (the frozen per-job artifact of assembly) ───────────────
@@ -306,9 +331,11 @@ export interface EffectiveGenerationRequest {
   constraints: JsonRecord;
   systemPrompt: string;
   userPrompt: string;
-  inputHashes: { story: string; evidence: string; voice: string; template: string };
+  inputHashes: { story: string; evidence: string; voice: string; template: string; context: string };
   voiceId: number | null;
   templateId: number | null;
+  /** Frozen (Ticket 10) — the exact context that shaped this attempt, never re-read at execution time. */
+  contextSourceRefs: ContextSourceRef[];
 }
 
 export interface AssemblyContext {
@@ -376,7 +403,7 @@ export function assembleEffectiveRequest(
   context: AssemblyContext,
   model: string,
 ): EffectiveGenerationRequest {
-  const { policy, voice, template, profile } = resolved;
+  const { policy, voice, template, profile, context: contextAssembly = EMPTY_CONTEXT_ASSEMBLY } = resolved;
 
   // Declared template variables are filled deterministically from the request
   // context; anything declared but unsupplied is reported explicitly.
@@ -397,8 +424,11 @@ export function assembleEffectiveRequest(
     `Constraints: ${canonicalJson(policy.constraints)}`,
     renderVoice(voice),
     renderTemplate(template, templateValues),
+    contextAssembly.renderedBlock,
     "Rules: use only the supplied research evidence; never invent facts; keep attribution intact.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const evidenceBlock = context.evidence
     .slice(0, 8)
@@ -436,9 +466,11 @@ export function assembleEffectiveRequest(
       evidence: sha256(canonicalJson(context.evidence.map((e) => `${e.id}:${e.excerpt}`))),
       voice: resolved.specHash ? voiceContentHash(voice) : "none",
       template: templateContentHash(template),
+      context: contextAssembly.contextHash,
     },
     voiceId: voice?.id ?? null,
     templateId: template?.id ?? null,
+    contextSourceRefs: contextAssembly.sourceRefs,
   };
 }
 

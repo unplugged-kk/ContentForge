@@ -16,6 +16,7 @@ import { storyStorage } from "../story/service";
 import { z } from "zod";
 import { DatabaseContentStorage } from "./storage";
 import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
+import { createDatabaseContextReader } from "./context";
 import {
   runGenerationJob,
   type GenerationDeps,
@@ -86,6 +87,7 @@ export const generationDeps: GenerationDeps = {
   },
   model: createGatewayGenerationModel(),
   defaultModel: MODELS.TEXT,
+  contextReader: createDatabaseContextReader(db),
 };
 
 export const publicationDeps: PublicationDeps = {
