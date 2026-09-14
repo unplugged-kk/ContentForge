@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 6) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,16 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **259 passed / 0 failed** (58 suites) |
-| `npm test` | **259 passed** |
-| `npm run test:db` (real PostgreSQL) | **102 passed / 0 failed / 0 skipped** (13 suites) |
-| `npm run test:e2e:live` (real running app) | **75/75 across two consecutive full runs** — all 3 Phase 5 reconciliation checks green both times; a pre-existing, unrelated pg-boss/research-queue timing flake (documented before this phase) surfaced once per run in an earlier phase, never in reconciliation |
+| `npm run test:unit` | **266 passed / 0 failed** (59 suites) |
+| `npm test` | **266 passed** |
+| `npm run test:db` (real PostgreSQL) | **108 passed / 0 failed / 0 skipped** (14 suites) |
+| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — all 4 Phase 6 LinkedIn checks green (golden path, ambiguous→unknown, reconcile→published, cross-channel independence), plus every Phase 4/5 check unaffected |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **10 passed / 0 failed** |
 | Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 252 unit / 96 DB / 72 live E2E.
+Baseline before this phase: 259 unit / 102 DB / 75-of-75 live E2E.
 
 ---
 
@@ -77,6 +77,64 @@ materialization idempotent).
   (bounded by count), series exhausted; 3 Publications → 3 Results, all
   pinned to the one approved Artifact revision, research row counts
   unchanged.
+
+## LinkedIn channel adapter (new in this phase — Phase 6)
+
+```
+same canonical payload ({ text }) → format registered per (format, channel)
+   x_post @ x  (280 chars)   |   linkedin_post @ linkedin  (3000 chars)
+                     ↓ Publication.channel := Artifact.channel (unchanged)
+              getChannelAdapter(channel) — registry lookup, no core branch
+```
+
+First non-X `ChannelAdapter`, proving the abstraction genuinely generalizes.
+No new subsystem, no new table, no migration.
+
+- **Format, not a channel flag**: `linkedin_post` is a new payload-schema
+  registration (`{ text }`, 3000-char limit) — the same canonical shape as
+  `x_post`, just a different platform limit. `KNOWN_FORMAT_CHANNELS` and
+  `formatProfiles` already keyed by `(format, channel)`, so this required no
+  core change, only a registration.
+- **Transport**: `server/social/linkedin.ts` calls LinkedIn's real Posts API
+  (`POST /rest/posts`, `Authorization: Bearer`, `LinkedIn-Version`,
+  `X-Restli-Protocol-Version`). Unlike xQuick, it is synchronous — no
+  write-action/poll protocol.
+- **Ambiguity is network-level, not protocol-level**: the only ambiguous case
+  is the transport failing before a response arrives (timeout/reset).
+  `LinkedInPublishAmbiguousError` carries `{ commentary, attemptedAt }` — the
+  durable handle reconciliation re-checks, since LinkedIn issues no
+  request/write-action id of its own.
+- **Reconciliation can confirm published, never confirm not-published.**
+  `reconcile()` re-lists the author's recent posts and matches on exact text;
+  a match resolves it (same Result row, same as X). A miss stays `unknown`
+  (the existing `null` contract) — LinkedIn's listing endpoint gives no
+  completeness guarantee, so absence is not proof of absence. This is an
+  honest provider-capability difference from X (xQuick's write-action status
+  is authoritative; LinkedIn's post listing is not) — a stuck-unknown
+  LinkedIn Publication is bounded by the same `MAX_RECONCILE_ATTEMPTS` (5)
+  rather than ever synthesizing a false "not published".
+- **No provider-side idempotency**: LinkedIn's Posts API has no
+  client-supplied dedup key — duplicate suppression is entirely
+  ContentForge's own (`Publication.idempotencyKey` unique constraint +
+  pg-boss queue dedup), documented as a boundary, not a provider guarantee.
+- **Cross-channel independence, honestly scoped**: `Publication.channel`
+  comes from `Artifact.channel`, fixed per Artifact row, so "one Artifact"
+  cannot literally target two channels. Proven at the level that matters —
+  two channel-specific Artifacts from the same Story/Opportunity lineage,
+  independently scheduled/leased/reconciled, with a failure in one never
+  touching the other.
+- **Credentials**: identical boundary to X —
+  `storage.getConnectedAccount("linkedin")` + env override
+  (`LINKEDIN_ACCESS_TOKEN`/`LINKEDIN_AUTHOR_URN`), never logged or returned.
+- **Verified live**: golden-path LinkedIn text post publishes with a real
+  provider URN (`urn:li:share:...`) as `externalId`; a write whose response
+  never arrives becomes `unknown` (never falsely published); reconciliation
+  discovers the post LinkedIn actually received and resolves the *same*
+  Result row; a LinkedIn and an X Publication from the same content lineage
+  evolve independently (one published, the other's activity never touches
+  it). Recurrence-through-LinkedIn (3 pinned Publications, one Artifact
+  revision, no regeneration) is proven against real Postgres
+  (`linkedin.dbtest.ts`), not repeated a second time in the live run.
 
 ## X publication reconciliation (new in this phase — Phase 5)
 
@@ -201,7 +259,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -224,21 +282,23 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   single-flight publication lease, exactly one Result per Publication, X
   adapter over the existing xQuick transport.
 - **Recurrence** (Phase 4): as above.
-- **X reconciliation** (this phase): as above.
+- **X reconciliation** (Phase 5): as above.
+- **LinkedIn channel adapter** (this phase): as above.
 - **Visuals** (Phase 3): as above.
 
 ## Architecturally ready (not built)
 
-Non-X format payload schemas beyond image/carousel/thumbnail, non-X channel
-adapters, URL/web ingestion expansion, real image vendors, `edit_image`
-production — each is a registration/implementation against an existing seam,
-not a new pipeline.
+Non-X format payload schemas beyond image/carousel/thumbnail, additional
+non-X/non-LinkedIn channel adapters (Threads, Instagram), URL/web ingestion
+expansion, real image vendors, `edit_image` production — each is a
+registration/implementation against an existing seam, not a new pipeline.
 
 ## Deferred (deliberately, unchanged)
 
 - Voice **style analysis** of the user's real posts; all authoring/editing **UI**.
 - Second Brain / Context Vault.
-- LinkedIn / Threads / Instagram and other non-X publishing.
+- Threads / Instagram and other non-X/non-LinkedIn publishing; LinkedIn
+  media/articles/video/comments beyond the single text-post format.
 - Analytics metric mappers.
 - last30days and Agent-Reach (behind the `SourceProvider` seam).
 - Billing, subscriptions, collaboration, notifications, large UI work.
@@ -263,6 +323,12 @@ not a new pipeline.
   mid-series → durable cursor resumes correctly; 3 concurrent dispatch ticks
   → exactly 3 occurrences, series exhausted; 3 Publications → 3 Results, all
   pinned to one Artifact revision, research row counts unchanged.
+- **LinkedIn channel adapter** (new): golden-path text post publishes with a
+  real provider URN as `externalId`; a response that never arrives becomes
+  `unknown` without ever being falsely published; reconciliation discovers
+  the post LinkedIn actually received and resolves the *same* Result row; a
+  LinkedIn and an X Publication from the same content lineage evolve
+  independently, one channel's activity never touching the other's state.
 - **Mixed-provider**: one directed job across `rss + reddit + hn + web` produced
   **8 sources / 8 evidence from 4 providers in one ResearchJob**.
 - **Autonomous discovery**: `rss + youtube` discover → 5 sources including the
@@ -310,12 +376,19 @@ not a new pipeline.
   left `unknown` permanently for an operator; xQuick's read-lookup fallback
   (`fetchTweetTextByIdViaOfficialApi`) depends on a configured read endpoint
   and is not exercised unless a `writeActionId` is unavailable.
+- **LinkedIn**: text posts only (no media/articles/video/comments/company
+  pages). No provider-side idempotency — duplicate suppression is entirely
+  ContentForge's own. Reconciliation can never safely confirm "not
+  published" (LinkedIn's post listing has no completeness guarantee); a
+  stuck-unknown Publication is bounded by the same 5-attempt limit as X
+  rather than ever resolved to a synthesized negative.
 
 ## Deferred (deliberately, unchanged)
 
-Second Brain / Context Vault, voice style analysis, all authoring UI, LinkedIn /
-Threads / Instagram publishing, billing, collaboration, notifications, analytics
-metric mappers, full iCalendar/RRULE recurrence.
+Second Brain / Context Vault, voice style analysis, all authoring UI, Threads /
+Instagram publishing, LinkedIn media/articles/video/comments, billing,
+collaboration, notifications, analytics metric mappers, full iCalendar/RRULE
+recurrence.
 
 ## Next boundary
 
