@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 8) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 9) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,20 +13,76 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **278 passed / 0 failed** (60 suites) |
-| `npm test` | **278 passed** |
-| `npm run test:db` (real PostgreSQL) | **117 passed / 0 failed / 0 skipped** (15 suites) |
-| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: HTTP Artifact authoring changes broke nothing in Phases 1–7 |
-| `npm run test:e2e:visual` (real running app, visual red arrows) | **13 passed / 0 failed** — now includes the HTTP-authored image → Schedule → Publication → X → Result golden path |
+| `npm run test:unit` | **290 passed / 0 failed** (64 suites) |
+| `npm test` | **290 passed** |
+| `npm run test:db` (real PostgreSQL) | **121 passed / 0 failed / 0 skipped** (18 suites) |
+| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: the generalized provider seam and the real image adapter broke nothing in Phases 1–8 |
+| `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed** — now includes standalone generation honoring a model preference, proven before any Artifact exists in the run |
 | Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 272 unit / 113 DB / 79-of-79 live E2E / 10-of-10 visual E2E.
+Baseline before this phase: 278 unit / 117 DB / 79-of-79 live E2E / 13-of-13 visual E2E.
 
 ---
 
-## Visual delivery (new in this phase — Phase 7)
+## Standalone media generation platform (new in this phase — Phase 9)
+
+**Media generation is a durable product capability, independent of Artifact
+— not an input to publishing.** This was mostly already true (Phase 3's
+`opportunityId` was already optional), Phase 9 makes it explicit and adds a
+real provider:
+
+```
+CreativeRequest (prompt/intent, modality, model preference)
+        ↓ POST /api/visual-generations  (Artifact-independent — always was)
+VisualGeneration (requested → generating → ready | failed)   [pg-boss]
+        ↓
+VisualProviderPort.generate() → AssetStoragePort.put() → VisualAsset (immutable)
+        ↓ (optional — a consumer relationship, never a requirement)
+visual_asset_refs → Artifact → approval → Schedule → Publication → Result
+```
+
+- **`VisualAsset`/`VisualGeneration` names retained** — they already satisfy
+  "an independently owned generated media object with stable identity"; this
+  is generalization, not a rename.
+- **Modality, without three abstractions**: `VisualCapability` gains
+  `generate_video`/`generate_audio` as type-level readiness only (no
+  provider registers them); `modalityOfCapability()` derives `image | video
+  | audio` from whichever capability is actually named. One provider
+  registry, one request shape, one asset model — never
+  `ImageProviderPort`/`VideoProviderPort`/`AudioProviderPort`.
+- **Deterministic model selection**: an optional `model` field is checked
+  against the resolved provider's declared `models` list and rejected
+  (409, before any provider call) if unsupported; a provider that declares
+  no list accepts anything. No "pick the best model" inference.
+- **One real image provider**: `openaiImage.ts`, registered alongside the
+  fixture (never the default). Reuses the existing OpenAI-compatible client
+  already wired for text generation — deployment mode (real OpenAI, a
+  local/self-hosted compatible endpoint, anything else) is `AI_BASE_URL`
+  configuration, never a branch in business logic.
+- **Honest ambiguity ceiling**: OpenAI's image endpoint is synchronous with
+  no provider-side job id — an ambiguous timeout retries the same durable
+  `VisualGeneration` row (never a blind second generation) but can never be
+  reconciled to a confirmed outcome, the same category of limitation as
+  LinkedIn's `reconcile()` in Phase 6.
+- **Proved, real Postgres**: standalone generation with no
+  Opportunity/GenerationJob at all; a standalone asset loadable by id with
+  zero Artifact/Publication rows ever having existed for it (YouTube-
+  readiness); the SAME asset attached to two independently-created
+  Artifacts (reuse, no duplication); retry-vs-regenerate and revision
+  semantics unchanged from Phase 3.
+- **Real-provider execution**: implemented against the official
+  `images.generate` contract and exercised against a local HTTP double (its
+  actual request/response parsing is real); live network execution against
+  OpenAI itself is **DEFERRED** — no credential is available in this
+  environment.
+
+Full detail: `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 9.
+
+---
+
+## Visual delivery (Phase 7)
 
 ```
 VisualAsset (immutable revision) → image/thumbnail Artifact → approval → Schedule
@@ -364,7 +420,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7, 8)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -392,16 +448,20 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
 - **Visuals** (Phase 3): as above.
 - **Visual delivery** (Phase 7): single-image publication to X — as detailed
   above.
-- **Visual Artifact HTTP authoring** (this phase, Phase 8): image Artifacts
-  are now reachable through a real HTTP request — as detailed above.
+- **Visual Artifact HTTP authoring** (Phase 8): image Artifacts are reachable
+  through a real HTTP request — as detailed above.
+- **Standalone media generation platform** (this phase, Phase 9): generation
+  is a durable capability independent of Artifact, with a generalized
+  provider seam and one real image provider — as detailed above.
 
 ## Architecturally ready (not built)
 
 Carousel/multi-image publishing (contract already N-capable; X's adapter
-deliberately does not declare support), additional non-X/non-LinkedIn
-channel adapters (Threads, Instagram), URL/web ingestion expansion, real
-image vendors, `edit_image` production, LinkedIn media — each is a
-registration/implementation against an existing seam, not a new pipeline.
+deliberately does not declare support), video/audio modality (capability
+type exists, no provider registers it), additional non-X/non-LinkedIn
+channel adapters (Threads, Instagram), URL/web ingestion expansion,
+`edit_image` production, LinkedIn media — each is a registration/
+implementation against an existing seam, not a new pipeline.
 
 ## Deferred (deliberately, unchanged)
 
@@ -440,6 +500,14 @@ registration/implementation against an existing seam, not a new pipeline.
   before any Artifact row exists; the published Result carries
   `metrics.mediaCount === 1` and the Artifact's payload still names the
   exact original `visualAssetId` after publication.
+- **Standalone media generation** (new, Phase 9 — `test:e2e:visual`, 14/14):
+  `POST /api/visual-generations` with an explicit `model` preference
+  produces a `ready` asset through the real HTTP route, real pg-boss worker,
+  and real storage — with no Opportunity, GenerationJob, Artifact, Schedule,
+  or Publication anywhere in that path. Real Postgres additionally proves
+  the same asset attaching to two independently-created Artifacts without
+  duplication, and loading by id with zero content-object references at all
+  (the YouTube-readiness proof).
 - Golden path: research → Story → Opportunity → policy → job → Artifact →
   approval → Schedule → Occurrence → Publication → X adapter → Result.
 - **X reconciliation** (new): ambiguous write → `unknown` (never falsely
@@ -464,7 +532,7 @@ registration/implementation against an existing seam, not a new pipeline.
   YouTube feed path.
 - **SSRF boundary in the live app**: a `169.254.169.254` metadata URL →
   permanent failure, 0 sources, 0 evidence.
-- **Visual lifecycle** (also covered by dedicated `test:e2e:visual`, 13/13):
+- **Visual lifecycle** (also covered by dedicated `test:e2e:visual`, 14/14):
   durable generation → PNG asset → revision chain → Artifact attach → approval.
   Duplicate delivery → one asset; explicit regeneration → new revision; transient
   failure → retry; invalid output → terminal with nothing persisted; queued
@@ -488,9 +556,11 @@ registration/implementation against an existing seam, not a new pipeline.
 - **Recurrence**: the `every:<n><unit>` grammar is fixed-interval only — no
   calendar-aware recurrence (e.g. "every Monday at 9am local"), since nothing
   in the existing Schedule model resolved wall-clock/DST semantics either.
-- **Visuals**: the durable pipeline is complete but the only producer is the
-  deterministic fixture — **no real image vendor is wired**. There is no editor
-  UI, no brand-asset system, and no sizing/derivation policy.
+- **Visuals**: a real image provider (OpenAI-compatible) is implemented
+  (Phase 9), but **no credential is available in this environment**, so it
+  has never executed against real network traffic — only against a local
+  HTTP double. Video/audio remain capability-ready, not implemented. There
+  is no editor UI, no brand-asset system, and no sizing/derivation policy.
 - **Reddit**: provider and credentialed seam implemented and tested, but Reddit
   returns **403 to anonymous scripted clients** on many networks. Production use
   needs `REDDIT_ACCESS_TOKEN`; the app never performs or rotates OAuth.
