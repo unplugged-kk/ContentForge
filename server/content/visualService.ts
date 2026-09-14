@@ -19,6 +19,7 @@ import type { ContentStoragePort, JsonRecord } from "./storage";
 import {
   getVisualProvider,
   hashIntent,
+  resolveProviderModel,
   validateVisualOutput,
   visualGenerationIdempotencyKey,
   InvalidVisualInputError,
@@ -50,6 +51,8 @@ export const createVisualGenerationSchema = z.object({
   providerId: z.string().trim().min(1).max(80).default("local-fixture"),
   capability: z.enum(["generate_image", "edit_image", "generate_slide"]).default("generate_image"),
   intent: z.record(z.unknown()),
+  /** Explicit model preference (Phase 9 §9) — resolved deterministically against `provider.models`. */
+  model: z.string().trim().min(1).max(120).optional(),
   role: z.string().trim().max(60).optional(),
   altText: z.string().trim().max(500).optional(),
   regenerate: z.boolean().optional(),
@@ -92,12 +95,16 @@ export async function createVisualGeneration(
   if (!provider.capabilities.includes(body.capability)) {
     throw new VisualCapabilityUnsupportedError(body.providerId, body.capability);
   }
+  // Deterministic, capability-based — never "pick the best model" (Phase 9 §9).
+  // Fails before any provider call, same as the capability check above.
+  resolveProviderModel(provider, body.model);
 
   const intent: JsonRecord = {
     ...body.intent,
     aspectRatio: body.intent.aspectRatio ?? "1:1",
     ...(body.role ? { role: body.role } : {}),
     ...(body.altText ? { altText: body.altText } : {}),
+    ...(body.model ? { modelPreference: body.model } : {}),
   };
 
   const regenerationNonce = body.regenerate
@@ -165,12 +172,16 @@ export async function runVisualGeneration(
     if (!provider.capabilities.includes((generation.capability ?? "") as never)) {
       throw new VisualCapabilityUnsupportedError(generation.providerId ?? "?", generation.capability ?? "?");
     }
+    const modelPreference =
+      ((generation.intent ?? {}) as JsonRecord).modelPreference as string | undefined ?? null;
+    resolveProviderModel(provider, modelPreference);
 
     const output: VisualGenerationOutput = await provider.generate({
       kind: generation.kind as VisualKind,
       capability: generation.capability as never,
       snapshot: (generation.requestSnapshot ?? {}) as JsonRecord,
       correlationId: generation.correlationId,
+      model: modelPreference,
     });
 
     // Validate BEFORE anything durable (untrusted provider output).

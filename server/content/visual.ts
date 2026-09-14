@@ -16,8 +16,32 @@ import type { VisualAsset, VisualGeneration } from "@shared/schema";
 import { JobFailure, describeError } from "../jobs/failures";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
+// ── Media modality (Phase 9) ───────────────────────────────────────────────────
+/**
+ * The generation domain (Phase 3, generalized in Phase 9) is provider-agnostic
+ * across modality, not image-only forever. `image` is the only capability set
+ * with a real, registered producer; `video`/`audio` are declared here so a
+ * future provider and format can register against the SAME registry, request
+ * shape, and asset model — never a second, parallel abstraction.
+ */
+export type MediaModality = "image" | "video" | "audio";
+
+/** Derives modality from the capability a provider/request names. */
+export function modalityOfCapability(capability: VisualCapability): MediaModality {
+  if (capability === "generate_video") return "video";
+  if (capability === "generate_audio") return "audio";
+  return "image";
+}
+
 // ── Visual provider contract ──────────────────────────────────────────────────
-export type VisualCapability = "generate_image" | "edit_image" | "generate_slide";
+export type VisualCapability =
+  | "generate_image"
+  | "edit_image"
+  | "generate_slide"
+  // Declared for capability-readiness only (Phase 9 §5/§23/§24) — no provider
+  // registers these yet, and none may claim to without a real implementation.
+  | "generate_video"
+  | "generate_audio";
 
 export interface VisualGenerationRequest {
   kind: "image" | "carousel_slide" | "thumbnail";
@@ -25,6 +49,8 @@ export interface VisualGenerationRequest {
   /** Frozen provider request (params + prompt). No business-table access. */
   snapshot: JsonRecord;
   correlationId: string;
+  /** Explicit model preference, already validated against `provider.models`. */
+  model?: string | null;
 }
 
 export interface VisualGenerationOutput {
@@ -46,7 +72,25 @@ export interface VisualProviderPort {
   readonly providerId: string;
   readonly providerVersion: string;
   readonly capabilities: readonly VisualCapability[];
+  /**
+   * Explicit capability declarations (Phase 9 §7) beyond the capability set
+   * above. All optional — a provider that omits them still works exactly as
+   * before; `modalities` defaults to deriving one entry per declared
+   * capability via `modalityOfCapability` when absent. Selection never infers
+   * capability from a provider's name/id.
+   */
+  readonly modalities?: readonly MediaModality[];
+  /** Models this provider can be asked for by name (`model` on the request). */
+  readonly models?: readonly string[];
+  /** Whether `generate()` returns the final output synchronously (default true). */
+  readonly synchronous?: boolean;
   generate(request: VisualGenerationRequest): Promise<VisualGenerationOutput>;
+}
+
+/** The modalities a provider actually supports (declared, or derived from capabilities). */
+export function providerModalities(provider: VisualProviderPort): readonly MediaModality[] {
+  if (provider.modalities) return provider.modalities;
+  return Array.from(new Set(provider.capabilities.map(modalityOfCapability)));
 }
 
 export class VisualProviderNotRegisteredError extends Error {
@@ -63,6 +107,30 @@ export class VisualCapabilityUnsupportedError extends Error {
   ) {
     super(`Visual provider "${providerId}" does not support "${capability}"`);
     this.name = "VisualCapabilityUnsupportedError";
+  }
+}
+
+/** A requested model preference is not one the resolved provider declares. */
+export class VisualModelUnsupportedError extends Error {
+  constructor(
+    readonly providerId: string,
+    readonly model: string,
+  ) {
+    super(`Visual provider "${providerId}" does not support model "${model}"`);
+    this.name = "VisualModelUnsupportedError";
+  }
+}
+
+/**
+ * Deterministic model resolution (Phase 9 §9): a provider that declares no
+ * `models` list accepts any model string (it decides what to do with it); a
+ * provider that DOES declare one rejects anything outside it, before any
+ * provider call. No "pick the best model" inference.
+ */
+export function resolveProviderModel(provider: VisualProviderPort, model: string | null | undefined): void {
+  if (!model) return;
+  if (provider.models && !provider.models.includes(model)) {
+    throw new VisualModelUnsupportedError(provider.providerId, model);
   }
 }
 

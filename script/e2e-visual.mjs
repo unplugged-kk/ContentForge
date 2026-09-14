@@ -494,6 +494,26 @@ async function killApp(signal = "SIGKILL") {
     return "undeclared capability refused";
   });
 
+  phase("Phase 9: standalone media generation is the primary path — no Artifact anywhere above this line");
+  await check("standalone generation accepts an explicit model preference through the real HTTP route", async () => {
+    const res = await http("POST", "/api/visual-generations", {
+      kind: "image",
+      providerId: "local-fixture",
+      model: "fixture-model",
+      intent: { subject: `${RUN} model preference probe`, aspectRatio: "1:1" },
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    const ready = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${res.body.id}`);
+        return r.body.status === "ready" ? r.body : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 300, label: "model-preference generation ready" },
+    );
+    assert(Number.isInteger(ready.visualAssetId), "no asset produced with a model preference set");
+    return `generation ${res.body.id} honored model preference, asset ${ready.visualAssetId}`;
+  });
+
   phase("Restart/recovery: queued visual generation survives SIGKILL");
   await check("a queued visual generation survives a restart and completes", async () => {
     const res = await http("POST", "/api/visual-generations", {

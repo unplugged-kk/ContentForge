@@ -53,6 +53,9 @@ import {
 const CONNECTION = process.env.TEST_DATABASE_URL;
 const describeDb = CONNECTION ? describe : describe.skip;
 const RUN = `vi${Date.now().toString(36)}`;
+// A sentinel owner id for Phase 9 standalone generation (no Story/Opportunity
+// chain to key cleanup off — see the `after()` hook below).
+const STANDALONE_USER = 900_000 + (Date.now() % 90_000);
 
 describeDb("visual intelligence (db)", () => {
   let pool: pg.Pool;
@@ -133,6 +136,17 @@ describeDb("visual intelligence (db)", () => {
       await db.delete(opportunities).where(inArray(opportunities.id, oppIds));
     }
     if (storyIds.length) await db.delete(stories).where(inArray(stories.id, storyIds));
+
+    // Standalone generations (Phase 9) have no Opportunity chain to key off.
+    const standaloneGenRows = await db
+      .select({ id: visualGenerations.id })
+      .from(visualGenerations)
+      .where(eq(visualGenerations.userId, STANDALONE_USER));
+    const standaloneGenIds = standaloneGenRows.map((r) => r.id);
+    if (standaloneGenIds.length) {
+      await db.delete(visualAssets).where(inArray(visualAssets.visualGenerationId, standaloneGenIds));
+      await db.delete(visualGenerations).where(inArray(visualGenerations.id, standaloneGenIds));
+    }
     await pool.end().catch(() => {});
   });
 
@@ -553,5 +567,137 @@ describeDb("visual intelligence (db)", () => {
     assert.ok(!(ALLOWED_VISUAL_MIMES as readonly string[]).includes("image/svg+xml"));
     assert.ok(!(ALLOWED_VISUAL_MIMES as readonly string[]).includes("application/octet-stream"));
     assert.ok(!(getVisualProvider("local-fixture").capabilities as readonly string[]).includes("edit_image"));
+  });
+
+  // ── Phase 9: standalone generation — no Story/Opportunity/Artifact ─────────────
+  describe("standalone media generation (Phase 9) — independent of Artifact/Publication", () => {
+    it("generates a durable asset from a bare prompt, no opportunityId/generationJobId at all", async () => {
+      const deps = visualDeps();
+      const { generation, created } = await createVisualGeneration(
+        STANDALONE_USER,
+        { kind: "image", intent: { subject: `${RUN} standalone hero`, aspectRatio: "1:1" } },
+        deps,
+      );
+      assert.equal(created, true);
+      assert.equal(generation.opportunityId, null);
+      assert.equal(generation.generationJobId, null);
+
+      const run = await runVisualGeneration(generation.id, deps);
+      assert.equal(run.status, "ready");
+      assert.ok(run.visualAssetId);
+
+      const asset = await content().getVisualAsset(run.visualAssetId!);
+      assert.equal(asset?.userId, STANDALONE_USER);
+      assert.equal(asset?.status, "ready");
+    });
+
+    it("(YouTube-readiness) a standalone asset is loadable by id with zero Artifact/Publication rows referencing it", async () => {
+      const deps = visualDeps();
+      const { generation } = await createVisualGeneration(
+        STANDALONE_USER,
+        { kind: "image", intent: { subject: `${RUN} standalone youtube-ready`, aspectRatio: "16:9" } },
+        deps,
+      );
+      const run = await runVisualGeneration(generation.id, deps);
+      const assetId = run.visualAssetId!;
+
+      const refsForAsset = await db
+        .select({ id: visualAssetRefs.id })
+        .from(visualAssetRefs)
+        .where(eq(visualAssetRefs.visualAssetId, assetId));
+      assert.equal(refsForAsset.length, 0, "no Artifact references this asset");
+
+      // A hypothetical future consumer (YouTube workflow, or anything else)
+      // needs nothing but the id — proving the asset's identity does not
+      // depend on Artifact or Publication ever having existed.
+      const loaded = await content().getVisualAsset(assetId);
+      assert.ok(loaded);
+      assert.equal(loaded!.id, assetId);
+    });
+
+    it("reuse: the same standalone asset attaches to two separate Artifacts without duplicating bytes", async () => {
+      const deps = visualDeps();
+      const { generation } = await createVisualGeneration(
+        STANDALONE_USER,
+        { kind: "image", intent: { subject: `${RUN} standalone reuse`, aspectRatio: "1:1" } },
+        deps,
+      );
+      const run = await runVisualGeneration(generation.id, deps);
+      const assetId = run.visualAssetId!;
+
+      const { opportunity: oppA } = await seedOpportunity("reuse-a");
+      const { opportunity: oppB } = await seedOpportunity("reuse-b");
+      const store = content();
+      const artifactA = await createArtifact(
+        {
+          userId: STANDALONE_USER,
+          generationJobId: null,
+          opportunityId: oppA.id,
+          format: "x_post",
+          channel: "x",
+          payload: { text: `${RUN} artifact A` },
+          attribution: [],
+          attributionReason: "reuse test",
+        },
+        { artifacts: store },
+      );
+      const artifactB = await createArtifact(
+        {
+          userId: STANDALONE_USER,
+          generationJobId: null,
+          opportunityId: oppB.id,
+          format: "x_post",
+          channel: "x",
+          payload: { text: `${RUN} artifact B` },
+          attribution: [],
+          attributionReason: "reuse test",
+        },
+        { artifacts: store },
+      );
+      await store.insertVisualAssetRef({ userId: STANDALONE_USER, artifactId: artifactA.id, visualAssetId: assetId, role: "hero", position: 0 });
+      await store.insertVisualAssetRef({ userId: STANDALONE_USER, artifactId: artifactB.id, visualAssetId: assetId, role: "hero", position: 0 });
+
+      const refsForAsset = await db
+        .select({ artifactId: visualAssetRefs.artifactId })
+        .from(visualAssetRefs)
+        .where(eq(visualAssetRefs.visualAssetId, assetId));
+      assert.deepEqual(
+        refsForAsset.map((r) => r.artifactId).sort((a, b) => a - b),
+        [artifactA.id, artifactB.id].sort((a, b) => a - b),
+        "one asset, two independent Artifact references — never a duplicated asset row",
+      );
+      const assetRows = await db.select({ id: visualAssets.id }).from(visualAssets).where(eq(visualAssets.id, assetId));
+      assert.equal(assetRows.length, 1);
+    });
+  });
+
+  // ── Phase 9: deterministic model selection ─────────────────────────────────────
+  describe("model selection (Phase 9 §9) — capability-based, resolved before any provider call", () => {
+    it("accepts a model the provider declares, and rejects one it does not, before generation", async () => {
+      const deps = visualDeps();
+      registerVisualProvider({
+        ...createFixtureVisualProvider({ providerId: "fixture-with-models" }),
+        models: ["fixture-model-a"],
+      });
+
+      const ok = await createVisualGeneration(
+        STANDALONE_USER,
+        { kind: "image", providerId: "fixture-with-models", model: "fixture-model-a", intent: { subject: `${RUN} model ok` } },
+        deps,
+      );
+      assert.ok(ok.generation.id);
+
+      await assert.rejects(
+        () =>
+          createVisualGeneration(
+            STANDALONE_USER,
+            { kind: "image", providerId: "fixture-with-models", model: "not-a-real-model", intent: { subject: `${RUN} model bad` } },
+            deps,
+          ),
+        /does not support model/,
+      );
+
+      registerVisualProvider(createFixtureVisualProvider({ providerId: "local-fixture" }));
+    });
   });
 });

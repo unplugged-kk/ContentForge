@@ -12,13 +12,17 @@ import {
   assertSafeStorageKey,
   createLocalAssetStorage,
   hashIntent,
+  modalityOfCapability,
+  providerModalities,
   registerVisualProvider,
+  resolveProviderModel,
   getVisualProvider,
   hasVisualProvider,
   resetVisualProviders,
   validateVisualOutput,
   visualGenerationIdempotencyKey,
   InvalidVisualInputError,
+  VisualModelUnsupportedError,
   VisualProviderNotRegisteredError,
 } from "./visual";
 import { createFixtureVisualProvider } from "./visualFixture";
@@ -115,6 +119,43 @@ describe("visual provider registry", () => {
     assert.equal(out.mime, "image/png");
     assert.ok(out.bytes.length > 0);
     assert.equal(fixture.calls(), 1);
+  });
+});
+
+describe("media modality (Phase 9 §5) — provider-agnostic capability model", () => {
+  it("derives modality from capability without assuming image-only forever", () => {
+    assert.equal(modalityOfCapability("generate_image"), "image");
+    assert.equal(modalityOfCapability("edit_image"), "image");
+    assert.equal(modalityOfCapability("generate_slide"), "image");
+    assert.equal(modalityOfCapability("generate_video"), "video");
+    assert.equal(modalityOfCapability("generate_audio"), "audio");
+  });
+
+  it("providerModalities derives from capabilities when a provider declares none", () => {
+    const fixture = createFixtureVisualProvider();
+    assert.deepEqual(providerModalities(fixture), ["image"]);
+  });
+
+  it("providerModalities respects an explicit declaration over the derived default", () => {
+    const provider = {
+      ...createFixtureVisualProvider(),
+      modalities: ["image", "video"] as const,
+    };
+    assert.deepEqual(providerModalities(provider), ["image", "video"]);
+  });
+});
+
+describe("deterministic model selection (Phase 9 §9) — capability-based, never inferred", () => {
+  it("accepts any model when the provider declares no model list", () => {
+    const fixture = createFixtureVisualProvider();
+    assert.doesNotThrow(() => resolveProviderModel(fixture, "anything"));
+    assert.doesNotThrow(() => resolveProviderModel(fixture, undefined));
+  });
+
+  it("rejects a model outside the provider's declared list, before any provider call", () => {
+    const provider = { ...createFixtureVisualProvider(), models: ["fixture-model-a", "fixture-model-b"] };
+    assert.doesNotThrow(() => resolveProviderModel(provider, "fixture-model-a"));
+    assert.throws(() => resolveProviderModel(provider, "gpt-nonexistent"), VisualModelUnsupportedError);
   });
 });
 

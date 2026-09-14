@@ -31,6 +31,7 @@ import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider } from "./visualFixture";
+import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { runVisualGeneration } from "./visualService";
 import cron from "node-cron";
 
@@ -54,6 +55,14 @@ export function registerBuiltinVisualProviders(): void {
       failMode: (process.env.VISUAL_PROVIDER_FAIL_MODE as "none" | "transient" | "permanent" | "invalid" | undefined) ?? "none",
     }),
   );
+  // Real image provider (Phase 9), registered alongside the fixture — never
+  // the default (`providerId` still defaults to "local-fixture" on every
+  // request), so nothing changes for existing callers unless they explicitly
+  // ask for it. Uses the same OpenAI-compatible client every text-generation
+  // call already depends on (`server/ai/config.ts`), so deployment mode
+  // (OpenAI, local/self-hosted, any compatible endpoint) is AI_BASE_URL
+  // configuration, never a branch in this file.
+  registerVisualProvider(createOpenAiImageProvider());
 }
 
 export interface VisualRunDeps {

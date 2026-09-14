@@ -156,6 +156,121 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 9 — standalone media generation platform (done, image; video/audio capability-ready)
+
+**The architectural shift**: generated media is a durable product capability
+independent of Artifact, not an input to publishing. This was mostly already
+true — Phase 3's `VisualIntent → VisualProviderPort → VisualGeneration →
+VisualAsset` never required a Story/Opportunity/Artifact (`opportunityId` was
+already optional on `createVisualGeneration`, and `POST /api/visual-generations`
+already worked with none). Phase 9 makes that explicit, generalizes the
+provider seam to be modality-aware and model-selectable, and adds the first
+real (non-fixture) provider. `VisualAsset`/`VisualGeneration` are RETAINED as
+names — they already satisfy "an independently owned generated media object
+with stable identity" (§16 of the mission), so this is not a rename.
+
+```
+CreativeRequest (prompt/intent, modality, model preference)
+        ↓ POST /api/visual-generations  (already Artifact-independent)
+createVisualGeneration(): schema validate → capability check → model check
+        ↓ (all BEFORE any provider call)
+VisualGeneration (requested → generating → ready | failed)   [pg-boss visual.run]
+        ↓
+VisualProviderPort.generate() → AssetStoragePort.put() → VisualAsset (immutable revision)
+        ↓ (optional, a consumer relationship — never required)
+visual_asset_refs → Artifact → approval → Schedule → Publication → Result
+```
+
+**Provider abstraction, generalized, not duplicated**: `VisualProviderPort`
+(unchanged shape) gains OPTIONAL capability-declaration fields —
+`modalities?`, `models?`, `synchronous?` — so an existing provider that omits
+them behaves exactly as before. `VisualCapability` gains `generate_video` /
+`generate_audio` as TYPE-LEVEL readiness only; no provider registers them, and
+`modalityOfCapability()` derives `image | video | audio` from whichever
+capability a provider/request actually names — one registry, one capability
+model, never `ImageProviderPort`/`VideoProviderPort`/`AudioProviderPort`.
+
+**Deterministic model selection** (`resolveProviderModel` in
+`server/content/visual.ts`): a `model` field on the generation request is
+checked against the resolved provider's declared `models` list — rejected
+with `VisualModelUnsupportedError` (HTTP 409) BEFORE any provider call when
+declared and unsupported; a provider that declares no `models` list accepts
+whatever it's given (its own business). No "pick the best model" inference,
+anywhere. The model preference folds into `intent.modelPreference`, so it
+participates in the existing idempotency hash exactly like `role`/`altText`
+already did — no second idempotency mechanism.
+
+**One real image provider**: `server/content/visualProviders/openaiImage.ts`,
+registered alongside the fixture in `registerBuiltinVisualProviders()` (never
+the default — `providerId` still defaults to `"local-fixture"` for every
+existing caller). It reuses the project's EXISTING OpenAI-compatible client
+(`server/ai/config.ts`, already used for text generation) — so deployment
+mode (real OpenAI, a local/self-hosted OpenAI-compatible endpoint, any other
+compatible host) is `AI_BASE_URL` configuration, never a branch in this file
+or in core business logic. Calls the official `images.generate` contract,
+decodes whichever shape the response carries (`b64_json` or `url`), and
+classifies failures into the existing transient/permanent taxonomy (429/5xx/
+timeout → transient; 400/401/403 → permanent).
+
+**Honest ambiguity ceiling**: OpenAI's `images.generate` is synchronous with
+no provider-side job id to poll — unlike xQuick's write-actions or LinkedIn's
+provider lookups, an ambiguous outcome (request left the process, response
+never arrived) cannot be reconciled here. A timeout is classified transient
+and retried as the SAME durable `VisualGeneration` row (never a blind second
+generation), but "did the upstream actually produce an image before the
+timeout" can never be answered — this is a real provider-capability ceiling,
+documented rather than papered over, the same category as LinkedIn's
+`reconcile()` in Phase 6.
+
+**Standalone generation, ownership, reuse, revision — all proven, none new**:
+- Standalone: `visual.dbtest.ts` now proves `createVisualGeneration` with
+  neither `opportunityId` nor `generationJobId` produces a durable, owner-
+  scoped, `ready` asset.
+- YouTube-readiness: a standalone asset loads by id with zero `visual_asset_refs`
+  rows and zero Artifact/Publication rows ever having existed for it — proving
+  a future non-publishing consumer needs nothing but the id.
+- Reuse: the SAME asset attaches to two independently-created Artifacts via
+  `insertVisualAssetRef` — one asset row, two references, never a duplicate.
+- Revision: unchanged from Phase 3 (`supersedes_id` chain, `createVisualAssetRevision`) —
+  regeneration never mutates an already-referenced asset.
+- Retry vs. regenerate: unchanged from Phase 3 — a transient provider failure
+  retries the same `VisualGeneration` row; `regenerate: true` (with a nonce)
+  is the only path to a new generation/asset revision.
+
+**Verification**: `tsc` 0 errors; unit 290/290 (+12: modality/model-selection
+primitives in `visual.test.ts`, the real provider's pure helpers + a local
+HTTP-double proof of its actual `images.generate` call in
+`openaiImage.test.ts`); real PostgreSQL 121/121 (+4: standalone generation,
+YouTube-readiness, reuse, model selection in `visual.dbtest.ts`);
+`test:e2e:visual` 14/14 (+1: standalone generation accepts a model preference
+through the real HTTP route, proven BEFORE any Artifact exists in the run);
+`test:e2e:live` regression unchanged. Zero migrations — `visual_generations.model`,
+`requestSnapshot` (jsonb), and `visual_assets.metadata` (jsonb) already carried
+everything this phase needed.
+
+**Real-provider execution status**: the adapter is implemented against the
+official `images.generate` contract and its actual HTTP request/response
+parsing is exercised against a local double (mission §38) — no real OpenAI
+credential is available in this environment, so live network execution
+against the real OpenAI API is **DEFERRED**, not claimed. Set `OPENAI_API_KEY`
+(or `AI_API_KEY`) and request `providerId: "openai-image"` to use it for real;
+nothing else changes.
+
+**Status labels**:
+- Standalone media generation (no Story/Opportunity/Artifact required):
+  **IMPLEMENTED** (Phase 3's existing seam, now explicit and proven).
+- Provider-agnostic capability model (modality, model selection, deployment
+  mode as configuration): **IMPLEMENTED**.
+- Real image-generation provider (OpenAI-compatible, official contract):
+  **IMPLEMENTED** against the contract; real network execution **DEFERRED**
+  (no credential in this environment).
+- Video / audio modality: **ARCHITECTURALLY READY** (capability type exists,
+  `modalityOfCapability` handles it) — **DEFERRED**, no provider registers it.
+- Artifact as an optional consumer of generated media: **IMPLEMENTED**
+  (unchanged relationship, now proven independent).
+- Carousel, Threads, Instagram, LinkedIn media, YouTube publishing: **not
+  attempted**, out of scope, unchanged.
+
 ## Phase 7 — visual delivery: single-image publication to X (done, image/thumbnail; carousel deferred)
 
 Extends the existing `Artifact → Schedule → Occurrence → Publication →
@@ -333,8 +448,8 @@ nothing in the five already-live-E2E-proven phases.
 - Carousel / multi-image delivery: **ARCHITECTURALLY READY** (N-capable
   contract, `channelSupportsFormat` correctly returns `false`) but
   **DEFERRED** — not implemented.
-- Real image-generation vendor: **DEFERRED**, unchanged from Phase 3 (still
-  the deterministic fixture provider).
+- Real image-generation vendor: implemented in Phase 9 (see above); real
+  network execution deferred there for the same reason (no credential here).
 - Live E2E for the image golden path specifically: closed in Phase 8 below.
 - Threads / Instagram / LinkedIn media: **not attempted**, out of scope.
 

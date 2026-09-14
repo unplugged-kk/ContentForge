@@ -81,6 +81,7 @@ import {
   createLocalAssetStorage,
   InvalidVisualInputError,
   VisualCapabilityUnsupportedError,
+  VisualModelUnsupportedError,
 } from "./visual";
 import {
   ChatInputError,
@@ -933,7 +934,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
         return res.status(400).json({ message: error.message });
       }
-      if (error instanceof VisualCapabilityUnsupportedError) {
+      if (error instanceof VisualCapabilityUnsupportedError || error instanceof VisualModelUnsupportedError) {
         return res.status(409).json({ message: error.message });
       }
       return next(error);
