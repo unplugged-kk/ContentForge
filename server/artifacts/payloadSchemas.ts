@@ -157,6 +157,21 @@ export const X_FORMAT_LIMITS = {
 } as const;
 
 /**
+ * LinkedIn text post payload — same canonical shape as `x_post` (a single body
+ * text), registered separately because the platform limit differs (LinkedIn's
+ * Posts API `commentary` field caps at 3000 characters, not 280).
+ */
+export const linkedinPostPayloadSchema = z.object({
+  text: z.string().trim().min(1).max(3000),
+});
+
+export type LinkedInPostPayload = z.infer<typeof linkedinPostPayloadSchema>;
+
+export const LINKEDIN_FORMAT_LIMITS = {
+  maxCharacters: 3000,
+} as const;
+
+/**
  * Visual payloads (Phase 3). Images reference a durable visual asset revision;
  * a carousel is an ordered sequence of per-slide references. Units keep every
  * slide independently addressable — a carousel is never flattened into one
@@ -211,6 +226,14 @@ payloadSchemaRegistry.register<XThreadPayload>({
   description: "X thread; ordered, unnumbered units",
   limits: { maxUnits: 25, maxCharacters: X_FORMAT_LIMITS.maxCharacters },
   schema: xThreadPayloadSchema,
+});
+
+payloadSchemaRegistry.register<LinkedInPostPayload>({
+  format: "linkedin_post",
+  version: 1,
+  description: "Single LinkedIn text post",
+  limits: { maxCharacters: LINKEDIN_FORMAT_LIMITS.maxCharacters },
+  schema: linkedinPostPayloadSchema,
 });
 
 payloadSchemaRegistry.register<ImagePayload>({

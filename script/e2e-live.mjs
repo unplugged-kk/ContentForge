@@ -125,7 +125,7 @@ let cookie = null;
 let csrfToken = null;
 
 async function http(method, urlPath, body) {
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     const headers = {};
     if (body !== undefined) headers["content-type"] = "application/json";
     if (cookie) headers["cookie"] = cookie;
@@ -196,6 +196,12 @@ async function startApp() {
       // scenario (1 attempt, no delay) rather than the 6x2s production default.
       XQUICK_WRITE_POLL_ATTEMPTS: "1",
       XQUICK_WRITE_POLL_DELAY_MS: "1",
+      // Phase 6: LinkedIn Posts API also points at the deterministic fixture
+      // (real REST contract, doubled transport only — see /rest/posts).
+      LINKEDIN_API_BASE_URL: FIXTURE_BASE,
+      LINKEDIN_ACCESS_TOKEN: "fixture-token",
+      LINKEDIN_AUTHOR_URN: "urn:li:person:cf_e2e",
+      LINKEDIN_TIMEOUT_MS: "3000",
       // Phase 2: point the real providers at the deterministic fixture. The
       // operator allowlist is what lets the SSRF-guarded providers reach it; it
       // is default-off in production and never derived from request input.
@@ -1617,6 +1623,168 @@ const observed = {};
       assert(occRows[0].c === 1, "confirmed-not-published reconciliation must never create a second Occurrence");
 
       return `publication ${pub2Id}: confirmed not published -> re-queued -> retried -> published (${finalRow.externalId})`;
+    },
+  );
+
+  // ── Phase 6: first non-X channel adapter (LinkedIn) ─────────────────────────
+  phase("Phase 6: LinkedIn text publishing -> same pipeline, real adapter boundary");
+
+  /** Same marker-scoping pattern as Phase 5's helper, targeting a linkedin_post Artifact. */
+  async function approvedLinkedInArtifactWithMarker(marker) {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "linkedin channel probe",
+      objective: "prove the adapter boundary is channel-agnostic",
+      format: "linkedin_post",
+      channel: "linkedin",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "linkedin-probe generation" },
+    );
+    await http("POST", `/api/artifacts/${done.artifactId}/submit-review`, {});
+    await http("POST", `/api/artifacts/${done.artifactId}/approve`, {});
+    const rev = await http("POST", `/api/artifacts/${done.artifactId}/revise`, {
+      baseArtifactId: done.artifactId,
+      payload: { text: marker },
+      attributionReason: "linkedin E2E marker text",
+    });
+    assert(rev.status === 201, `revise ${rev.status}: ${rev.text}`);
+    await http("POST", `/api/artifacts/${rev.body.id}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${rev.body.id}/approve`, {});
+    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return approved.body.id;
+  }
+
+  const liGoldenMarker = `${RUN}-linkedin-golden`;
+  const liGoldenPublicationId = await check(
+    "golden path: LinkedIn text post publishes through the SAME pipeline, externalId is a real provider URN",
+    async () => {
+      const artifactId = await approvedLinkedInArtifactWithMarker(liGoldenMarker);
+      const sched = await http("POST", "/api/schedules", { artifactId });
+      assert(sched.status === 201, `schedule ${sched.status}: ${sched.text}`);
+
+      const dispatch = await http("POST", "/api/publications/dispatch", {});
+      assert(dispatch.status === 200, `dispatch ${dispatch.status}: ${dispatch.text}`);
+      const mine = (dispatch.body.publications ?? []).find((p) => p.scheduleId === sched.body.id);
+      assert(mine, "no Publication was created for this Schedule");
+
+      const row = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${mine.id}`);
+          return res.body.state === "published" ? res.body : false;
+        },
+        { timeoutMs: 30_000, intervalMs: 1000, label: "linkedin publication reaches published" },
+      );
+      assert(row.channel === "linkedin", `channel=${row.channel}`);
+      assert(row.externalId?.startsWith("urn:li:share:"), `externalId=${row.externalId}`);
+      observed.linkedinGoldenExternalId = row.externalId;
+      return mine.id;
+    },
+  );
+
+  const liAmbiguousMarker = `${RUN}-linkedin-ambiguous`;
+  const liAmbiguousPublicationId = await check(
+    "a LinkedIn write whose response never arrives becomes `unknown`, never falsely published",
+    async () => {
+      const artifactId = await approvedLinkedInArtifactWithMarker(liAmbiguousMarker);
+      await fixturePost("/control/linkedin-mode", { mode: "network-fail", matchSubstring: liAmbiguousMarker });
+      const sched = await http("POST", "/api/schedules", { artifactId });
+      assert(sched.status === 201, `schedule ${sched.status}: ${sched.text}`);
+
+      const dispatch = await http("POST", "/api/publications/dispatch", {});
+      const mine = (dispatch.body.publications ?? []).find((p) => p.scheduleId === sched.body.id);
+      assert(mine, "no Publication was created for this Schedule");
+
+      const row = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${mine.id}`);
+          if (res.body.state === "failed" && res.body.result?.outcome === "unknown") return res.body;
+          if (res.body.state === "published") throw new Error("must not be falsely published while ambiguous");
+          return false;
+        },
+        { timeoutMs: 30_000, intervalMs: 3000, label: "linkedin publication reaches unknown" },
+      );
+      assert(row.result.externalId === null, "no external id may be recorded while unresolved");
+      const dbRow = (await q("select metrics from results where publication_id = $1", [mine.id]))[0];
+      assert(dbRow.metrics?.commentary === liAmbiguousMarker, "reconciliation hint must carry the exact pinned text");
+      assert(typeof dbRow.metrics?.attemptedAt === "string", "reconciliation hint must carry the attempt timestamp");
+      return mine.id;
+    },
+  );
+
+  await check(
+    "reconciliation discovers the LinkedIn post it actually received and resolves the SAME Result row",
+    async () => {
+      await fixturePost("/control/linkedin-record-post", { commentary: liAmbiguousMarker });
+      const beforeResultId = (
+        await q("select id from results where publication_id = $1", [liAmbiguousPublicationId])
+      )[0].id;
+
+      await http("POST", "/api/publications/dispatch", {});
+      const published = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${liAmbiguousPublicationId}`);
+          return res.body.state === "published" ? res : false;
+        },
+        { timeoutMs: 90_000, intervalMs: 5000, label: "reconciliation resolves the ambiguous LinkedIn publication" },
+      );
+      assert(published.body.externalId?.startsWith("urn:li:share:"), `externalId=${published.body.externalId}`);
+
+      const resultRows = await q("select id, outcome from results where publication_id = $1", [liAmbiguousPublicationId]);
+      assert(resultRows.length === 1, `expected exactly 1 Result row, got ${resultRows.length}`);
+      assert(resultRows[0].id === beforeResultId, "reconciliation must resolve the SAME Result row, not insert a second one");
+      assert(resultRows[0].outcome === "published", `outcome=${resultRows[0].outcome}`);
+      return `publication ${liAmbiguousPublicationId} resolved via reconciliation, Result row ${beforeResultId} unchanged in identity`;
+    },
+  );
+
+  await check(
+    "cross-channel independence: X and LinkedIn Publications from the same content lineage never affect each other",
+    async () => {
+      // Reuses the already-published golden-path LinkedIn Publication as one
+      // side of the pair; the other side is a fresh X Publication from the
+      // same story lineage.
+      const oppX = await http("POST", "/api/opportunities", {
+        storyId,
+        concept: "cross-channel x probe",
+        objective: "prove channel isolation",
+        format: "x_post",
+        channel: "x",
+      });
+      assert(oppX.status === 201, `opportunity ${oppX.status}: ${oppX.text}`);
+      const genX = await http("POST", "/api/generation-jobs", { opportunityId: oppX.body.id });
+      const doneX = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${genX.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 1000, label: "cross-channel x generation" },
+      );
+      await http("POST", `/api/artifacts/${doneX.artifactId}/submit-review`, {});
+      const approvedX = await http("POST", `/api/artifacts/${doneX.artifactId}/approve`, {});
+      const schedX = await http("POST", "/api/schedules", { artifactId: approvedX.body.id });
+      const dispatchX = await http("POST", "/api/publications/dispatch", {});
+      const mineX = (dispatchX.body.publications ?? []).find((p) => p.scheduleId === schedX.body.id);
+      assert(mineX, "no X Publication was created for the cross-channel Schedule");
+
+      const rowLi = await http("GET", `/api/publications/${liGoldenPublicationId}`);
+      assert(rowLi.body.state === "published", "the X-side activity above must not alter the already-published LinkedIn Publication");
+      assert(rowLi.body.channel === "linkedin");
+
+      const rowX = await http("GET", `/api/publications/${mineX.id}`);
+      assert(rowX.body.channel === "x");
+      return `LinkedIn publication ${liGoldenPublicationId} (published) and X publication ${mineX.id} (channel=${rowX.body.channel}) evolved independently`;
     },
   );
 

@@ -35,6 +35,7 @@ export interface OpportunityDeps {
 const KNOWN_FORMAT_CHANNELS: Readonly<Record<string, readonly string[]>> = {
   x_post: ["x"],
   x_thread: ["x"],
+  linkedin_post: ["linkedin"],
   image: ["x"],
   thumbnail: ["x"],
   carousel: ["x"],

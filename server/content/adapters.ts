@@ -19,6 +19,12 @@ import {
   translateXError,
   XWriteActionPendingError,
 } from "../social/x";
+import {
+  LinkedInPublishAmbiguousError,
+  postTextToLinkedIn,
+  reconcileLinkedInPost,
+  translateLinkedInError,
+} from "../social/linkedin";
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
@@ -244,6 +250,128 @@ export function createXChannelAdapter(): ChannelAdapter {
   };
 }
 
+/**
+ * Classify a LinkedIn transport failure. LinkedIn's Posts API is
+ * synchronous, so almost every failure is decisive; only a missing
+ * configuration is terminal-by-policy and only network-level errors are
+ * worth retrying.
+ */
+export function classifyLinkedInFailure(message: string): AdapterFailureClass {
+  if (/LINKEDIN_CONFIG_MISSING|not connected|LINKEDIN_POST_ID_MISSING/i.test(message)) {
+    return "policy_human";
+  }
+  if (/timeout|ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate limit/i.test(message)) {
+    return "transient";
+  }
+  return "permanent";
+}
+
+/**
+ * LinkedIn adapter — transport only, second channel proving the adapter
+ * boundary is genuinely generic. LinkedIn's Posts API has no client-supplied
+ * idempotency key and no async write-action protocol of its own, so:
+ *   • duplicate suppression relies entirely on ContentForge's own
+ *     Publication.idempotencyKey + pg-boss queue dedup — never on the
+ *     provider (documented limitation, see docs/STATUS.md).
+ *   • ambiguity arises only at the network layer (timeout/reset before a
+ *     response arrives), handled via `LinkedInPublishAmbiguousError`.
+ *   • reconciliation can confirm "published" by re-listing recent posts and
+ *     matching the pinned text, but can never safely confirm "not
+ *     published" — a listing miss is not proof of absence, so it stays
+ *     unknown and is bounded by `MAX_RECONCILE_ATTEMPTS` (Phase 5's existing
+ *     terminal safety net), never blindly retried forever.
+ */
+export function createLinkedInChannelAdapter(): ChannelAdapter {
+  const supported = new Set(["linkedin_post"]);
+
+  function textFor(format: string, payload: JsonRecord): string | null {
+    if (format !== "linkedin_post") return null;
+    const text = typeof payload.text === "string" ? payload.text : null;
+    return text && text.trim().length > 0 ? text : null;
+  }
+
+  return {
+    channel: "linkedin",
+    supports: (format) => supported.has(format),
+
+    async publish(request: PublishRequest): Promise<PublishOutcome> {
+      if (!supported.has(request.format)) return unavailable(request.format, "linkedin");
+
+      const text = textFor(request.format, request.payload);
+      if (!text) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: `linkedin payload for ${request.format} is unusable`,
+        };
+      }
+
+      try {
+        const result = await postTextToLinkedIn(text);
+        return {
+          ok: true,
+          providerCalled: true,
+          externalId: result.postUrn,
+          externalUrl: result.url,
+          publishedAt: new Date(),
+        };
+      } catch (error) {
+        if (error instanceof LinkedInPublishAmbiguousError) {
+          // No errorClass: `providerCalled: true` + `ok: false` signals
+          // "unknown" to the caller, same convention as the X adapter.
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: null,
+            externalUrl: null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: { commentary: error.hint.commentary, attemptedAt: error.hint.attemptedAt },
+          };
+        }
+        const raw = error instanceof Error ? error.message : String(error);
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: classifyLinkedInFailure(raw),
+          errorMessage: translateLinkedInError(raw),
+        };
+      }
+    },
+
+    /**
+     * Reconciliation: only the `reconciliationHint` (commentary + attempt
+     * timestamp) path exists — LinkedIn gives no request/write-action id to
+     * re-check the way xQuick does, and an already-known `externalId`
+     * publish is never ambiguous in the first place (the API is synchronous).
+     */
+    async reconcile(request: PublishRequest): Promise<PublishOutcome | null> {
+      const commentary =
+        typeof request.reconciliationHint?.commentary === "string" ? request.reconciliationHint.commentary : null;
+      const attemptedAt =
+        typeof request.reconciliationHint?.attemptedAt === "string" ? request.reconciliationHint.attemptedAt : null;
+      if (!commentary || !attemptedAt) return null;
+
+      const status = await reconcileLinkedInPost({ commentary, attemptedAt });
+      if (!status || status.status === "pending") return null; // still unknown, never assumed absent
+      return {
+        ok: true,
+        providerCalled: true,
+        externalId: status.postUrn,
+        externalUrl: status.url,
+        publishedAt: new Date(),
+      };
+    },
+  };
+}
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 const registry = new Map<string, ChannelAdapter>();
 
@@ -278,7 +406,8 @@ export function resetChannelAdapters(): void {
   registry.clear();
 }
 
-/** Idempotent: registers the Phase-B channel set (X only). */
+/** Idempotent: registers the Phase-B channel set (X, LinkedIn). */
 export function registerBuiltinChannelAdapters(): void {
   if (!hasChannelAdapter("x")) registerChannelAdapter(createXChannelAdapter());
+  if (!hasChannelAdapter("linkedin")) registerChannelAdapter(createLinkedInChannelAdapter());
 }

@@ -9,10 +9,11 @@ import {
 } from "./payloadSchemas";
 
 describe("payload schema registry", () => {
-  it("registers the X formats and the Phase 3 visual formats", () => {
+  it("registers the X formats, the LinkedIn format, and the Phase 3 visual formats", () => {
     assert.deepEqual(payloadSchemaRegistry.formats(), [
       "carousel",
       "image",
+      "linkedin_post",
       "thumbnail",
       "x_post",
       "x_thread",
@@ -63,10 +64,24 @@ describe("payload schema registry", () => {
 
   it("throws a typed error for an unregistered format", () => {
     assert.throws(
-      () => payloadSchemaRegistry.validate("linkedin_post", {}),
+      () => payloadSchemaRegistry.validate("video_script", {}),
       PayloadSchemaNotRegisteredError,
     );
-    assert.equal(payloadSchemaRegistry.has("linkedin_post"), false);
+    assert.equal(payloadSchemaRegistry.has("video_script"), false);
+  });
+
+  it("validates a good linkedin_post payload", () => {
+    const parsed = payloadSchemaRegistry.validate<{ text: string }>("linkedin_post", {
+      text: "hello linkedin",
+    });
+    assert.equal(parsed.text, "hello linkedin");
+  });
+
+  it("rejects a linkedin_post payload over the 3000-character limit", () => {
+    assert.throws(
+      () => payloadSchemaRegistry.validate("linkedin_post", { text: "x".repeat(3001) }),
+      PayloadValidationError,
+    );
   });
 
   it("validates a good image payload referencing a visual asset", () => {

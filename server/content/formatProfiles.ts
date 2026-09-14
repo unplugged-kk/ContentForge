@@ -56,6 +56,15 @@ const PROFILES: readonly FormatProfile[] = [
     constraints: { maxCharacters: 280, minUnits: 2, maxUnits: 8, sequential: true, hookFirst: true, cta: true },
   },
   {
+    format: "linkedin_post",
+    channel: "linkedin",
+    guidance:
+      "A single LinkedIn post. Open with a hook line that stands alone in the feed preview. " +
+      "Short paragraphs, line breaks between ideas, no hashtag stuffing. " +
+      "Professional register; a concrete takeaway or question invites comments.",
+    constraints: { maxCharacters: 3000, maxUnits: 1, cta: false },
+  },
+  {
     format: "image",
     channel: "x",
     guidance:

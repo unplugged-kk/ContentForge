@@ -46,7 +46,7 @@ import {
   ArtifactStateError,
 } from "./artifact";
 import { publicationIdempotencyKey } from "./scheduling";
-import { classifyXFailure, createXChannelAdapter } from "./adapters";
+import { classifyLinkedInFailure, classifyXFailure, createLinkedInChannelAdapter, createXChannelAdapter } from "./adapters";
 import { runPublication, type PublicationDeps } from "./publication";
 
 // ── builders ──────────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ describe("generation policy", () => {
   it("rejects formats without a payload schema or a format profile", async () => {
     const content = { listGenerationPolicies: async () => [] } as never;
     await assert.rejects(
-      () => resolveGenerationPolicy({ format: "linkedin_post", channel: "linkedin" }, { content }),
+      () => resolveGenerationPolicy({ format: "video_script", channel: "video_factory" }, { content }),
       PolicyInputError,
     );
     await assert.rejects(
@@ -394,8 +394,8 @@ describe("generation policy", () => {
     assert.equal(hasFormatProfile("image", "x"), true);
     assert.equal(hasFormatProfile("carousel", "x"), true);
     assert.equal(hasFormatProfile("thumbnail", "x"), true);
-    assert.equal(hasFormatProfile("linkedin_post", "linkedin"), false, "no fake placeholders");
-    assert.equal(hasFormatProfile("video_script", "video_factory"), false);
+    assert.equal(hasFormatProfile("linkedin_post", "linkedin"), true, "Phase 6: genuinely implemented");
+    assert.equal(hasFormatProfile("video_script", "video_factory"), false, "no fake placeholders");
     assert.deepEqual(
       ["image", "carousel", "thumbnail"].map((f) => getFormatProfile(f, "x")?.constraints.visual),
       ["required", "required", "required"],
@@ -513,6 +513,62 @@ describe("x channel adapter", () => {
     assert.equal(classifyXFailure("upstream returned 503"), "transient");
     assert.equal(classifyXFailure("rate limit exceeded"), "transient");
     assert.equal(classifyXFailure("invalid payload shape"), "permanent");
+  });
+});
+
+// ── LinkedIn adapter ─────────────────────────────────────────────────────────
+describe("linkedin channel adapter", () => {
+  it("declares exactly the formats it can publish", () => {
+    const adapter = createLinkedInChannelAdapter();
+    assert.equal(adapter.supports("linkedin_post"), true);
+    assert.equal(adapter.supports("x_post"), false);
+  });
+
+  it("refuses an unsupported format without invoking the transport", async () => {
+    const adapter = createLinkedInChannelAdapter();
+    const outcome = await adapter.publish({
+      format: "x_post",
+      channel: "linkedin",
+      payload: {},
+      correlationId: "c",
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.equal(outcome.errorClass, "permanent");
+  });
+
+  it("refuses an empty payload without invoking the transport", async () => {
+    const adapter = createLinkedInChannelAdapter();
+    const outcome = await adapter.publish({
+      format: "linkedin_post",
+      channel: "linkedin",
+      payload: { text: "" },
+      correlationId: "c",
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.equal(outcome.errorClass, "permanent");
+  });
+
+  it("classifies LinkedIn failures deterministically", () => {
+    assert.equal(classifyLinkedInFailure("LINKEDIN_CONFIG_MISSING"), "policy_human");
+    assert.equal(classifyLinkedInFailure("LINKEDIN_POST_ID_MISSING"), "policy_human");
+    assert.equal(classifyLinkedInFailure("request timeout after 10000ms"), "transient");
+    assert.equal(classifyLinkedInFailure("connect ECONNREFUSED 127.0.0.1:9999"), "transient");
+    assert.equal(classifyLinkedInFailure("upstream returned 503"), "transient");
+    assert.equal(classifyLinkedInFailure("rate limit exceeded"), "transient");
+    assert.equal(classifyLinkedInFailure("invalid payload shape"), "permanent");
+  });
+
+  it("reconcile returns null (still unknown) without a reconciliation hint", async () => {
+    const adapter = createLinkedInChannelAdapter();
+    const outcome = await adapter.reconcile({
+      format: "linkedin_post",
+      channel: "linkedin",
+      payload: { text: "hi" },
+      correlationId: "c",
+    });
+    assert.equal(outcome, null);
   });
 });
 

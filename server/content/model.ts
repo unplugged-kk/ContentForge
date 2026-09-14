@@ -23,6 +23,7 @@ export const CHAT_INTENT_MARKER = "CONTENT_REQUEST_INTENT";
 function payloadShapeHint(format: string): string {
   if (format === "x_post") return '{ "text": "<single post body, <=280 chars>" }';
   if (format === "x_thread") return '{ "units": ["<first tweet>", "<second tweet>"] }';
+  if (format === "linkedin_post") return '{ "text": "<single LinkedIn post body, <=3000 chars>" }';
   return "a JSON object matching the registered payload schema";
 }
 

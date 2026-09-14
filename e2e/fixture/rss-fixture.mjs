@@ -22,6 +22,13 @@
  *                                        /x/tweets whose body.text contains matchSubstring to 202
  *   POST /control/x-resolve-write-action {id,status,tweetId?,message?} resolves a pending write
  *   GET /x/write-actions/:id             xQuick write-action status poll/reconcile endpoint
+ *   POST /control/linkedin-mode          {mode:"network-fail",matchSubstring} arms the next POST
+ *                                        /rest/posts whose body.commentary contains matchSubstring
+ *                                        to drop the connection before responding (ambiguous outcome)
+ *   POST /rest/posts                     LinkedIn Posts API — create
+ *   GET /rest/posts                      LinkedIn Posts API — list by author (reconciliation lookup)
+ *   POST /control/linkedin-record-post   {commentary} simulates LinkedIn having actually received a
+ *                                        write whose response never reached us (post-hoc discovery)
  *
  * This file is TEST INFRASTRUCTURE. It is never imported by the application.
  */
@@ -114,6 +121,13 @@ let xPendingMarker = null;
 let xPendingSeq = 0;
 /** writeActionId -> { status: "pending" | "success" | "failed", tweetId?, url?, message? } */
 const xWriteActions = new Map();
+
+/** Same content-scoped arming pattern as xWriteMode, for the LinkedIn Posts API double. */
+let linkedinMode = "immediate";
+let linkedinFailMarker = null;
+let linkedinUrnSeq = 0;
+/** { commentary, createdAt } — every post LinkedIn "actually received". */
+const linkedinPosts = [];
 
 /** Read a JSON request body (bounded). */
 function readBody(req) {
@@ -272,6 +286,43 @@ async function handlePost(req, res, url) {
     return send(200, { id, tweetId: id, url: `https://x.com/cf_e2e/status/${id}`, username: "cf_e2e", status: "ok" });
   }
 
+  // Arms the NEXT `POST /rest/posts` whose commentary contains matchSubstring
+  // to drop the connection before any response — simulates a network-level
+  // ambiguity (LinkedIn's Posts API is otherwise synchronous, so this is the
+  // only way a LinkedIn write becomes ambiguous).
+  if (url.pathname === "/control/linkedin-mode") {
+    const body = await readBody(req);
+    linkedinMode = body.mode === "network-fail" ? "network-fail" : "immediate";
+    linkedinFailMarker = linkedinMode === "network-fail" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: linkedinMode, matchSubstring: linkedinFailMarker });
+  }
+
+  if (url.pathname === "/control/linkedin-record-post") {
+    const body = await readBody(req);
+    linkedinPosts.push({ commentary: body.commentary, createdAt: Date.now() });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/rest/posts") {
+    const body = await readBody(req);
+    const matchesArm =
+      linkedinMode === "network-fail" &&
+      linkedinFailMarker &&
+      typeof body.commentary === "string" &&
+      body.commentary.includes(linkedinFailMarker);
+    if (matchesArm) {
+      linkedinMode = "immediate"; // consumed only by the matching request
+      linkedinFailMarker = null;
+      req.destroy();
+      return;
+    }
+    linkedinPosts.push({ commentary: body.commentary, createdAt: Date.now() });
+    linkedinUrnSeq += 1;
+    const urn = `urn:li:share:${RUN}-${linkedinUrnSeq}`;
+    res.writeHead(201, { "content-type": "application/json", "x-restli-id": urn, "cache-control": "no-store" });
+    return res.end();
+  }
+
   return send(404, { error: "not found" });
 }
 
@@ -425,6 +476,15 @@ const server = http.createServer(async (req, res) => {
 <p>Cost signals are the next input teams want to schedule against.</p></article></body></html>`,
       "text/html; charset=utf-8",
     );
+  }
+
+  if (url.pathname === "/rest/posts") {
+    const elements = linkedinPosts.map((p, i) => ({
+      id: `urn:li:share:${RUN}-listed-${i}`,
+      commentary: p.commentary,
+      createdAt: p.createdAt,
+    }));
+    return send(200, JSON.stringify({ elements }), "application/json; charset=utf-8");
   }
 
   const writeActionMatch = url.pathname.match(/^\/x\/write-actions\/(.+)$/);

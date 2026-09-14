@@ -130,6 +130,9 @@ export {
 
 export {
   createXChannelAdapter,
+  createLinkedInChannelAdapter,
+  classifyXFailure,
+  classifyLinkedInFailure,
   getChannelAdapter,
   hasChannelAdapter,
   listChannelAdapters,

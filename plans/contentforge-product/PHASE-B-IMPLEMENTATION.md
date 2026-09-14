@@ -156,6 +156,130 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 6 — first non-X channel adapter: LinkedIn text publishing (done)
+
+Proves the `Artifact → Schedule → Occurrence → Publication → ChannelAdapter →
+Result` pipeline is genuinely channel-agnostic by adding the second channel.
+No new abstraction, no new table, no migration, no core `if (channel ===
+"linkedin")` branch anywhere.
+
+```
+same canonical payload shape ({ text }) → registered per format, not per channel
+   x_post   (280 chars,  channel=x)         ─┐
+   linkedin_post (3000 chars, channel=linkedin) ─┴─ both validated by payloadSchemaRegistry,
+                                                     both resolved by getFormatProfile(format, channel)
+
+Publication.channel := Artifact.channel (unchanged mechanism, scheduling.ts)
+        ↓
+getChannelAdapter(channel) → LinkedInAdapter | XAdapter   (registry lookup, no branch)
+```
+
+**Why `linkedin_post` is a new format, not a channel flag on `x_post`:**
+`server/artifacts/payloadSchemas.ts` already named `linkedin_post` in its own
+doc comment as the next format to register, and `content.test.ts` already
+asserted `hasFormatProfile("linkedin_post","linkedin") === false` as a
+placeholder — the schema architecture is per-`(format, channel)` pair
+(`formatProfiles.ts`, `KNOWN_FORMAT_CHANNELS` in `opportunity.ts`), not
+per-channel, so a new channel with the same canonical content shape (a single
+body of text) is a new *format* registration, never a code branch. The
+payload shape (`{ text: string }`) is identical to `x_post`'s — only the
+character limit (3000 vs 280) differs, which is exactly what per-format
+`limits`/`constraints` already exist for.
+
+**LinkedIn transport (`server/social/linkedin.ts`), real REST contract:**
+`POST /rest/posts` (LinkedIn Posts API — `author`, `commentary`, `visibility`,
+`distribution`, `lifecycleState`), `Authorization: Bearer`, `LinkedIn-Version`,
+`X-Restli-Protocol-Version` headers. Unlike xQuick, this is a *synchronous*
+API with no write-action/poll protocol — either an HTTP response arrives
+(decisive: 2xx → `x-restli-id` response header is the provider URN; non-2xx →
+classified failure) or the transport itself fails before a response arrives
+(timeout/reset), which is the *only* ambiguous case.
+
+**Semantic decisions locked this phase:**
+
+- **Ambiguity is modeled at the network layer, not a provider protocol**,
+  because LinkedIn's Posts API has none: `postTextToLinkedIn` catches a
+  `fetch()` failure (not an HTTP error response) and throws
+  `LinkedInPublishAmbiguousError` carrying `{ commentary, attemptedAt }` — the
+  exact pinned text and the moment of the attempt, since LinkedIn issues no
+  request/write-action id of its own to re-check later.
+- **Same `reconciliationHint` field, different content**: the X adapter
+  populates it with `{ writeActionId }`; the LinkedIn adapter populates it
+  with `{ commentary, attemptedAt }`. The field stays generic/opaque at the
+  `PublishRequest` interface — only the adapter that produced a hint knows
+  how to read it back.
+- **Reconciliation can confirm "published" but never safely confirm "not
+  published."** `reconcileLinkedInPost` re-lists the author's recent posts
+  (`GET /rest/posts?q=author&author=...`) and matches on exact `commentary` +
+  a creation time at or after the attempt. A match → confirmed published,
+  same as X. A miss returns `pending` (mapped to the existing `null` = "still
+  unknown" contract) — **never** "confirmed not published": LinkedIn's
+  listing endpoint has no documented consistency/completeness guarantee, so
+  absence is not proof of absence (the same principle X's `reconcile()`
+  already applies to a tweet-lookup miss, taken to its honest conclusion
+  where the provider gives strictly less to work with). This is a genuine
+  provider-capability difference from X, not a shortcut: X's xQuick reports
+  an authoritative `failed` status for a write action; LinkedIn's Posts API
+  has no equivalent, so a stuck-unknown LinkedIn Publication is bounded by
+  the same `MAX_RECONCILE_ATTEMPTS` (5, unchanged from Phase 5) rather than
+  ever resolved to a synthesized "not published."
+- **No provider-side duplicate protection.** LinkedIn's Posts API has no
+  client-supplied idempotency key in its public contract — two identical
+  `POST /rest/posts` calls create two posts. Duplicate suppression is
+  entirely ContentForge's own: `Publication.idempotencyKey` (unique
+  constraint) plus pg-boss's queue-level dedup are the only guarantees; this
+  is a documented boundary, not a claim of provider-side exactly-once
+  delivery.
+- **Cross-channel independence, honestly scoped.** `Publication.channel` is
+  derived from `Artifact.channel` at Schedule-creation time
+  (`scheduling.ts`), a field fixed on the Artifact — so one Artifact *row*
+  cannot literally target two channels. "The same Artifact independently
+  publishes to X and LinkedIn" is proven at the level that actually matters
+  for the invariant (a failure in one channel must not corrupt another): two
+  channel-specific Artifacts from the same Story/Opportunity lineage, each
+  independently scheduled, leased, and reconciled, with no shared runtime
+  state — see the `content.dbtest.ts`-style cross-channel test in
+  `server/content/linkedin.dbtest.ts`.
+- **Credentials**: same boundary as X — `storage.getConnectedAccount("linkedin")`
+  for the access token/author URN, with `LINKEDIN_ACCESS_TOKEN` /
+  `LINKEDIN_AUTHOR_URN` env override for wiring, same as `XQUIK_*`. Never
+  logged, never returned from any API response, never persisted outside the
+  existing `connected_accounts` row.
+
+**Changed files** (no schema/migration changes):
+
+| File | Change |
+|---|---|
+| `server/social/linkedin.ts` | new — LinkedIn Posts API transport: `postTextToLinkedIn`, `LinkedInPublishAmbiguousError`, `reconcileLinkedInPost`, `translateLinkedInError` |
+| `server/artifacts/payloadSchemas.ts` | `linkedin_post` payload schema (`{ text }`, 3000-char limit) registered |
+| `server/content/formatProfiles.ts` | `linkedin_post`/`linkedin` format profile (prompt guidance + constraints) |
+| `server/content/opportunity.ts` | `KNOWN_FORMAT_CHANNELS.linkedin_post = ["linkedin"]` |
+| `server/content/adapters.ts` | `createLinkedInChannelAdapter`, `classifyLinkedInFailure`; registered in `registerBuiltinChannelAdapters` |
+| `server/content/model.ts` | generation payload-shape hint for `linkedin_post` |
+| `server/content/content.test.ts` | LinkedIn adapter unit tests (format gating, empty-payload rejection, failure classification, reconcile-without-hint); two Phase-5-era placeholder assertions updated now that `linkedin_post` is genuinely implemented |
+| `server/artifacts/payloadSchemas.test.ts` | LinkedIn payload validation tests; "unregistered format" test moved off the now-registered `linkedin_post` name |
+| `server/content/linkedin.dbtest.ts` | new — real Postgres + real LinkedIn adapter + a plain local `http` double at the LinkedIn boundary only: golden path, ambiguous→unknown, reconciliation-discovers→published, still-unknown/restart-equivalent (never confirmed-not-published), cross-channel independence, recurrence |
+| `e2e/fixture/rss-fixture.mjs` | `POST/GET /rest/posts`, `/control/linkedin-mode`, `/control/linkedin-record-post` — doubles the LinkedIn Posts API boundary only |
+| `script/e2e-live.mjs` | new live phase: LinkedIn golden path, ambiguous→reconcile→published, cross-channel independence with X |
+
+Verified in Phase 6: tsc 0 · unit 266/0 (59 suites, +1) · DB 108/0/0 skipped
+(14 suites, +6) · live E2E 79/79, 0 failed (real app, real Postgres, real
+pg-boss; all 4 LinkedIn checks green: golden path, ambiguous→unknown,
+reconcile→published, cross-channel independence with X; zero regression
+across every earlier phase's checks) · fresh DB migration unchanged (13
+migrations, no new one needed). Recurrence-through-LinkedIn is proven at the
+real-Postgres layer (`linkedin.dbtest.ts`, 6 tests); the live E2E adds the
+golden path, ambiguity/reconciliation, and cross-channel checks rather than
+repeating every already-proven recurrence scenario a second time.
+
+Two live-E2E rate-limit cascades were found and fixed as part of hardening
+this run (test-harness only, no production code touched): the cross-channel
+check's generation poll was tightened from 300ms to 1000ms, and the shared
+`http()` retry helper's backoff window was widened (6×2s → 12×2s) so a
+transient 429 under this phase's added request volume self-heals instead of
+failing the check outright — the same class of fix Phase 5 already applied
+to its own reconciliation polling.
+
 ## Phase 5 — X publication reconciliation (done)
 
 Turns `reconcile()` from a stub into a real durable capability of the
