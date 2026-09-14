@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 7) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 8) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,16 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **272 passed / 0 failed** (59 suites) |
-| `npm test` | **272 passed** |
-| `npm run test:db` (real PostgreSQL) | **113 passed / 0 failed / 0 skipped** (15 suites, +1 file) |
-| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: every Phase 1–6 red arrow unaffected by the adapter-registry-as-compatibility-authority change and the media-resolution step inserted into `runPublication` |
-| `npm run test:e2e:visual` (real running app, visual red arrows) | **10 passed / 0 failed** |
+| `npm run test:unit` | **278 passed / 0 failed** (60 suites) |
+| `npm test` | **278 passed** |
+| `npm run test:db` (real PostgreSQL) | **117 passed / 0 failed / 0 skipped** (15 suites) |
+| `npm run test:e2e:live` (real running app) | **79/79, 0 failed** — regression check: HTTP Artifact authoring changes broke nothing in Phases 1–7 |
+| `npm run test:e2e:visual` (real running app, visual red arrows) | **13 passed / 0 failed** — now includes the HTTP-authored image → Schedule → Publication → X → Result golden path |
 | Fresh DB migration | **13 migrations** from zero — unchanged, no new migration needed |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 266 unit / 108 DB / 79-of-79 live E2E.
+Baseline before this phase: 272 unit / 113 DB / 79-of-79 live E2E / 10-of-10 visual E2E.
 
 ---
 
@@ -75,23 +75,59 @@ migration — everything needed already existed in `visual_assets` /
   delivery is enforced-absent, not merely undocumented.
 - **Thumbnail** reuses the identical `image` mechanism — no thumbnail-specific
   adapter code.
-- **Live E2E scope, stated honestly**: there is still no HTTP-level path to
-  create an image-format Artifact (Artifacts come from a generation job's
-  AI-model completion, or — for visuals — directly through the domain layer,
-  which is how every visual DB test builds one; Phase 3 already documented
-  this boundary: "the visual E2E stops at approval"). This is a pre-existing
-  authoring-surface gap, not something Phase 7 was asked to fix. The
-  fixture's new media-upload boundary (`POST /x/media`,
-  `/control/x-media-mode`) is real, live infrastructure ready for that
-  future live-E2E phase; until an authoring endpoint exists, the golden
-  path / retry / ambiguity / reconciliation / recurrence / idempotency
-  proofs for image publication live at the real-Postgres tier
-  (`server/content/visualPublication.dbtest.ts`), and the 79/79 live E2E run
-  is a regression check that Phase 7's core changes broke nothing already
-  proven live.
+- **Live E2E scope at the time**: there was still no HTTP-level path to
+  create an image-format Artifact. Phase 8 (below) closes exactly this gap.
 
 Full detail (exact contract shapes, resolution path, X transport, changed
 files): `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 7.
+
+---
+
+## Visual Artifact HTTP authoring (new in this phase — Phase 8)
+
+Phase 7 proved delivery works once an image Artifact exists. The one
+remaining gap was authoring: no HTTP request could create one, so the live
+application could never exercise the visual path end to end. Phase 8 closes
+it with a single new generic route:
+
+```
+POST /api/opportunities/:id/artifacts
+  { payload: { visualAssetId, altText?, ... }, attribution?, attributionReason? }
+        ↓ format/channel come from the Opportunity, never the request body
+createArtifact(): validate payload schema → mediaRefs() → per-ref
+  exists? / owned? / "ready"?  (BEFORE any row) → insertArtifact (draft)
+  → insertVisualAssetRef (audit trail, same pinned revision)
+        ↓
+approve → Schedule → Occurrence → Publication → X media upload → X post → Result
+```
+
+- **Same generic contract, not a new subsystem**: the route is the sibling of
+  the existing `GET /opportunities/:id/artifacts` and calls the identical
+  `createArtifact()` that generation-job completion already calls. `x_post`,
+  `linkedin_post`, `image`, `thumbnail` — and any future format — all go
+  through this one route; there is no `POST /visual-artifacts`.
+- **Validation moved to before the row exists**: `createArtifact` now
+  resolves the format's declared `mediaRefs()` (Phase 7's mechanism) and
+  checks existence/ownership/readiness against real `visual_assets` rows
+  before `insertArtifact` runs — a bad reference produces zero durable rows
+  (no Artifact, no Schedule, no Publication), reusing the exact checks
+  `resolvePublicationMedia` already makes at publish time.
+- **Owner isolation**: a nonexistent asset and one owned by a different user
+  produce the identical `"not found"` message → HTTP 404, matching the
+  convention the existing `/artifacts/:id/visuals` route already used — no
+  existence leak.
+- **Compatibility unchanged**: format/channel come from the Opportunity,
+  already validated against the adapter registry at Opportunity creation. An
+  image Artifact stays reusable independent of any one channel's support.
+- **Live E2E, now real**: `script/e2e-visual.mjs` creates the image Artifact
+  through this HTTP route (the raw SQL insert it used before is gone), then
+  drives it through `approve → Schedule → dispatch → Publication → Result`
+  against the real running app, real PostgreSQL, real pg-boss, and a small
+  local xQuick double (`/x/media`, `/x/tweets`) — the only doubled boundary.
+  13/13 checks pass, including the published Result's `metrics.mediaCount`
+  and the Artifact's payload still naming the exact original `visualAssetId`.
+
+Full detail: `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 8.
 
 ---
 
@@ -328,7 +364,7 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   on any DB run that scheduled/published a visual-pipeline artifact.
   Production code untouched.
 
-## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7)
+## What is implemented (phases B, 1, 1.5, 2, 3, 4, 5, 6, 7, 8)
 
 - **Research**: five providers → NormalizedSource → engine → evidence; directed /
   autonomous / human_input; failure semantics locked (Case A/B/C).
@@ -354,8 +390,10 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
 - **X reconciliation** (Phase 5): as above.
 - **LinkedIn channel adapter** (Phase 6): as above.
 - **Visuals** (Phase 3): as above.
-- **Visual delivery** (this phase, Phase 7): single-image publication to X —
-  as detailed above.
+- **Visual delivery** (Phase 7): single-image publication to X — as detailed
+  above.
+- **Visual Artifact HTTP authoring** (this phase, Phase 8): image Artifacts
+  are now reachable through a real HTTP request — as detailed above.
 
 ## Architecturally ready (not built)
 
@@ -383,16 +421,25 @@ registration/implementation against an existing seam, not a new pipeline.
 
 ## Live E2E red arrows observed (real app, real Postgres, real pg-boss)
 
-- **Visual delivery** (new, proven at the real-Postgres tier this phase —
-  see "Visual delivery" above for why the live-E2E golden path itself is
-  deferred): image Artifact → media upload → media id → X post → Result,
-  exact revision pinned even after a newer VisualAsset revision exists;
-  transient media-upload failure retries the same Publication with no new
-  lineage rows; media upload succeeds + post creation ambiguous →
-  reconciliation → published with the real post `externalId` (never the
-  media id); recurring image Schedule publishes the same pinned Asset per
-  slot; concurrent duplicate delivery collapses to exactly one published
-  Result. The full 79/79 live E2E suite re-ran clean as a regression check.
+- **Visual delivery** (Phase 7, proven at the real-Postgres tier): image
+  Artifact → media upload → media id → X post → Result, exact revision
+  pinned even after a newer VisualAsset revision exists; transient
+  media-upload failure retries the same Publication with no new lineage
+  rows; media upload succeeds + post creation ambiguous → reconciliation →
+  published with the real post `externalId` (never the media id); recurring
+  image Schedule publishes the same pinned Asset per slot; concurrent
+  duplicate delivery collapses to exactly one published Result. The full
+  79/79 live E2E suite re-ran clean as a regression check.
+- **Visual Artifact HTTP authoring** (new, Phase 8 — `test:e2e:visual`,
+  13/13): `POST /api/opportunities/:id/artifacts` creates the image Artifact
+  over real HTTP (no more raw SQL insert standing in for it), then the
+  same Artifact runs the full `approve → Schedule → dispatch → Publication
+  → X media upload → X post → Result` path against a real running app,
+  real Postgres, real pg-boss, and a minimal local xQuick double; the
+  nonexistent-asset and foreign-owner-asset cases are refused with 404
+  before any Artifact row exists; the published Result carries
+  `metrics.mediaCount === 1` and the Artifact's payload still names the
+  exact original `visualAssetId` after publication.
 - Golden path: research → Story → Opportunity → policy → job → Artifact →
   approval → Schedule → Occurrence → Publication → X adapter → Result.
 - **X reconciliation** (new): ambiguous write → `unknown` (never falsely
@@ -417,7 +464,7 @@ registration/implementation against an existing seam, not a new pipeline.
   YouTube feed path.
 - **SSRF boundary in the live app**: a `169.254.169.254` metadata URL →
   permanent failure, 0 sources, 0 evidence.
-- **Visual lifecycle** (also covered by dedicated `test:e2e:visual`, 10/10):
+- **Visual lifecycle** (also covered by dedicated `test:e2e:visual`, 13/13):
   durable generation → PNG asset → revision chain → Artifact attach → approval.
   Duplicate delivery → one asset; explicit regeneration → new revision; transient
   failure → retry; invalid output → terminal with nothing persisted; queued
