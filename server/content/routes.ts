@@ -69,6 +69,7 @@ import {
   ArtifactNotSchedulableError,
   ScheduleInputError,
 } from "./scheduling";
+import { reconcileUnknownPublications } from "./publication";
 import { getChannelAdapter } from "./adapters";
 import {
   createVisualGeneration,
@@ -579,8 +580,17 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   /** One scheduler tick: materialize due occurrences and enqueue publications. */
   router.post("/publications/dispatch", async (_req, res, next) => {
     try {
+      const now = new Date();
       const result = await dispatchDueOccurrences(
-        new Date(),
+        now,
+        { content: deps.content, enqueuePublication: deps.enqueuePublication },
+        100,
+      );
+      // Real provider-side reconciliation for Publications parked as `unknown`
+      // (see `reconcileUnknownPublications`). Reused here so tests/operators
+      // have a deterministic manual trigger identical to the periodic tick.
+      const reconciled = await reconcileUnknownPublications(
+        now,
         { content: deps.content, enqueuePublication: deps.enqueuePublication },
         100,
       );
@@ -588,6 +598,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         materialized: result.materialized,
         enqueued: result.enqueued,
         publications: result.publications.map(serializePublication),
+        reconciled,
       });
     } catch (error) {
       return next(error);

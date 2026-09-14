@@ -12,7 +12,7 @@
 
 import type { Publication } from "@shared/schema";
 import { JobFailure } from "../jobs/failures";
-import { getChannelAdapter, type ChannelAdapter } from "./adapters";
+import { getChannelAdapter, type ChannelAdapter, type PublishOutcome } from "./adapters";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
 export const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -143,34 +143,7 @@ export async function runPublication(
   });
 
   if (outcome.ok) {
-    await deps.content.updatePublication(leased.id, {
-      state: "published",
-      providerCalled: true,
-      externalId: outcome.externalId,
-      lastError: null,
-      releaseLease: true,
-    });
-    await deps.content.insertResult({
-      userId: leased.userId ?? null,
-      publicationId: leased.id,
-      outcome: "published",
-      externalId: outcome.externalId,
-      externalUrl: outcome.externalUrl,
-      publishedAt: outcome.publishedAt ?? now(),
-      metrics: outcome.metrics ?? {},
-      source: leased.channel,
-      errorClass: null,
-      errorMessage: null,
-      correlationId: leased.correlationId,
-    });
-    await deps.content.markOccurrenceStatus(leased.occurrenceId, "published");
-
-    // A one-shot series is complete once its single occurrence publishes.
-    const schedule = await deps.content.getSchedule(leased.scheduleId);
-    if (schedule && schedule.count <= 1) {
-      await deps.content.setScheduleStatus(schedule.id, "exhausted");
-    }
-
+    await recordPublished(leased, outcome, deps, now());
     return {
       publicationId: leased.id,
       status: "published",
@@ -181,7 +154,9 @@ export async function runPublication(
   }
 
   // The transport was invoked but the outcome is not a clean failure (partial
-  // thread, ambiguous error) — never retry into a duplicate.
+  // thread, ambiguous error) — never retry into a duplicate. `outcome.metrics`
+  // (e.g. an xQuick `writeActionId`) is preserved on the Result so a later
+  // reconciliation pass has something durable to ask the provider about.
   if (outcome.providerCalled) {
     await deps.content.updatePublication(leased.id, {
       state: "failed",
@@ -196,7 +171,7 @@ export async function runPublication(
       externalId: null,
       externalUrl: null,
       publishedAt: null,
-      metrics: {},
+      metrics: outcome.metrics ?? {},
       source: leased.channel,
       errorClass: "unknown",
       errorMessage: outcome.errorMessage ?? "reconcile_required",
@@ -225,6 +200,49 @@ export async function runPublication(
   }
 
   return await recordTerminal(leased, deps, { failureClass, message });
+}
+
+/**
+ * Record a confirmed-published outcome and its downstream effects. Shared by
+ * the normal publish path and reconciliation — the only difference between
+ * "just published" and "reconciliation discovered it was published all along"
+ * is which caller reaches this function.
+ */
+async function recordPublished(
+  publication: Publication,
+  outcome: PublishOutcome,
+  deps: PublicationDeps,
+  publishedAt: Date,
+): Promise<void> {
+  await deps.content.updatePublication(publication.id, {
+    state: "published",
+    providerCalled: true,
+    externalId: outcome.externalId,
+    lastError: null,
+    releaseLease: true,
+  });
+  // `insertResult` resolves an existing `unknown` Result in place, or inserts
+  // fresh when there was none — either way exactly one Result survives.
+  await deps.content.insertResult({
+    userId: publication.userId ?? null,
+    publicationId: publication.id,
+    outcome: "published",
+    externalId: outcome.externalId,
+    externalUrl: outcome.externalUrl,
+    publishedAt: outcome.publishedAt ?? publishedAt,
+    metrics: outcome.metrics ?? {},
+    source: publication.channel,
+    errorClass: null,
+    errorMessage: null,
+    correlationId: publication.correlationId,
+  });
+  await deps.content.markOccurrenceStatus(publication.occurrenceId, "published");
+
+  // A one-shot series is complete once its single occurrence publishes.
+  const schedule = await deps.content.getSchedule(publication.scheduleId);
+  if (schedule && schedule.count <= 1) {
+    await deps.content.setScheduleStatus(schedule.id, "exhausted");
+  }
 }
 
 async function recordTerminal(
@@ -278,4 +296,145 @@ export async function reconcileStalePublications(
     });
   }
   return stale.length;
+}
+
+/**
+ * A Publication's `attempt` counter is durable (incremented on every lease
+ * acquisition, including reconciliation's own). Once a Publication has been
+ * *reconciliation-leased* this many times without resolving, it is left
+ * `unknown` for an operator rather than checked forever — the bound lives in
+ * this counter, not in process memory, so it survives restarts.
+ */
+export const MAX_RECONCILE_ATTEMPTS = 5;
+
+export interface ReconcileDeps extends PublicationDeps {
+  /** Enqueue a fresh `publication.run` attempt after a confirmed non-publication. */
+  enqueuePublication: (publication: Publication) => Promise<boolean>;
+}
+
+export interface ReconcileUnknownResult {
+  /** Adapter confirmed the external post exists; Publication now `published`. */
+  resolved: number;
+  /** Adapter confirmed no matching post; Publication reset and re-queued. */
+  requeued: number;
+  /** Adapter could not establish the outcome this pass; left `unknown`. */
+  stillUnknown: number;
+  /** Durable attempt bound reached; left `unknown` permanently for an operator. */
+  exhausted: number;
+}
+
+/**
+ * Attempt real provider-side reconciliation for Publications parked as
+ * `unknown` (transport invoked, outcome never confirmed — see
+ * `runPublication`'s `providerCalled` branch). This is the mechanism that
+ * turns "unknown" into a known outcome; nothing else in the system does.
+ *
+ * Concurrency: reconciliation reuses the exact same single-flight lease as a
+ * normal publish attempt (`acquirePublicationLease` already allows leasing
+ * from `failed`), so two reconciliation passes — or a reconciliation pass
+ * racing a publish retry — can never act on the same Publication at once.
+ * PostgreSQL's compare-and-set lease is the only correctness mechanism; there
+ * is no in-memory lock.
+ */
+export async function reconcileUnknownPublications(
+  now: Date,
+  deps: ReconcileDeps,
+  limit = 50,
+): Promise<ReconcileUnknownResult> {
+  const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
+  const owner = deps.owner ?? "reconcile-worker";
+  const result: ReconcileUnknownResult = { resolved: 0, requeued: 0, stillUnknown: 0, exhausted: 0 };
+
+  const candidates = await deps.content.listUnknownPublications(limit);
+  for (const candidate of candidates) {
+    if (candidate.attempt >= MAX_RECONCILE_ATTEMPTS) {
+      result.exhausted += 1;
+      continue;
+    }
+
+    const leased = await deps.content.acquirePublicationLease(candidate.id, owner, leaseMs);
+    if (!leased) continue; // another worker/tick already holds it
+
+    const artifact = await deps.content.getArtifact(leased.artifactId);
+    let adapter: ChannelAdapter;
+    try {
+      adapter = adapterFor(leased.channel, deps);
+    } catch {
+      // The lease acquisition itself moved state to "publishing"; releasing it
+      // must restore "failed" (still unknown) or the row would never be
+      // picked up by a future scan again (`listUnknownPublications` filters
+      // on `state = "failed"`).
+      await deps.content.updatePublication(leased.id, { state: "failed", releaseLease: true });
+      result.stillUnknown += 1;
+      continue;
+    }
+    if (!artifact) {
+      await deps.content.updatePublication(leased.id, { state: "failed", releaseLease: true });
+      result.stillUnknown += 1;
+      continue;
+    }
+
+    // The provisional `unknown` Result carries whatever continuity data the
+    // original ambiguous `publish()` attempt captured (e.g. an xQuick
+    // `writeActionId`) — that is the durable identifier reconciliation checks.
+    const existingResult = await deps.content.getResultByPublication(leased.id);
+    const reconciliationHint = (existingResult?.metrics as JsonRecord | undefined) ?? null;
+
+    const outcome = await adapter.reconcile({
+      format: artifact.format,
+      channel: leased.channel,
+      payload: artifact.payload as JsonRecord,
+      correlationId: leased.correlationId,
+      externalId: leased.externalId,
+      reconciliationHint,
+    });
+
+    if (outcome === null) {
+      await deps.content.updatePublication(leased.id, { state: "failed", releaseLease: true });
+      result.stillUnknown += 1;
+      continue;
+    }
+
+    if (outcome.ok) {
+      await recordPublished(leased, outcome, deps, now);
+      result.resolved += 1;
+      continue;
+    }
+
+    // Confirmed: the provider has no record of this publication ever having
+    // succeeded. Never call publish() again from inside this loop — reset the
+    // SAME Publication row (same idempotency key, no new Occurrence, no new
+    // row) to `queued` and hand it back to the normal durable queue, exactly
+    // like an ordinary transient-failure retry.
+    await deps.content.deleteUnknownResult(leased.id);
+    await deps.content.updatePublication(leased.id, {
+      state: "queued",
+      providerCalled: false,
+      externalId: null,
+      lastError: outcome.errorMessage ?? "reconcile confirmed no matching external publication; re-queued",
+      releaseLease: true,
+    });
+    const requeued = {
+      ...leased,
+      state: "queued" as const,
+      providerCalled: false,
+      externalId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      // The Publication's real `idempotencyKey` (schedule×occurrence×artifact)
+      // is a PERMANENT identity and is never changed in the database — but the
+      // FIRST publish attempt's completed pg-boss job used that exact string
+      // as its own singleton dedup key, and pg-boss's singleton window
+      // (`singletonSeconds`, independent of job outcome) can still be open.
+      // A fresh `send()` with the same key would be silently dropped as a
+      // duplicate, leaving this Publication reset to "queued" with no job
+      // behind it. This suffix only affects the ephemeral queue-dedup key
+      // passed to `enqueuePublication` below — it is never persisted.
+      idempotencyKey: `${leased.idempotencyKey}:retry:${leased.attempt}`,
+    };
+    const enqueued = await deps.enqueuePublication(requeued);
+    if (enqueued) result.requeued += 1;
+  }
+
+  return result;
 }

@@ -18,6 +18,10 @@
  *   GET /slow.xml?delay=N delays N ms (default 8000) before serving /feed.xml
  *   GET /reset            resets fixture counters
  *   GET /stats            fixture counters as JSON
+ *   POST /control/x-write-mode           {mode:"pending",matchSubstring} arms the next POST
+ *                                        /x/tweets whose body.text contains matchSubstring to 202
+ *   POST /control/x-resolve-write-action {id,status,tweetId?,message?} resolves a pending write
+ *   GET /x/write-actions/:id             xQuick write-action status poll/reconcile endpoint
  *
  * This file is TEST INFRASTRUCTURE. It is never imported by the application.
  */
@@ -97,6 +101,19 @@ let tweetCounter = 0;
 let invalidNext = false;
 /** Artificial model latency (ms), so a generation job can be observed queued. */
 let modelDelayMs = 0;
+/**
+ * "immediate" (default) or "pending" — arms the next POST /x/tweets whose
+ * `text` contains `xPendingMarker` only. Scoped by content, not merely
+ * one-shot, so the real periodic content-scheduler cron (which runs
+ * throughout the whole live E2E run and may itself publish unrelated,
+ * already-due schedules concurrently) can never accidentally consume or
+ * defeat an arm meant for a specific test's artifact text.
+ */
+let xWriteMode = "immediate";
+let xPendingMarker = null;
+let xPendingSeq = 0;
+/** writeActionId -> { status: "pending" | "success" | "failed", tweetId?, url?, message? } */
+const xWriteActions = new Map();
 
 /** Read a JSON request body (bounded). */
 function readBody(req) {
@@ -212,8 +229,44 @@ async function handlePost(req, res, url) {
     return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post"));
   }
 
-  if (url.pathname.startsWith("/x/")) {
-    await readBody(req);
+  // Arms the NEXT `POST /x/tweets` to return 202 + writeActionId instead of an
+  // immediate tweet id — simulates xQuick accepting a write asynchronously.
+  if (url.pathname === "/control/x-write-mode") {
+    const body = await readBody(req);
+    xWriteMode = body.mode === "pending" ? "pending" : "immediate";
+    xPendingMarker = xWriteMode === "pending" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: xWriteMode, matchSubstring: xPendingMarker });
+  }
+
+  // Sets (or changes) the status a pending write action resolves to, for the
+  // NEXT `GET /x/write-actions/:id` check onward — simulates the write
+  // completing (or failing) on X's side sometime after we gave up polling.
+  if (url.pathname === "/control/x-resolve-write-action") {
+    const body = await readBody(req);
+    xWriteActions.set(body.id, {
+      status: body.status,
+      tweetId: body.tweetId,
+      url: body.url ?? `https://x.com/cf_e2e/status/${body.tweetId}`,
+      message: body.message,
+    });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/x/tweets") {
+    const body = await readBody(req);
+    const matchesArm =
+      xWriteMode === "pending" && xPendingMarker && typeof body.text === "string" && body.text.includes(xPendingMarker);
+    if (matchesArm) {
+      xPendingSeq += 1;
+      const id = `wa-${RUN}-${xPendingSeq}`;
+      xWriteActions.set(id, { status: "pending" });
+      xWriteMode = "immediate"; // consumed only by the matching request
+      xPendingMarker = null;
+      return send(202, { writeActionId: id });
+    }
+    // Unrelated concurrent traffic (e.g. the real periodic content-scheduler
+    // cron publishing some other already-due schedule) is never affected by
+    // an arm meant for a different test's text.
     tweetCounter += 1;
     const id = `tweet-${tweetCounter}`;
     return send(200, { id, tweetId: id, url: `https://x.com/cf_e2e/status/${id}`, username: "cf_e2e", status: "ok" });
@@ -372,6 +425,16 @@ const server = http.createServer(async (req, res) => {
 <p>Cost signals are the next input teams want to schedule against.</p></article></body></html>`,
       "text/html; charset=utf-8",
     );
+  }
+
+  const writeActionMatch = url.pathname.match(/^\/x\/write-actions\/(.+)$/);
+  if (writeActionMatch) {
+    const state = xWriteActions.get(decodeURIComponent(writeActionMatch[1]));
+    const json = (status, body) => send(status, JSON.stringify(body), "application/json; charset=utf-8");
+    if (!state) return json(404, { message: "unknown write action" });
+    if (state.status === "pending") return json(200, { status: "pending" });
+    if (state.status === "success") return json(200, { status: "success", tweetId: state.tweetId, url: state.url });
+    return json(200, { status: "failed", message: state.message ?? "write action failed" });
   }
 
   switch (url.pathname) {

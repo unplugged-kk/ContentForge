@@ -156,6 +156,100 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 5 — X publication reconciliation (done)
+
+Turns `reconcile()` from a stub into a real durable capability of the
+existing `Publication → ChannelAdapter → Result` boundary. No new
+abstraction, no new table, no migration.
+
+```
+publish() ambiguous (transport invoked, outcome unconfirmed)
+        ↓
+Publication: state=failed, providerCalled=true   Result: outcome=unknown, metrics={writeActionId}
+        ↓ (periodic tick / manual dispatch, reuses the publication lease)
+adapter.reconcile() — tri-state
+        │
+        ├─ null            → still unknown; state stays "failed" (never stuck "publishing"); durably
+        │                     bounded by publications.attempt (existing column) via MAX_RECONCILE_ATTEMPTS
+        ├─ { ok: true }     → recordPublished(): SAME Result row updated unknown→published (never a
+        │                     second row), Publication→published, Occurrence→published, schedule
+        │                     exhaustion check — identical code path as a normal successful publish
+        └─ { ok: false }    → confirmed NOT published: unknown Result deleted, SAME Publication row
+                              reset to queued/providerCalled=false, re-queued through the existing
+                              durable job (never calls publish() inline, never a new Occurrence)
+```
+
+**Semantic decisions locked this phase:**
+
+- **What enters `unknown`** (unchanged from Phase B, just finally acted on):
+  the adapter's transport was invoked (`providerCalled: true`) and the
+  outcome could not be established — for X specifically, xQuick accepted a
+  write (202 + `writeActionId`) but polling gave up before it resolved
+  (`XWriteActionPendingError`). Ordinary deterministic failures (config
+  missing, 4xx, invalid payload) are still classified `permanent`/`transient`
+  and never touch this path.
+- **Tri-state reuses the existing `PublishOutcome | null` contract** — no new
+  type. `null` = still unknown, `{ok:true}` = confirmed published, `{ok:false}`
+  = confirmed NOT published. The adapter, not the caller, decides which:
+  a read-API miss (`fetchTweetTextByIdViaOfficialApi` returning `null`) is
+  explicitly treated as *still unknown*, never as "confirmed absent" — a miss
+  proves nothing (private, deleted, rate-limited, or a misconfigured read
+  endpoint all look identical).
+- **Durable identifier**: `PublishRequest.reconciliationHint` — a new,
+  generic (`JsonRecord`), adapter-opaque field on the existing interface. X
+  populates it with `{ writeActionId }` captured from the ambiguous
+  `publish()` attempt's `PublishOutcome.metrics` (already-existing field,
+  simply no longer discarded); it is read back from the durable `unknown`
+  Result's own `metrics` column — no new table, no Publication schema change.
+- **Result stays durable, but `unknown` is provisional by definition**:
+  `insertResult`'s `ON CONFLICT (publication_id) DO UPDATE ... WHERE outcome
+  = 'unknown'` (Postgres compare-and-set) resolves an unknown Result in
+  place; a `published`/`failed` Result is still immutable (unaffected — the
+  `WHERE` guard simply never matches). Confirmed-not-published instead
+  *deletes* the provisional row (`deleteUnknownResult`, itself
+  compare-and-set on `outcome = 'unknown'`) so the eventual real outcome of
+  the re-queued attempt gets its own clean row.
+- **Confirmed-not-published's "safe next action"**: reset the *same*
+  Publication row (same idempotency key) to `queued` and re-enqueue through
+  the existing durable job — identical mechanism to an ordinary transient
+  failure's retry. No new Occurrence, no new row, no inline `publish()` call.
+- **Concurrency**: reconciliation reuses `acquirePublicationLease` (which
+  already allowed leasing from `state = "failed"` — this seam pre-existed and
+  was simply never wired up). The DB lease is the sole arbiter; no in-memory
+  lock exists or is needed.
+- **Durable bound**: `publications.attempt` (existing column, already
+  incremented by every lease acquisition) — once a Publication has been
+  leased `MAX_RECONCILE_ATTEMPTS` (5) times, it is left `unknown`
+  permanently for an operator rather than checked forever. The bound lives
+  in Postgres, survives restart.
+- **Where reconciliation runs**: the existing periodic content-scheduler tick
+  (same cron that already ran `reconcileStalePublications`) now also runs
+  `reconcileUnknownPublications`; `POST /api/publications/dispatch` (the
+  existing manual-tick endpoint) runs it too, for a deterministic trigger in
+  tests/operators. No new endpoint, no new job type, no new scheduler.
+
+**Changed files** (no schema/migration changes):
+
+| File | Change |
+|---|---|
+| `server/social/x.ts` | `XWriteActionPendingError` (carries the durable `writeActionId`); `checkXQuickWriteAction`/`reconcileXQuickWriteAction` (one non-throwing status check, reused by both the original poll loop and reconciliation) |
+| `server/content/adapters.ts` | `PublishRequest.reconciliationHint`; X adapter's `publish()` catch captures `writeActionId` into `outcome.metrics`; X adapter's `reconcile()` implemented (writeActionId lookup, externalId lookup fallback, tri-state) |
+| `server/content/publication.ts` | `recordPublished()` extracted (shared by normal publish and reconciliation); `reconcileUnknownPublications()`, `MAX_RECONCILE_ATTEMPTS`; ambiguous branch now persists `outcome.metrics` |
+| `server/content/storage.ts` | `insertResult` upsert-into-unknown-only via `onConflictDoUpdate` + `setWhere`; `deleteUnknownResult`; `listUnknownPublications` |
+| `server/content/service.ts` | cron tick also runs `reconcileUnknownPublications`; enqueue closure extracted and shared |
+| `server/content/routes.ts` | `/api/publications/dispatch` also runs reconciliation, returns `reconciled` stats |
+| `server/content/reconcile.test.ts` | unit: tri-state handling, durable bound, concurrency-skip, duplicate-reconcile idempotency, metrics passthrough |
+| `server/content/reconcile.dbtest.ts` | real Postgres + real X adapter + a plain local `http` double at the xQuick boundary only: golden path, confirmed-not-published, still-unknown/restart-equivalent, concurrent reconciliation, recurring-schedule interaction |
+| `e2e/fixture/rss-fixture.mjs` | `/control/x-write-mode`, `/control/x-resolve-write-action`, `GET /x/write-actions/:id` — simulates xQuick's async write-action protocol |
+| `script/e2e-live.mjs` | new live phase: ambiguous → reconcile → published; confirmed-not-published → re-queued → retried → published; both proven with exactly one final Result and no duplicate Occurrence |
+
+Verified in Phase 5: tsc 0 · unit 259/0 (58 suites) · DB 102/0/0 skipped (13
+suites) · live E2E 75/75 (all 3 reconciliation checks green across two
+consecutive full runs; a pre-existing, unrelated pg-boss/research queue
+timing flake — documented before this phase — surfaced once per run in an
+earlier phase, never in reconciliation) · fresh DB migration unchanged (13
+migrations, no new one needed).
+
 ## Phase 4 — recurrence expansion (done)
 
 Expands the existing `Schedule → Occurrence` primitive to support durable

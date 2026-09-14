@@ -361,9 +361,14 @@ export interface ContentStoragePort {
     },
   ): Promise<void>;
   listStalePublishing(now: Date, limit: number): Promise<Publication[]>;
+  /** Publications parked as `unknown` (transport invoked, outcome unconfirmed) — reconciliation candidates. */
+  listUnknownPublications(limit: number): Promise<Publication[]>;
 
+  /** Insert a Result, or resolve an existing `unknown` one — never overwrites a terminal Result. */
   insertResult(row: InsertResultRow): Promise<Result | undefined>;
   getResultByPublication(publicationId: number): Promise<Result | undefined>;
+  /** Clears a provisional `unknown` Result so a fresh publish attempt can record its own. */
+  deleteUnknownResult(publicationId: number): Promise<boolean>;
 }
 
 export class DatabaseContentStorage implements ContentStoragePort {
@@ -1166,12 +1171,44 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .limit(limit);
   }
 
+  async listUnknownPublications(limit: number): Promise<Publication[]> {
+    return this.database
+      .select()
+      .from(publications)
+      .where(and(eq(publications.state, "failed"), eq(publications.providerCalled, true)))
+      .orderBy(asc(publications.id))
+      .limit(limit);
+  }
+
   // ── Result ──────────────────────────────────────────────────────────────────
+  /**
+   * A Result is durable, but `unknown` is provisional by definition: it exists
+   * so reconciliation has something to resolve. `published`/`failed` are
+   * genuinely terminal and must never be overwritten (the `WHERE outcome =
+   * 'unknown'` guard is what makes this an upsert-into-unknown-only, not a
+   * general update — a second insert against an already-terminal Result is a
+   * silent no-op, exactly as before this method changed).
+   */
   async insertResult(row: InsertResultRow): Promise<Result | undefined> {
     const inserted = await this.database
       .insert(results)
       .values(row)
-      .onConflictDoNothing({ target: results.publicationId })
+      .onConflictDoUpdate({
+        target: results.publicationId,
+        set: {
+          outcome: row.outcome,
+          externalId: row.externalId,
+          externalUrl: row.externalUrl,
+          publishedAt: row.publishedAt,
+          metrics: row.metrics,
+          source: row.source,
+          errorClass: row.errorClass,
+          errorMessage: row.errorMessage,
+          correlationId: row.correlationId,
+          updatedAt: new Date(),
+        },
+        setWhere: eq(results.outcome, "unknown"),
+      })
       .returning();
     if (inserted.length > 0) return inserted[0];
     return this.getResultByPublication(row.publicationId);
@@ -1184,5 +1221,13 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(eq(results.publicationId, publicationId))
       .limit(1);
     return row;
+  }
+
+  async deleteUnknownResult(publicationId: number): Promise<boolean> {
+    const rows = await this.database
+      .delete(results)
+      .where(and(eq(results.publicationId, publicationId), eq(results.outcome, "unknown")))
+      .returning({ id: results.id });
+    return rows.length > 0;
   }
 }

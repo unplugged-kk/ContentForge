@@ -192,6 +192,10 @@ async function startApp() {
       XQUICK_API_BASE_URL: FIXTURE_BASE,
       XQUICK_API_KEY: "fixture-key",
       XQUICK_ACCOUNT: "cf_e2e",
+      // Fast, deterministic write-action polling for the Phase 5 reconciliation
+      // scenario (1 attempt, no delay) rather than the 6x2s production default.
+      XQUICK_WRITE_POLL_ATTEMPTS: "1",
+      XQUICK_WRITE_POLL_DELAY_MS: "1",
       // Phase 2: point the real providers at the deterministic fixture. The
       // operator allowlist is what lets the SSRF-guarded providers reach it; it
       // is default-off in production and never derived from request input.
@@ -1426,6 +1430,195 @@ const observed = {};
     const researchCounts = await q("select count(*)::int c from research_jobs");
     return `3 Publications -> 3 Results, all pinned to artifact ${recurringArtifactId} (research_jobs=${researchCounts[0].c}, unchanged by recurrence)`;
   });
+
+  // ── Phase 5: X publication reconciliation ───────────────────────────────────
+  phase("Phase 5: ambiguous X publication -> reconciliation -> resolved, no duplication");
+
+  /**
+   * An approved Artifact whose payload text contains `marker` — lets the
+   * fixture's write-action arm target THIS scenario's publish call
+   * specifically, immune to the real periodic content-scheduler cron
+   * publishing unrelated, already-due schedules concurrently in the
+   * background throughout the live run.
+   */
+  async function approvedArtifactWithMarker(marker) {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "reconciliation probe",
+      objective: "prove unknown -> reconcile -> resolved",
+      format: "x_post",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const done = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "reconcile-probe generation" },
+    );
+    await http("POST", `/api/artifacts/${done.artifactId}/submit-review`, {});
+    await http("POST", `/api/artifacts/${done.artifactId}/approve`, {});
+    // Human-edit revision so the payload text is exactly the marker we control.
+    const rev = await http("POST", `/api/artifacts/${done.artifactId}/revise`, {
+      baseArtifactId: done.artifactId,
+      payload: { text: marker },
+      attributionReason: "reconciliation E2E marker text",
+    });
+    assert(rev.status === 201, `revise ${rev.status}: ${rev.text}`);
+    await http("POST", `/api/artifacts/${rev.body.id}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${rev.body.id}/approve`, {});
+    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return approved.body.id;
+  }
+
+  const resolveMarker = `${RUN}-reconcile-resolve`;
+  const requeueMarker = `${RUN}-reconcile-requeue`;
+
+  const ambiguousPublicationId = await check(
+    "an xQuick write accepted but never resolved becomes an `unknown` Result, never falsely published",
+    async () => {
+      const artifactId = await approvedArtifactWithMarker(resolveMarker);
+      observed.reconcileResolveArtifactId = artifactId;
+      await fixturePost("/control/x-write-mode", { mode: "pending", matchSubstring: resolveMarker });
+      const sched = await http("POST", "/api/schedules", { artifactId });
+      assert(sched.status === 201, `schedule ${sched.status}: ${sched.text}`);
+
+      const dispatch = await http("POST", "/api/publications/dispatch", {});
+      assert(dispatch.status === 200, `dispatch ${dispatch.status}: ${dispatch.text}`);
+      const mine = (dispatch.body.publications ?? []).find((p) => p.scheduleId === sched.body.id);
+      assert(mine, "no Publication was created for this Schedule");
+
+      const row = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${mine.id}`);
+          if (res.body.state === "failed" && res.body.result?.outcome === "unknown") return res.body;
+          if (res.body.state === "published") throw new Error("must not be falsely published while ambiguous");
+          return false;
+        },
+        { timeoutMs: 30_000, intervalMs: 1000, label: "publication reaches unknown" },
+      );
+      assert(row.result.externalId === null, "no external id may be recorded while unresolved");
+      const dbRow = (await q("select metrics from results where publication_id = $1", [mine.id]))[0];
+      assert(typeof dbRow.metrics?.writeActionId === "string", "writeActionId must be captured for later reconciliation");
+      observed.reconcileWriteActionId = dbRow.metrics.writeActionId;
+      return mine.id;
+    },
+  );
+
+  await check(
+    "reconciliation discovers the external post: Publication -> published, SAME Result row updated, occurrence marked published",
+    async () => {
+      await fixturePost("/control/x-resolve-write-action", {
+        id: observed.reconcileWriteActionId,
+        status: "success",
+        tweetId: `${observed.reconcileWriteActionId}-resolved`,
+      });
+      const beforeResultId = (
+        await q("select id from results where publication_id = $1", [ambiguousPublicationId])
+      )[0].id;
+
+      // One explicit trigger, then rely on GET polling only — the real
+      // autonomous content-scheduler cron (running continuously) is a valid
+      // second path to the same durable outcome, and hammering the dispatch
+      // endpoint in a tight loop would burn the global API rate limit shared
+      // with the rest of this suite.
+      await http("POST", "/api/publications/dispatch", {});
+      const published = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${ambiguousPublicationId}`);
+          return res.body.state === "published" ? res : false;
+        },
+        { timeoutMs: 90_000, intervalMs: 5000, label: "reconciliation resolves the ambiguous publication" },
+      );
+      assert(published.body.externalId === `${observed.reconcileWriteActionId}-resolved`, "external id must be the confirmed post id");
+
+      const resultRows = await q("select id, outcome from results where publication_id = $1", [ambiguousPublicationId]);
+      assert(resultRows.length === 1, `expected exactly 1 Result row, got ${resultRows.length}`);
+      assert(resultRows[0].id === beforeResultId, "reconciliation must resolve the SAME Result row, not insert a second one");
+      assert(resultRows[0].outcome === "published", `outcome=${resultRows[0].outcome}`);
+
+      // Duplicate reconciliation must be harmless (already resolved -> 0 candidates).
+      const again = await http("POST", "/api/publications/dispatch", {});
+      assert((again.body.reconciled?.resolved ?? 0) === 0, "an already-resolved Publication is not an unknown candidate anymore");
+      const resultRows2 = await q("select id from results where publication_id = $1", [ambiguousPublicationId]);
+      assert(resultRows2.length === 1, "duplicate reconciliation created no second Result");
+
+      return `publication ${ambiguousPublicationId} resolved via reconciliation, Result row ${beforeResultId} unchanged in identity`;
+    },
+  );
+
+  await check(
+    "confirmed not published: a second ambiguous Publication is reset and its retried publish reaches exactly one final Result",
+    async () => {
+      const artifactId2 = await approvedArtifactWithMarker(requeueMarker);
+      await fixturePost("/control/x-write-mode", { mode: "pending", matchSubstring: requeueMarker });
+      const sched2 = await http("POST", "/api/schedules", { artifactId: artifactId2 });
+      assert(sched2.status === 201, `schedule ${sched2.status}: ${sched2.text}`);
+
+      // Materialize + attempt it once it's due.
+      const dispatch2 = await http("POST", "/api/publications/dispatch", {});
+      const mine2 = (dispatch2.body.publications ?? []).find((p) => p.scheduleId === sched2.body.id);
+      assert(mine2, "no Publication was created for this Schedule");
+      const pub2Id = mine2.id;
+      const unknownRow = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${pub2Id}`);
+          return res.body.result?.outcome === "unknown" ? res.body : false;
+        },
+        { timeoutMs: 20_000, intervalMs: 1000, label: "second publication reaches unknown" },
+      );
+      const writeActionId2 = (await q("select metrics from results where publication_id = $1", [pub2Id]))[0].metrics.writeActionId;
+
+      await fixturePost("/control/x-resolve-write-action", {
+        id: writeActionId2,
+        status: "failed",
+        message: "xQuick write action failed (fixture-simulated).",
+      });
+
+      // One explicit trigger, then GET-only polling — the real autonomous
+      // content-scheduler cron is a valid second path to the same durable
+      // outcome, and repeated POST /dispatch calls would burn the global API
+      // rate limit shared with the rest of this suite.
+      await http("POST", "/api/publications/dispatch", {});
+      await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${pub2Id}`);
+          return res.body.state !== "failed" || res.body.result?.outcome !== "unknown" ? res.body : false;
+        },
+        { timeoutMs: 90_000, intervalMs: 5000, label: "confirmed-not-published reconciliation (own dispatch or autonomous cron)" },
+      );
+
+      // The re-queued Publication reaches `queued`; the durable worker (or a
+      // follow-up dispatch, since the fixture now answers /x/tweets normally)
+      // publishes it for real — never a second Occurrence, never regeneration.
+      const finalRow = await waitFor(
+        async () => {
+          const res = await http("GET", `/api/publications/${pub2Id}`);
+          if (res.body.state === "published") return res.body;
+          if (res.body.state === "failed" && res.body.result?.outcome !== "unknown") {
+            throw new Error(`retried publish ended in an unexpected terminal state: ${JSON.stringify(res.body)}`);
+          }
+          return false;
+        },
+        { timeoutMs: 60_000, intervalMs: 3000, label: "retried publish after confirmed non-publication" },
+      );
+      assert(finalRow.externalId, "the retried, successful publish must carry a real external id");
+
+      const resultRows = await q("select id, outcome from results where publication_id = $1", [pub2Id]);
+      assert(resultRows.length === 1, `expected exactly 1 final Result, got ${resultRows.length}`);
+      assert(resultRows[0].outcome === "published", `outcome=${resultRows[0].outcome}`);
+
+      const occRows = await q("select count(*)::int c from schedule_occurrences where schedule_id = $1", [sched2.body.id]);
+      assert(occRows[0].c === 1, "confirmed-not-published reconciliation must never create a second Occurrence");
+
+      return `publication ${pub2Id}: confirmed not published -> re-queued -> retried -> published (${finalRow.externalId})`;
+    },
+  );
 
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");

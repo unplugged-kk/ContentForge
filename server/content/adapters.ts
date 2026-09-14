@@ -12,7 +12,13 @@
  */
 
 import type { JsonRecord } from "./storage";
-import { postContentToX, translateXError } from "../social/x";
+import {
+  fetchTweetTextByIdViaOfficialApi,
+  postContentToX,
+  reconcileXQuickWriteAction,
+  translateXError,
+  XWriteActionPendingError,
+} from "../social/x";
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
@@ -23,6 +29,12 @@ export interface PublishRequest {
   correlationId: string;
   /** Present when reconciling a previously attempted publication. */
   externalId?: string | null;
+  /**
+   * Opaque, adapter-specific continuity data captured from an earlier ambiguous
+   * `publish()` attempt (e.g. a provider write-action id). Generic at this
+   * interface level; only the adapter that produced it knows how to read it.
+   */
+  reconciliationHint?: JsonRecord | null;
 }
 
 export interface PublishOutcome {
@@ -133,6 +145,22 @@ export function createXChannelAdapter(): ChannelAdapter {
           metrics: { unitCount: result.tweetIds.length, username: result.username },
         };
       } catch (error) {
+        // xQuick accepted the write (202 + writeActionId) but we gave up
+        // polling before it resolved. The write action id is the durable
+        // handle reconciliation later asks xQuick about — never a tweet id.
+        if (error instanceof XWriteActionPendingError) {
+          // No errorClass: `providerCalled: true` + `ok: false` is what tells
+          // the caller this is ambiguous ("unknown"), not a classified failure.
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: null,
+            externalUrl: null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: { writeActionId: error.writeActionId },
+          };
+        }
         const raw = error instanceof Error ? error.message : String(error);
         // The transport was invoked; a partial thread may exist. Never report
         // success, and never silently retry into a duplicate thread.
@@ -149,13 +177,68 @@ export function createXChannelAdapter(): ChannelAdapter {
     },
 
     /**
-     * Reconciliation stub. `postContentToX` does not return partially-created
-     * ids on failure, so a mid-thread failure cannot currently be confirmed from
-     * here — the caller records an `unknown` Result for operator reconciliation
-     * rather than guessing.
+     * Reconciliation. Two durable identifiers are recognized, exact
+     * provider-side lookup only — no scraping, no guessing:
+     *
+     *   1. `reconciliationHint.writeActionId` — set when a prior `publish()`
+     *      call got a 202 from xQuick but gave up polling before it resolved.
+     *      Re-checked once against the same xQuick write-action endpoint.
+     *   2. `externalId` — an already-known post id (e.g. re-reconciling an
+     *      already-resolved Publication); confirmed by direct tweet lookup.
+     *
+     * `null` ("still unknown") is returned whenever the provider cannot be
+     * asked right now, or answers inconclusively — never invented as
+     * "confirmed not published".
      */
     async reconcile(request: PublishRequest): Promise<PublishOutcome | null> {
-      if (!request.externalId) return null;
+      const writeActionId =
+        typeof request.reconciliationHint?.writeActionId === "string"
+          ? request.reconciliationHint.writeActionId
+          : null;
+
+      if (writeActionId) {
+        const status = await reconcileXQuickWriteAction(writeActionId);
+        if (!status || status.status === "pending") return null; // still unknown
+        if (status.status === "success") {
+          return {
+            ok: true,
+            providerCalled: true,
+            externalId: status.tweetId,
+            externalUrl: status.url,
+            publishedAt: new Date(),
+          };
+        }
+        // Confirmed: xQuick itself reports this write action failed — the
+        // post was never created.
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: status.message,
+        };
+      }
+
+      if (request.externalId) {
+        // A read-API miss is not proof of absence (private, deleted, rate
+        // limited, or no read endpoint configured all look identical) — stay
+        // unknown rather than assume "not published".
+        const text = await fetchTweetTextByIdViaOfficialApi(request.externalId);
+        if (text) {
+          return {
+            ok: true,
+            providerCalled: true,
+            externalId: request.externalId,
+            externalUrl: null,
+            publishedAt: new Date(),
+          };
+        }
+        return null;
+      }
+
+      // No durable identifier to check at all.
       return null;
     },
   };

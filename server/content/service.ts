@@ -21,7 +21,12 @@ import {
   type GenerationDeps,
 } from "./generation";
 import type { ChatDeps } from "./chat";
-import { runPublication, reconcileStalePublications, type PublicationDeps } from "./publication";
+import {
+  runPublication,
+  reconcileStalePublications,
+  reconcileUnknownPublications,
+  type PublicationDeps,
+} from "./publication";
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
@@ -295,6 +300,17 @@ export function startContentScheduler(options: { cronExpression?: string } = {})
     return;
   }
 
+  const enqueuePublicationJob = async (publication: { id: number; correlationId: string; idempotencyKey: string }) => {
+    const { getJobRuntime } = await import("../jobs/bootstrap");
+    const enqueued = await getJobRuntime().enqueue({
+      jobType: PUBLICATION_RUN_JOB_TYPE,
+      payload: { publicationId: publication.id },
+      correlationId: publication.correlationId,
+      idempotencyKey: publication.idempotencyKey,
+    });
+    return !enqueued.deduplicated;
+  };
+
   let running = false;
   const tick = async (): Promise<void> => {
     if (running) return;
@@ -303,21 +319,26 @@ export function startContentScheduler(options: { cronExpression?: string } = {})
       const now = new Date();
       const result = await dispatchDueOccurrences(now, {
         content: contentStorage,
-        enqueuePublication: async (publication) => {
-          const { getJobRuntime } = await import("../jobs/bootstrap");
-          const enqueued = await getJobRuntime().enqueue({
-            jobType: PUBLICATION_RUN_JOB_TYPE,
-            payload: { publicationId: publication.id },
-            correlationId: publication.correlationId,
-            idempotencyKey: publication.idempotencyKey,
-          });
-          return !enqueued.deduplicated;
-        },
+        enqueuePublication: enqueuePublicationJob,
       });
-      const reconciled = await reconcileStalePublications(now, publicationDeps);
-      if (result.materialized > 0 || result.enqueued > 0 || reconciled > 0) {
+      const stale = await reconcileStalePublications(now, publicationDeps);
+      // Real provider-side reconciliation for `unknown` Publications (see
+      // `reconcileUnknownPublications` docs). A confirmed non-publication is
+      // re-queued through the same durable job, never re-published inline.
+      const unknown = await reconcileUnknownPublications(now, {
+        ...publicationDeps,
+        enqueuePublication: enqueuePublicationJob,
+      });
+      if (
+        result.materialized > 0 ||
+        result.enqueued > 0 ||
+        stale > 0 ||
+        unknown.resolved > 0 ||
+        unknown.requeued > 0
+      ) {
         console.log(
-          `[content-scheduler] materialized=${result.materialized} enqueued=${result.enqueued} reconciled=${reconciled}`,
+          `[content-scheduler] materialized=${result.materialized} enqueued=${result.enqueued} stale=${stale} ` +
+            `reconciled(resolved=${unknown.resolved} requeued=${unknown.requeued} stillUnknown=${unknown.stillUnknown} exhausted=${unknown.exhausted})`,
         );
       }
     } catch (error) {

@@ -116,10 +116,14 @@ export {
 } from "./scheduling";
 
 export {
+  MAX_RECONCILE_ATTEMPTS,
   reconcileStalePublications,
+  reconcileUnknownPublications,
   runPublication,
   DEFAULT_LEASE_MS,
   type PublicationDeps,
+  type ReconcileDeps,
+  type ReconcileUnknownResult,
   type PublicationRunResult,
   type PublicationRunStatus,
 } from "./publication";

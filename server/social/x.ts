@@ -245,29 +245,77 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * A write was accepted by xQuick (202 + `writeActionId`) but its outcome could
+ * not be established before we gave up polling. The write action id is the
+ * durable handle a later reconciliation pass uses to ask xQuick again — it is
+ * NOT a tweet id and must never be treated as one.
+ */
+export class XWriteActionPendingError extends Error {
+  constructor(
+    readonly writeActionId: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "XWriteActionPendingError";
+  }
+}
+
+export type XWriteActionStatus =
+  | { status: "success"; tweetId: string; url: string | null }
+  | { status: "failed"; message: string }
+  | { status: "pending" };
+
+/** One non-throwing status check against xQuick's write-action endpoint. */
+async function checkXQuickWriteAction(
+  config: { baseUrl: string; token: string },
+  writeActionId: string,
+): Promise<XWriteActionStatus> {
+  const endpoint = getXQuickWriteActionEndpoint().replace("{id}", encodeURIComponent(writeActionId));
+  const res = await fetch(joinUrl(config.baseUrl, endpoint), {
+    headers: buildXQuickHeaders(config.token),
+    signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
+  });
+  const body = (await res.json().catch(() => ({}))) as XQuickPostResponse;
+  if (!res.ok) {
+    throw new Error(body?.message || body?.error || `xQuick write-action status returned HTTP ${res.status}`);
+  }
+  if (body.status === "success" && body.tweetId) {
+    return { status: "success", tweetId: body.tweetId, url: body.url ?? null };
+  }
+  if (body.status === "failed") return { status: "failed", message: body.message || "xQuick write action failed." };
+  return { status: "pending" };
+}
+
 async function pollXQuickWriteAction(
   config: { baseUrl: string; token: string },
   writeActionId: string,
 ): Promise<XQuickPostResponse> {
   const maxAttempts = Number(process.env.XQUIK_WRITE_POLL_ATTEMPTS ?? process.env.XQUICK_WRITE_POLL_ATTEMPTS ?? 6);
   const delayMs = Number(process.env.XQUIK_WRITE_POLL_DELAY_MS ?? process.env.XQUICK_WRITE_POLL_DELAY_MS ?? 2_000);
-  const endpoint = getXQuickWriteActionEndpoint().replace("{id}", encodeURIComponent(writeActionId));
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) await sleep(delayMs);
-    const res = await fetch(joinUrl(config.baseUrl, endpoint), {
-      headers: buildXQuickHeaders(config.token),
-      signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
-    });
-    const body = await res.json().catch(() => ({})) as XQuickPostResponse;
-    if (!res.ok) {
-      throw new Error(body?.message || body?.error || `xQuick write-action status returned HTTP ${res.status}`);
-    }
-    if (body.status === "success" && body.tweetId) return body;
-    if (body.status === "failed") throw new Error(body.message || "xQuick write action failed.");
+    const status = await checkXQuickWriteAction(config, writeActionId);
+    if (status.status === "success") return { id: status.tweetId, tweetId: status.tweetId, url: status.url ?? undefined };
+    if (status.status === "failed") throw new Error(status.message);
   }
 
-  throw new Error(`xQuick write action ${writeActionId} is still pending. Check /x/write-actions/${writeActionId}.`);
+  throw new XWriteActionPendingError(
+    writeActionId,
+    `xQuick write action ${writeActionId} is still pending after ${maxAttempts} checks.`,
+  );
+}
+
+/**
+ * Reconciliation: ask xQuick again, once, whether a previously-ambiguous write
+ * action has since resolved. Returns `null` only when there is no configured
+ * client to ask (never as a stand-in for "not published").
+ */
+export async function reconcileXQuickWriteAction(writeActionId: string): Promise<XWriteActionStatus | null> {
+  const config = await getXQuickApiConfig();
+  if (!config) return null;
+  return checkXQuickWriteAction(config, writeActionId);
 }
 
 /**
