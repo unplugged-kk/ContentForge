@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 10) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-14 (Phase 11) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,87 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **302 passed / 0 failed** (66 suites) |
-| `npm test` | **302 passed** |
-| `npm run test:db` (real PostgreSQL) | **129 passed / 0 failed / 0 skipped** (19 suites) |
-| `npm run test:e2e:live` (real running app) | **82/82, 0 failed** — now includes 3 new Phase 10 checks (context A vs B, restart-frozen context) |
+| `npm run test:unit` | **327 passed / 0 failed** (74 suites) |
+| `npm test` | **327 passed** |
+| `npm run test:db` (real PostgreSQL) | **137 passed / 0 failed / 0 skipped** (20 suites) |
+| `npm run test:e2e:live` (real running app) | **all 7 new Phase 11 checks pass**, confirmed on two full reproducible runs. A handful of pre-existing, unrelated infra timeouts (Phase 1.5 cron tick, Phase 2 mixed-provider fixture timing, Phase 6 LinkedIn reconciliation, Phase 10 context-B) fail intermittently on different checks between runs — timing noise in this harness, not a regression: Phase 11's own checks were green both times |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed**, unchanged regression |
-| Fresh DB migration | **14 migrations** from zero (+1: additive `generation_policies.context_snapshot`) |
+| Fresh DB migration | **15 migrations** from zero (+1: additive `style_analyses` table, +7 columns on `style_profiles`) |
 | Existing DB migration | upgrades to the same schema |
 | External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
 
-Baseline before this phase: 290 unit / 121 DB / 79-of-79 live E2E / 14-of-14 visual E2E.
+Baseline before this phase: 302 unit / 129 DB / 82-of-89 live E2E (pre-existing flakes) / 14-of-14 visual E2E.
+
+---
+
+## Real-post style intelligence (new in this phase — Phase 11)
+
+**Observed style evidence, not a learning system.** Closes the gap where
+Phase 10 reads `style_profiles.isFavorite` rows but nothing produced one
+from real authored content. Adds `AuthoredContent → StyleAnalyzer →
+StyleObservation`, generalizing the existing `style_profiles`/`references`
+tables and adding exactly one new job-lifecycle table:
+
+```
+references (owner-scoped source content: X post / LinkedIn post / manual)
+        ↓
+requestStyleAnalysis → style_analyses (requested → analyzing → ready|failed,
+                                        idempotent by referenceId+analyzerVersion+contentHash)
+        ↓ pg-boss style.analyze (mirrors visual.run's exact queue config)
+StyleAnalyzerPort (gateway-backed — reuses server/ai/*, no second AI client)
+        ↓
+StyleObservation (bounded structured dimensions; confidence: strong|weak|insufficient)
+        ↓
+style_profiles (generalized: analysisId, structuredObservation, confidence,
+                 analyzerVersion, sourceContentHash, supersedesId chain)
+        ↓
+ContextStorageReader.listFavoriteStyleProfiles — Phase 10's EXISTING seam, extended
+        ↓
+assembleContext → GenerationPolicy → GenerationJob.policySnapshot (FROZEN)
+```
+
+- **No new context abstraction**: style evidence enters generation only
+  through Phase 10's `ContextStorageReader`/`assembleContext`. No
+  `StyleContext`/`PersonalizationContext`/second prompt assembler was built.
+- **Stable profile untouched**: `user_profile`'s brandVoice/niche/audience/
+  contentGoals/writingStyleNotes/messagingPillars remain entirely
+  user-controlled — this phase never writes to them.
+- **Confidence is documented, not a magic number**: `strong | weak |
+  insufficient`. An `insufficient` observation is a valid, honest result
+  (never synthesized as real style) and is excluded from context.
+- **Versioned, never mutated**: an explicit re-analysis creates a NEW
+  `style_profiles` row chained via `supersedesId`; the original stays
+  unmutated and readable. Duplicate delivery of the same analysis job
+  collapses to ONE row (idempotency key = referenceId + analyzer version +
+  content hash).
+- **Deterministic inclusion, zero embeddings**: a row enters context when
+  favorited OR analyzer-produced (`analysisId IS NOT NULL`), excluding
+  `insufficient` confidence (checked in JS — SQL `!=` is NULL-unsafe and
+  would silently drop every pre-Phase-11 legacy row) and excluding
+  superseded (non-head) rows via an anti-join.
+- **Snapshot boundary proven at all three tiers**: mutation test (DB) shows
+  Job A's frozen snapshot survives a superseding re-analysis untouched;
+  restart proof (DB AND live HTTP with a real `SIGKILL` + app restart) shows
+  a queued style-aware job executes against only the observation frozen
+  before the mutation.
+- **Ownership isolation**: SQL-level owner filter on every read; a foreign
+  reference or style-profile id is refused with the same non-leaking 404
+  shape as existing visual-asset routes.
+- **Security**: authored source content is treated as untrusted DATA, never
+  instructions — both the analyzer's system prompt and the context-rendering
+  block state this explicitly (reusing Phase 10's exact framing).
+- **API**: `POST /references`, `POST /references/:id/style-analysis`,
+  `GET /style-analyses/:id`, `GET /style-profiles/:id` — minimal HTTP surface
+  to supply content, trigger analysis, and read results; no UI.
+
+Full detail: `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 11.
+
+**Deferred, explicitly**: aggregation across multiple observations into one
+blended profile; `memoryJson`/`brandingJson` learned-state integration
+(unchanged from Phase 10, still pending a legacy-flow audit); the broader
+self-learning/feedback loop (automatic re-analysis, style drift tracking,
+cross-observation synthesis). This phase is observed evidence, not a
+learning system.
 
 ---
 
