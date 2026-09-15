@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { eq, inArray, like } from "drizzle-orm";
+import { eq, inArray, like, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -197,9 +197,13 @@ describeDb("creation intelligence (db)", () => {
       : [];
     const artIds = artRows.map((r) => r.id);
     const genRows = oppIds.length
-      ? await db.select({ id: generationJobs.id }).from(generationJobs).where(inArray(generationJobs.opportunityId, oppIds))
+      ? await db
+          .select({ id: generationJobs.id, policyId: generationJobs.policyId })
+          .from(generationJobs)
+          .where(inArray(generationJobs.opportunityId, oppIds))
       : [];
     const genIds = genRows.map((r) => r.id);
+    const genPolicyIds = Array.from(new Set(genRows.map((r) => r.policyId).filter((id): id is number => id !== null)));
     const schedRows = artIds.length
       ? await db.select({ id: schedules.id }).from(schedules).where(inArray(schedules.artifactId, artIds))
       : [];
@@ -216,9 +220,36 @@ describeDb("creation intelligence (db)", () => {
     if (artIds.length) await db.delete(artifacts).where(inArray(artifacts.id, artIds));
     if (genIds.length) await db.delete(generationJobs).where(inArray(generationJobs.id, genIds));
     if (oppIds.length) await db.delete(opportunities).where(inArray(opportunities.id, oppIds));
-    await db.delete(generationPolicies).where(like(generationPolicies.policyKey, "pol:%"));
-    await db.delete(voices).where(like(voices.name, `${RUN}%`));
-    await db.delete(contentTemplates).where(like(contentTemplates.name, `${RUN}%`));
+    const voiceRows = await db.select({ id: voices.id }).from(voices).where(like(voices.name, `${RUN}%`));
+    const voiceIds = voiceRows.map((r) => r.id);
+    const templateRows = await db
+      .select({ id: contentTemplates.id })
+      .from(contentTemplates)
+      .where(like(contentTemplates.name, `${RUN}%`));
+    const templateIds = templateRows.map((r) => r.id);
+    // Every policy THIS file's jobs referenced, plus any policy that pins one
+    // of THIS file's voices/templates directly (a policy resolved without an
+    // Opportunity/GenerationJob in scope) — a global `policyKey like 'pol:%'`
+    // sweep raced other dbtest files' still-live generation_jobs rows
+    // referencing shared (content-addressed) policies.
+    const pinnedPolicyRows =
+      voiceIds.length || templateIds.length
+        ? await db
+            .select({ id: generationPolicies.id })
+            .from(generationPolicies)
+            .where(
+              or(
+                voiceIds.length ? inArray(generationPolicies.voiceId, voiceIds) : undefined,
+                templateIds.length ? inArray(generationPolicies.templateId, templateIds) : undefined,
+              ),
+            )
+        : [];
+    const policyIdsToDelete = Array.from(new Set([...genPolicyIds, ...pinnedPolicyRows.map((r) => r.id)]));
+    if (policyIdsToDelete.length) {
+      await db.delete(generationPolicies).where(inArray(generationPolicies.id, policyIdsToDelete));
+    }
+    if (voiceIds.length) await db.delete(voices).where(inArray(voices.id, voiceIds));
+    if (templateIds.length) await db.delete(contentTemplates).where(inArray(contentTemplates.id, templateIds));
     if (allStoryIds.length) await db.delete(stories).where(inArray(stories.id, allStoryIds));
     if (jobIds.length) await db.delete(researchEvidence).where(inArray(researchEvidence.jobId, jobIds));
     if (jobIds.length) await db.delete(researchSources).where(inArray(researchSources.jobId, jobIds));

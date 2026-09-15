@@ -746,6 +746,14 @@ export const opportunities = pgTable(
      * NULL for everything that did not originate from chat.
      */
     chatKey: varchar("chat_key", { length: 200 }),
+    /**
+     * Durable idempotency for repurposing (Phase 12): a repeated
+     * `repurposeStory(storyId, targets)` delivery with the same caller-
+     * supplied requestKey + (format, channel) reuses this Opportunity
+     * instead of creating a sibling. NULL when repurposing supplied no
+     * requestKey, or for anything not created through repurposing.
+     */
+    repurposeKey: varchar("repurpose_key", { length: 200 }),
     killReason: text("kill_reason"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -754,6 +762,7 @@ export const opportunities = pgTable(
     index("opportunities_story_idx").on(table.storyId),
     index("opportunities_status_idx").on(table.status),
     uniqueIndex("opportunities_chat_key_uq").on(table.chatKey),
+    uniqueIndex("opportunities_repurpose_key_uq").on(table.repurposeKey),
   ],
 );
 

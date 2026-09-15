@@ -66,6 +66,8 @@ export interface InsertOpportunityRow {
   proposer: string;
   /** Durable idempotency for chat-to-post (NULL for non-chat opportunities). */
   chatKey?: string | null;
+  /** Durable idempotency for repurposing (Phase 12); NULL otherwise. */
+  repurposeKey?: string | null;
 }
 
 // ── GenerationJob ─────────────────────────────────────────────────────────────
@@ -291,6 +293,12 @@ export interface ContentStoragePort {
   getOpportunity(id: number): Promise<Opportunity | undefined>;
   /** Durable chat idempotency lookup. */
   getOpportunityByChatKey(chatKey: string): Promise<Opportunity | undefined>;
+  /**
+   * Durable repurposing idempotency lookup (Phase 12). Optional so every
+   * pre-existing hand-built `ContentStoragePort` test double is unaffected
+   * unless it opts in.
+   */
+  getOpportunityByRepurposeKey?(repurposeKey: string): Promise<Opportunity | undefined>;
   listOpportunitiesByStory(storyId: number): Promise<Opportunity[]>;
   updateOpportunityStatus(
     id: number,
@@ -781,6 +789,15 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .select()
       .from(opportunities)
       .where(eq(opportunities.chatKey, chatKey))
+      .limit(1);
+    return row;
+  }
+
+  async getOpportunityByRepurposeKey(repurposeKey: string): Promise<Opportunity | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.repurposeKey, repurposeKey))
       .limit(1);
     return row;
   }

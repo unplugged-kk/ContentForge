@@ -42,6 +42,7 @@ import {
   StoryMissingForOpportunityError,
   type GenerationDeps,
 } from "./generation";
+import { repurposeStory, RepurposeInputError } from "./repurposing";
 import {
   approveArtifact,
   createArtifact,
@@ -311,6 +312,28 @@ const createGenerationBody = z.object({
   regenerate: z.boolean().optional(),
 });
 
+const repurposeTargetBody = z.object({
+  format: z.string().trim().min(1).max(50),
+  channel: z.string().trim().min(1).max(50),
+  concept: z.string().trim().min(1).max(2000).optional(),
+  objective: z.string().trim().min(1).max(2000).optional(),
+  audience: z.string().trim().min(1).max(2000).optional(),
+  angle: z.string().trim().min(1).max(2000).optional(),
+  /** Opportunity only, no GenerationJob for this target. Default: generate. */
+  generate: z.boolean().optional(),
+  voiceId: z.number().int().positive().nullable().optional(),
+  templateId: z.number().int().positive().nullable().optional(),
+  model: z.string().trim().min(1).max(120).optional(),
+  constraints: z.record(z.unknown()).optional(),
+  /** Intentional new derivation for THIS target — bypasses reuse-by-key. */
+  regenerate: z.boolean().optional(),
+});
+
+const repurposeStoryBody = z.object({
+  requestKey: z.string().trim().min(1).max(200).optional(),
+  targets: z.array(repurposeTargetBody).min(1).max(20),
+});
+
 const reviseArtifactBody = z.object({
   /** The exact revision the client edited — guards against a stale base. */
   baseArtifactId: z.number().int().positive(),
@@ -385,6 +408,60 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       if (error instanceof InvalidOpportunityInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof StoryNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof StoryNotUsableError) return res.status(409).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  /**
+   * Repurposing (Phase 12): one existing Story -> N independently addressable
+   * Opportunities, each optionally carried straight through to a queued
+   * GenerationJob. Never touches research or a SourceProvider -- only the
+   * Story's already-durable evidence is read, through the same
+   * `createGenerationJob` path every other Opportunity already uses.
+   *
+   * Partial success by design: an invalid target is reported as such (207)
+   * without rolling back its valid siblings.
+   */
+  router.post("/stories/:id/repurpose", async (req, res, next) => {
+    const storyId = parseId(req.params.id);
+    if (storyId === null) return res.status(400).json({ message: "Invalid story id" });
+    try {
+      const body = repurposeStoryBody.parse(req.body ?? {});
+      const result = await repurposeStory(
+        storyId,
+        body,
+        { opportunities: deps.opportunities, generation: deps.generation },
+        getUserId(req) ?? 1,
+      );
+
+      for (const outcome of result.outcomes) {
+        if (outcome.status === "created" && outcome.job && outcome.job.status === "queued") {
+          try {
+            await deps.enqueueGeneration(outcome.job);
+          } catch {
+            // Best-effort: the GenerationJob row is already durable; a later
+            // retry/backfill can still pick it up. One target's queue hiccup
+            // must never invalidate the rest of the batch.
+          }
+        }
+      }
+
+      return res.status(207).json({
+        storyId: result.storyId,
+        outcomes: result.outcomes.map((o) => ({
+          format: o.format,
+          channel: o.channel,
+          status: o.status,
+          opportunityId: o.opportunity?.id ?? null,
+          generationJobId: o.job?.id ?? null,
+          error: o.error ?? null,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof RepurposeInputError) return res.status(400).json({ message: error.message });
       if (error instanceof StoryNotFoundError) return res.status(404).json({ message: error.message });
       if (error instanceof StoryNotUsableError) return res.status(409).json({ message: error.message });
       return next(error);

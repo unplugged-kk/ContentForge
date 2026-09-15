@@ -58,6 +58,8 @@ export const createOpportunitySchema = z.object({
   scoreBreakdown: z.record(z.unknown()).optional(),
   /** Durable idempotency for chat-originated Opportunities. */
   chatKey: z.string().trim().min(1).max(200).optional(),
+  /** Durable idempotency for repurposing-originated Opportunities (Phase 12). */
+  repurposeKey: z.string().trim().min(1).max(200).optional(),
 });
 
 export type CreateOpportunityInput = z.input<typeof createOpportunitySchema>;
@@ -151,6 +153,7 @@ export async function createOpportunityFromStory(
     scoreBreakdown: body.scoreBreakdown ?? {},
     proposer: body.proposer,
     chatKey: body.chatKey ?? null,
+    repurposeKey: body.repurposeKey ?? null,
   });
 }
 

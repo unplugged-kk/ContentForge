@@ -52,6 +52,17 @@ export {
 } from "./generation";
 
 export {
+  repurposeStory,
+  RepurposeInputError,
+  type RepurposeDeps,
+  type RepurposeInput,
+  type RepurposeResult,
+  type RepurposeTargetInput,
+  type RepurposeTargetOutcome,
+  type RepurposeOutcomeStatus,
+} from "./repurposing";
+
+export {
   assembleEffectiveRequest,
   canonicalJson,
   policySpecHash,

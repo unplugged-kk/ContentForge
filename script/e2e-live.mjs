@@ -2065,6 +2065,160 @@ const observed = {};
     return "nonexistent/foreign style profile refused";
   });
 
+  // ── 6c3. PHASE 12 RED ARROWS (first-class content repurposing) ──────────────
+  phase("Phase 12: one Story -> N Opportunities -> N independent GenerationJobs, no re-research");
+
+  let repurposeOpportunityIds = [];
+  let repurposeJobIds = [];
+  await check(
+    "POST /api/stories/:id/repurpose fans ONE Story out into three independently addressable Opportunities",
+    async () => {
+      const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+        requestKey: `${RUN}-repurpose`,
+        targets: [
+          { format: "x_post", channel: "x" },
+          { format: "x_thread", channel: "x" },
+          { format: "linkedin_post", channel: "linkedin" },
+        ],
+      });
+      assert(res.status === 207, `expected 207, got ${res.status}: ${res.text}`);
+      assert(res.body.outcomes.length === 3, `expected 3 outcomes, got ${res.body.outcomes.length}`);
+      assert(
+        res.body.outcomes.every((o) => o.status === "created"),
+        `expected all created, got ${JSON.stringify(res.body.outcomes.map((o) => o.status))}`,
+      );
+      repurposeOpportunityIds = res.body.outcomes.map((o) => o.opportunityId);
+      repurposeJobIds = res.body.outcomes.map((o) => o.generationJobId);
+      assert(new Set(repurposeOpportunityIds).size === 3, "three distinct Opportunities");
+      assert(
+        repurposeJobIds.every((id) => Number.isInteger(id)),
+        "every target got a queued GenerationJob",
+      );
+      return `story ${storyId} -> opportunities ${repurposeOpportunityIds.join(",")}`;
+    },
+  );
+
+  await check("every repurposed GenerationJob reaches a real Artifact through the real worker", async () => {
+    for (const jobId of repurposeJobIds) {
+      const job = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${jobId}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`job ${jobId} failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 60_000, intervalMs: 300, label: `repurposed job ${jobId}` },
+      );
+      assert(Number.isInteger(job.artifactId), `job ${jobId} produced no artifact`);
+    }
+    return `all ${repurposeJobIds.length} repurposed jobs produced Artifacts`;
+  });
+
+  await check(
+    "duplicate repurpose delivery (same requestKey) is idempotent — no sibling Opportunities created",
+    async () => {
+      const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+        requestKey: `${RUN}-repurpose`,
+        targets: [
+          { format: "x_post", channel: "x" },
+          { format: "x_thread", channel: "x" },
+          { format: "linkedin_post", channel: "linkedin" },
+        ],
+      });
+      assert(res.status === 207, `expected 207, got ${res.status}: ${res.text}`);
+      assert(
+        res.body.outcomes.every((o) => o.status === "reused"),
+        `expected all reused, got ${JSON.stringify(res.body.outcomes.map((o) => o.status))}`,
+      );
+      const reusedIds = res.body.outcomes.map((o) => o.opportunityId).sort((a, b) => a - b);
+      const originalIds = [...repurposeOpportunityIds].sort((a, b) => a - b);
+      assert(
+        JSON.stringify(reusedIds) === JSON.stringify(originalIds),
+        `the duplicate delivery must reuse the exact same Opportunities: ${JSON.stringify(reusedIds)} vs ${JSON.stringify(originalIds)}`,
+      );
+      return "duplicate delivery collapsed onto the original three Opportunities";
+    },
+  );
+
+  await check("intentional regenerate creates a NEW Opportunity even with the same requestKey", async () => {
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-repurpose`,
+      targets: [{ format: "x_post", channel: "x", regenerate: true }],
+    });
+    assert(res.status === 207, `expected 207, got ${res.status}: ${res.text}`);
+    assert(res.body.outcomes[0].status === "created", `expected created, got ${res.body.outcomes[0].status}`);
+    assert(
+      !repurposeOpportunityIds.includes(res.body.outcomes[0].opportunityId),
+      "regenerate must not reuse an existing Opportunity",
+    );
+    return `regenerate created a new sibling opportunity ${res.body.outcomes[0].opportunityId}`;
+  });
+
+  await check(
+    "partial failure: an invalid target never rolls back its valid siblings in the SAME batch",
+    async () => {
+      const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+        targets: [
+          { format: "x_post", channel: "x" },
+          { format: "x_post", channel: "some_unregistered_channel" },
+        ],
+      });
+      assert(res.status === 207, `expected 207, got ${res.status}: ${res.text}`);
+      assert(res.body.outcomes[0].status === "created", "the valid target still succeeded");
+      assert(res.body.outcomes[1].status === "invalid", "the invalid target is reported, not silently dropped");
+      return "valid target created despite an invalid sibling in the same request";
+    },
+  );
+
+  await check(
+    "repurposing never creates a ResearchJob — the same Story's evidence is reused, not re-researched",
+    async () => {
+      const before = await http("GET", "/api/research/jobs");
+      const beforeCount = before.body.length;
+      await http("POST", `/api/stories/${storyId}/repurpose`, {
+        targets: [{ format: "linkedin_post", channel: "linkedin" }],
+      });
+      const after = await http("GET", "/api/research/jobs");
+      assert(after.body.length === beforeCount, `research job count changed: ${beforeCount} -> ${after.body.length}`);
+      return "research_jobs count unchanged across a repurpose request";
+    },
+  );
+
+  await check("ownership isolation: repurposing a nonexistent/foreign Story is refused with a non-leaking 404", async () => {
+    const res = await http("POST", `/api/stories/${storyId + 1_000_000}/repurpose`, {
+      targets: [{ format: "x_post", channel: "x" }],
+    });
+    assert(res.status === 404, `expected 404, got ${res.status}`);
+    return "nonexistent/foreign story refused";
+  });
+
+  await check(
+    "restart proof: a repurposed GenerationJob queued before a real SIGKILL still completes from its frozen policy snapshot",
+    async () => {
+      const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+        targets: [{ format: "x_thread", channel: "x" }],
+      });
+      assert(res.status === 207, `expected 207, got ${res.status}: ${res.text}`);
+      const jobId = res.body.outcomes[0].generationJobId;
+      assert(Number.isInteger(jobId), "no GenerationJob queued for the restart-proof target");
+
+      await killApp("SIGKILL");
+      await startApp();
+
+      const job = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${jobId}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 500, label: "post-restart repurposed generation" },
+      );
+      assert(Number.isInteger(job.artifactId), "post-restart job produced no artifact");
+      return `repurposed job ${jobId} executed post-restart from its frozen snapshot`;
+    },
+  );
+
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
 

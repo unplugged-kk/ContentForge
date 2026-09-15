@@ -156,6 +156,136 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 12 — first-class content repurposing: one Story → N Opportunities (done)
+
+**The problem this closes**: `createOpportunityFromStory` already permitted many
+Opportunities per Story (Ticket 05 §4), but nothing turned "derive several
+pieces of content from this Story" into ONE product operation. Repurposing
+was possible only by hand-issuing N separate `POST /api/opportunities` calls
+with no shared batch identity, no dedup, and no lineage answer beyond the
+Story FK each Opportunity already carried.
+
+```
+Story (durable, reusable)
+        │
+        ▼
+repurposeStory(storyId, targets[])   ← the ONE new operation this phase adds
+        │
+        ├── createOpportunityFromStory   (existing, Phase B primitive — unchanged)
+        │       ↓
+        │   Opportunity (format × channel, storyId FK — the existing lineage)
+        │
+        └── createGenerationJob          (existing, Phase 10/11 primitive — unchanged)
+                ↓
+        GenerationPolicy (per format×channel, per Phase 10 context, per Phase 11 style)
+                ↓
+        GenerationJob.policySnapshot — FROZEN, independent per target
+```
+
+**Audit result (done first, per the mission)**: `Opportunity.storyId`,
+`format`, `channel` were already the complete lineage answer — no new
+lineage table was needed. `createOpportunityFromStory` already validated
+format×channel through the registered channel-adapter capability check
+(Phase 7's `formatChannelError`/`channelSupportsFormat`) — no
+`KNOWN_FORMAT_CHANNELS` allowlist to restore. `createGenerationJob` already
+derives its policy's `policyKey`/`specHash` from the Opportunity's own
+`format`/`channel` (Phase B) plus Phase 10's `contextHash` and Phase 11's
+observed style (both flow in through `ContextStorageReader`, unchanged) —
+so two targets on the same Story automatically get DISTINCT
+`GenerationPolicy` revisions with zero repurposing-specific branching.
+`loadGenerationContext` reads the Story's EXISTING evidence by
+`researchJobId`; it was never capable of creating a `ResearchJob`, so "no
+re-research" was already structurally guaranteed by composing existing
+primitives rather than reimplementing generation.
+
+**What this phase adds — `repurposeStory` (`server/content/repurposing.ts`)**:
+a single batch composition over the two EXISTING primitives above. No
+`RepurposingPolicy`, no second generation abstraction, no second queue, no
+new context seam. Per target, it:
+1. Validates `format`×`channel` via the SAME registry check Opportunity
+   creation already used — an unregistered channel is refused with the
+   same message, not a duplicated rule.
+2. Resolves idempotency (below), then calls `createOpportunityFromStory`.
+3. Unless the target sets `generate: false`, calls `createGenerationJob` —
+   the same call `POST /api/generation-jobs` makes for any other
+   Opportunity — inserting a queued job with a frozen policy snapshot.
+4. Records the outcome (`created` | `reused` | `invalid`) independently —
+   an invalid target is reported, never silently dropped, and never rolls
+   back its valid siblings (batch is all-succeed-independently, not
+   all-or-nothing).
+
+**Idempotency**: a new nullable, uniquely-indexed `opportunities.repurpose_key`
+column (additive migration `0015_repurposing.sql`), mirroring the EXISTING
+`chat_key` column's pattern exactly. A batch-level, caller-supplied
+`requestKey` (optional, like chat's `idempotencyKey`) plus each target's own
+`format`/`channel` composes the per-target key
+(`repurpose:${storyId}:${requestKey}:${format}:${channel}`). Duplicate
+delivery of the same batch is a no-op (the existing Opportunity — and its
+latest GenerationJob — is reused); a target with `regenerate: true`
+appends a fresh nonce, producing a genuinely new Opportunity/GenerationJob
+without poisoning the base key for future ordinary duplicate delivery.
+Concurrent duplicate requests are resolved the same way chat-to-post
+resolves them: the database's unique index rejects the loser, which then
+reads back the winner instead of failing.
+
+**Independent lifecycles**: each target's Opportunity/GenerationJob/Artifact
+is a normal, independent row from the moment it's created — repurposing
+introduces no shared "batch" entity whose state gates its siblings. Proven
+in `repurposing.dbtest.ts`: killing one repurposed Opportunity leaves its
+siblings untouched; approving/scheduling/publishing one repurposed
+Artifact never touches another; a context mutation between two separate
+repurpose calls never retroactively changes an earlier sibling's frozen
+`policySnapshot`.
+
+**Ownership**: `repurposeStory` takes an optional `callerUserId`; a Story
+owned by someone else is refused with the exact same `StoryNotFoundError` a
+missing Story produces (non-leaking, matching every other ownership check
+in this codebase). `POST /api/stories/:id/repurpose` passes the caller's id
+through.
+
+**API**: `POST /api/stories/:id/repurpose` — `{ requestKey?, targets: [{
+format, channel, concept?, objective?, audience?, angle?, generate?,
+voiceId?, templateId?, model?, constraints?, regenerate? }] }`. Returns
+`207 Multi-Status` with one outcome per target
+(`{ format, channel, status, opportunityId, generationJobId, error }`) —
+partial success is a first-class response shape, not an exception. The
+route enqueues every newly-created GenerationJob onto the SAME
+`generation.run` pg-boss queue every other job uses; a per-target enqueue
+failure is best-effort and never fails the whole batch (the row is
+already durable).
+
+**Verification**: `tsc` 0 errors; unit 338/338 (+11, `repurposing.test.ts`);
+real Postgres 147/147 (+10, `repurposing.dbtest.ts`, covering lineage,
+duplicate-delivery idempotency, regenerate, distinct policy hashes,
+no-ResearchJob, cross-owner isolation, cross-channel independence,
+context-mutation freezing, and restart-equivalent snapshot round-trip);
+live E2E — all 9 new Phase 12 checks pass on real HTTP, including a
+literal `SIGKILL` + restart of a repurposed GenerationJob and a
+duplicate-delivery/regenerate/partial-failure proof over real HTTP; visual
+E2E 14/14, unchanged. One additive migration
+(`0015_repurposing.sql` — one nullable column + one unique index).
+
+Two pre-existing, unrelated DB-test cleanup races (`creation.dbtest.ts` and
+`phase15.dbtest.ts` each deleted `generation_policies`/`voices`/
+`contentTemplates` with an unscoped, whole-table sweep, which could race
+another dbtest file's still-live `generation_jobs` row referencing a
+shared, content-addressed policy) were found and fixed as part of getting
+a clean full-suite run — scoped to the exact rows each file's own test
+data touched, no behavior change to the tests themselves.
+
+**Status labels**:
+- One canonical `repurposeStory` batch operation over existing primitives: **IMPLEMENTED**.
+- Story → Opportunity lineage via existing FKs (no new lineage table): **IMPLEMENTED**.
+- Registry-driven format/channel capability validation, reused not duplicated: **IMPLEMENTED**.
+- Durable idempotency (duplicate delivery vs. intentional regenerate): **IMPLEMENTED**.
+- Independent sibling lifecycles (generation/edit/approval/schedule/publish): **IMPLEMENTED**.
+- No re-research (structural, via existing `loadGenerationContext`): **IMPLEMENTED**.
+- Phase 10 context + Phase 11 observed style flowing into repurposed generation: **IMPLEMENTED** (unchanged seam, no new integration code).
+- Partial-success batch API (`207 Multi-Status`): **IMPLEMENTED**.
+- Visual/carousel/video repurposing targets: **DEFERRED** (the Opportunity/format/channel model is unchanged and already accommodates them — nothing new was added to enable or block them this phase).
+- Autonomous repurposing (auto-discovering targets, auto-publishing): **DEFERRED**, explicitly out of scope (Phase 13 concern).
+- Analytics/learning-driven target selection: **DEFERRED**, unchanged non-goal.
+
 ## Phase 11 — real-post style intelligence: observed evidence, not learning (done)
 
 **The problem this closes**: Phase 10 reads `style_profiles.isFavorite` rows,
