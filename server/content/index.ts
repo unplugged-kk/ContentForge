@@ -84,6 +84,44 @@ export {
 } from "./context";
 
 export {
+  getStyleAnalyzer,
+  hasStyleAnalyzer,
+  normalizeAuthoredText,
+  registerStyleAnalyzer,
+  resetStyleAnalyzers,
+  styleConfidenceEnum,
+  styleDimensionsSchema,
+  styleObservationSchema,
+  validateStyleObservation,
+  InvalidAuthoredContentError,
+  InvalidStyleObservationError,
+  StyleAnalyzerNotRegisteredError,
+  type AuthoredContent,
+  type AuthoredSourceType,
+  type StyleAnalyzerOutput,
+  type StyleAnalyzerPort,
+  type StyleConfidence,
+  type StyleDimensions,
+  type StyleObservation,
+} from "./style";
+
+export { createGatewayStyleAnalyzer, type GatewayStyleAnalyzerOptions } from "./styleAnalyzer";
+
+export {
+  createDatabaseStyleStorage,
+  renderStylePromptSnippet,
+  requestStyleAnalysis,
+  runStyleAnalysis,
+  styleAnalysisIdempotencyKey,
+  ReferenceNotFoundError,
+  StyleServiceInputError,
+  type RequestStyleAnalysisInput,
+  type StyleAnalysisRunResult,
+  type StyleServiceDeps,
+  type StyleStoragePort,
+} from "./styleService";
+
+export {
   getFormatProfile,
   hasFormatProfile,
   listFormatProfiles,

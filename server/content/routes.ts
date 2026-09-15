@@ -73,6 +73,7 @@ import {
 } from "./scheduling";
 import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
+import { requestStyleAnalysis, ReferenceNotFoundError, StyleServiceInputError } from "./styleService";
 import { getChannelAdapter } from "./adapters";
 import {
   createVisualGeneration,
@@ -107,6 +108,9 @@ export interface ContentApiDeps {
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
   enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
+  /** Optional so existing test doubles that build `ContentApiDeps` by hand are unaffected. */
+  style?: import("./styleService").StyleServiceDeps;
+  enqueueStyleAnalysis?: (analysis: import("@shared/schema").StyleAnalysis) => Promise<boolean>;
 }
 
 // ── serializers ───────────────────────────────────────────────────────────────
@@ -1060,6 +1064,112 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  // ── Style intelligence (Phase 11) — minimal surface for real-post learning ──
+  const createReferenceBody = z.object({
+    text: z.string().trim().min(1).max(20_000),
+    sourceType: z.enum(["x_post", "linkedin_post", "manual"]).default("manual"),
+    title: z.string().trim().max(500).optional(),
+  });
+
+  /** Authored source content — the durable, owner-scoped input to style analysis. */
+  router.post("/references", async (req, res, next) => {
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const body = createReferenceBody.parse(req.body ?? {});
+      const userId = getUserId(req) ?? 1;
+      const reference = await deps.style.storage.insertReference({
+        userId,
+        rawContent: body.text,
+        sourceType: body.sourceType,
+        title: body.title ?? null,
+      });
+      return res.status(201).json({ id: reference.id, sourceType: reference.sourceType, title: reference.title });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      return next(error);
+    }
+  });
+
+  const requestStyleAnalysisBody = z.object({
+    regenerate: z.boolean().optional(),
+  });
+
+  router.post("/references/:id/style-analysis", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid reference id" });
+    if (!deps.style || !deps.enqueueStyleAnalysis) {
+      return res.status(503).json({ message: "Style analysis is not configured" });
+    }
+    try {
+      const body = requestStyleAnalysisBody.parse(req.body ?? {});
+      const userId = getUserId(req) ?? 1;
+      const { analysis, created } = await requestStyleAnalysis(userId, { referenceId: id, regenerate: body.regenerate }, deps.style);
+      if (analysis.status === "requested") {
+        try {
+          await deps.enqueueStyleAnalysis(analysis);
+        } catch (error) {
+          return res.status(503).json({ message: "Style analysis queue unavailable", id: analysis.id, detail: message(error) });
+        }
+      }
+      return res.status(created ? 201 : 200).json({
+        id: analysis.id,
+        status: analysis.status,
+        correlationId: analysis.correlationId,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof ReferenceNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof StyleServiceInputError) return res.status(400).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/style-analyses/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid style analysis id" });
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const analysis = await deps.style.storage.getStyleAnalysis(id);
+      if (!analysis) return res.status(404).json({ message: "Style analysis not found" });
+      const profile = await deps.style.storage.getStyleProfileByAnalysisId(id);
+      return res.json({
+        id: analysis.id,
+        status: analysis.status,
+        errorClass: analysis.errorClass,
+        errorMessage: analysis.errorMessage,
+        styleProfileId: profile?.id ?? null,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/style-profiles/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid style profile id" });
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const userId = getUserId(req) ?? 1;
+      const profile = await deps.style.storage.getStyleProfile(id);
+      if (!profile || (profile.userId !== null && profile.userId !== userId)) {
+        return res.status(404).json({ message: "Style profile not found" });
+      }
+      return res.json({
+        id: profile.id,
+        name: profile.name,
+        sourceReferenceId: profile.sourceReferenceId,
+        analysisId: profile.analysisId,
+        confidence: profile.confidence,
+        analyzerVersion: profile.analyzerVersion,
+        structuredObservation: profile.structuredObservation,
+        supersedesId: profile.supersedesId,
+        createdAt: profile.createdAt,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   return router;
 }
 
@@ -1073,10 +1183,12 @@ export async function createDefaultContentRouter(): Promise<Router> {
       visualAssetStorage,
       generationDeps,
       chatDeps,
+      styleServiceDeps,
       registerContentJobs,
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
       VISUAL_RUN_JOB_TYPE,
+      STYLE_ANALYZE_JOB_TYPE,
     },
     { storyStorage },
     { getJobRuntime },
@@ -1118,6 +1230,16 @@ export async function createDefaultContentRouter(): Promise<Router> {
         payload: { visualGenerationId: generation.id },
         correlationId: generation.correlationId,
         idempotencyKey: generation.idempotencyKey,
+      });
+      return !result.deduplicated;
+    },
+    style: styleServiceDeps,
+    enqueueStyleAnalysis: async (analysis) => {
+      const result = await getJobRuntime().enqueue({
+        jobType: STYLE_ANALYZE_JOB_TYPE,
+        payload: { styleAnalysisId: analysis.id },
+        correlationId: analysis.correlationId,
+        idempotencyKey: analysis.idempotencyKey,
       });
       return !result.deduplicated;
     },

@@ -182,6 +182,43 @@ function completionBody(format, invalid = false) {
 }
 
 /**
+ * Deterministic style-observation completion (Phase 11) — the SAME
+ * chat/completions boundary the text-generation gateway already doubles,
+ * keyed off the analyzer's own system prompt marker rather than a new
+ * endpoint. Structurally valid against `styleObservationSchema` every time.
+ */
+function styleObservationCompletionBody() {
+  const observation = {
+    confidence: "strong",
+    confidenceReason: "e2e fixture: deterministic sample",
+    dimensions: {
+      tone: "direct, practitioner-grade",
+      sentenceRhythm: "short declarative sentences",
+      verbosity: "terse",
+      formattingTendencies: "line breaks between ideas",
+      punctuationTendencies: "minimal",
+      vocabularyRegister: "technical",
+      hookPatterns: ["opens with a specific number"],
+      paragraphStructure: "one idea per line",
+      questionUsage: "rare",
+      listUsage: "occasional numbered list",
+      emojiTendencies: "none",
+      ctaPatterns: ["ends with a direct question"],
+      rhetoricalPatterns: ["contrarian framing"],
+      recurringTraits: ["specific metrics", "real scenarios"],
+    },
+  };
+  return {
+    id: "chatcmpl-fixture-style",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fixture-model",
+    choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify(observation) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+  };
+}
+
+/**
  * Deterministic chat-intent extraction response (OpenAI-compatible).
  */
 function intentCompletionBody() {
@@ -246,6 +283,10 @@ async function handlePost(req, res, url) {
     // Chat-to-post intent extraction (deterministic).
     if (prompt.includes("CONTENT_REQUEST_INTENT")) {
       return send(200, intentCompletionBody());
+    }
+    // Style analysis (Phase 11) — keyed off the analyzer's own system prompt marker.
+    if (prompt.includes("WRITING STYLE")) {
+      return send(200, styleObservationCompletionBody());
     }
     // Forced invalid payload: fails the format registry's validation.
     if (invalidNext) {

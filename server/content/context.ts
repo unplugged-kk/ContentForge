@@ -36,7 +36,7 @@
  * instruction.
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull, notInArray, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { contextVault, styleProfiles, userProfile } from "@shared/schema";
@@ -98,7 +98,17 @@ export interface ContextStorageReader {
   listFavoriteStyleProfiles(
     ownerId: number,
     limit: number,
-  ): Promise<Array<{ id: number; name: string; stylePromptSnippet: string; usageCount: number | null }>>;
+  ): Promise<
+    Array<{
+      id: number;
+      name: string;
+      stylePromptSnippet: string;
+      usageCount: number | null;
+      /** Phase 11: null for legacy/manual rows that predate structured observation. */
+      confidence: string | null;
+      analysisId: number | null;
+    }>
+  >;
 }
 
 export function createDatabaseContextReader(
@@ -124,17 +134,44 @@ export function createDatabaseContextReader(
         .limit(limit);
     },
     async listFavoriteStyleProfiles(ownerId, limit) {
-      return db
+      // Phase 11: a row is eligible either the Phase 10 way (explicitly
+      // favorited, legacy/manual rows) OR because it is a real analyzer
+      // observation the owner deliberately requested (`analysisId` set) that
+      // wasn't found "insufficient" — requesting the analysis is itself the
+      // explicit "this matters" signal, the same role `isFavorite` plays.
+      // Superseded observations (an older revision some newer row replaced)
+      // are excluded so only the current head of each reference's version
+      // chain can ever enter context.
+      const supersededRows = await db
+        .select({ id: styleProfiles.supersedesId })
+        .from(styleProfiles)
+        .where(and(eq(styleProfiles.userId, ownerId), isNotNull(styleProfiles.supersedesId)));
+      const supersededIds = supersededRows.map((r) => r.id).filter((id): id is number => id !== null);
+
+      const rows = await db
         .select({
           id: styleProfiles.id,
           name: styleProfiles.name,
           stylePromptSnippet: styleProfiles.stylePromptSnippet,
           usageCount: styleProfiles.usageCount,
+          confidence: styleProfiles.confidence,
+          analysisId: styleProfiles.analysisId,
         })
         .from(styleProfiles)
-        .where(and(eq(styleProfiles.userId, ownerId), eq(styleProfiles.isFavorite, true)))
-        .orderBy(desc(styleProfiles.usageCount))
-        .limit(limit);
+        .where(
+          and(
+            eq(styleProfiles.userId, ownerId),
+            or(eq(styleProfiles.isFavorite, true), isNotNull(styleProfiles.analysisId)),
+            supersededIds.length > 0 ? notInArray(styleProfiles.id, supersededIds) : undefined,
+          ),
+        )
+        .orderBy(desc(styleProfiles.id))
+        // Confidence exclusion happens in JS, not SQL: `confidence <> 'insufficient'`
+        // is NULL-unsafe (SQL's three-valued logic would silently drop every
+        // legacy row with no confidence column at all). `null`/`"strong"`/
+        // `"weak"` all pass; only the literal `"insufficient"` is excluded.
+        .limit(limit * 2);
+      return rows.filter((r) => r.confidence !== "insufficient").slice(0, limit);
     },
   };
 }
@@ -212,13 +249,14 @@ export async function assembleContext(
 
   const styleItems = await reader.listFavoriteStyleProfiles(ownerId, MAX_STYLE_SOURCES);
   for (const item of styleItems) {
+    const confidenceLabel = item.confidence ? ` (${item.confidence} evidence)` : "";
     sources.push({
       id: `style:${item.id}`,
       type: "style",
       ownerId,
-      content: truncate(`${item.name}: ${item.stylePromptSnippet}`, MAX_CHARS_PER_SOURCE),
-      provenance: `style_profiles#${item.id}`,
-      metadata: { usageCount: item.usageCount ?? 0 },
+      content: truncate(`${item.name}${confidenceLabel}: ${item.stylePromptSnippet}`, MAX_CHARS_PER_SOURCE),
+      provenance: item.analysisId ? `style_profiles#${item.id}(analysis#${item.analysisId})` : `style_profiles#${item.id}`,
+      metadata: { usageCount: item.usageCount ?? 0, confidence: item.confidence },
     });
   }
 

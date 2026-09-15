@@ -164,7 +164,56 @@ export const styleProfiles = pgTable("style_profiles", {
   usageCount: integer("usage_count").default(0),
   isFavorite: boolean("is_favorite").default(false),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  // ── Phase 11: real-post style intelligence (observed evidence, not truth) ───
+  /** The `style_analyses` run that produced this row (null for legacy/manual rows). */
+  analysisId: integer("analysis_id"),
+  /** Structured, bounded observation (Ticket 11 §5) — never a raw LLM blob. */
+  structuredObservation: jsonb("structured_observation").$type<Record<string, unknown>>().notNull().default({}),
+  /** strong | weak | insufficient — see styleConfidenceEnum. */
+  confidence: varchar("confidence", { length: 20 }),
+  analyzerVersion: varchar("analyzer_version", { length: 40 }),
+  schemaVersion: integer("schema_version").default(1),
+  /** sha256 of the source content this observation was derived from. */
+  sourceContentHash: varchar("source_content_hash", { length: 64 }),
+  /** Immutable revision chain (never mutate an existing observation). */
+  supersedesId: integer("supersedes_id").references((): AnyPgColumn => styleProfiles.id),
 });
+
+/**
+ * StyleAnalysis (Phase 11) — one reproducible analysis *attempt* against a
+ * durable `references` row, mirroring `visual_generations`'s job-lifecycle
+ * shape exactly (requested → analyzing → ready | failed). The durable
+ * *result* is a `style_profiles` row (`style_profiles.analysis_id`); this
+ * table only tracks the attempt, never the observation content itself.
+ */
+export const styleAnalyses = pgTable(
+  "style_analyses",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** The authored source content this attempt analyzes (owner-checked at request time). */
+    referenceId: integer("reference_id").notNull().references(() => references.id),
+    /** requested | analyzing | ready | failed */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    analyzerVersion: varchar("analyzer_version", { length: 40 }).notNull(),
+    /** Frozen request (source content hash + analyzer identity); never business tables. */
+    requestSnapshot: jsonb("request_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    /** Authoritative idempotency arbiter — duplicate delivery collapses to ONE row. */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    attempt: integer("attempt").notNull().default(1),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("style_analyses_status_idx").on(table.status),
+    index("style_analyses_reference_idx").on(table.referenceId),
+  ],
+);
+export type StyleAnalysis = typeof styleAnalyses.$inferSelect;
 
 export const referenceContent = pgTable("reference_content", {
   id: serial("id").primaryKey(),

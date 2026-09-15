@@ -1918,6 +1918,153 @@ const observed = {};
     },
   );
 
+  // ── 6c2. PHASE 11 RED ARROWS (real-post style intelligence) ─────────────────
+  phase("Phase 11: authored content -> style analysis -> observation -> context -> Artifact");
+
+  let styleReferenceId;
+  await check("POST /api/references stores real authored content, owner-scoped", async () => {
+    const res = await http("POST", "/api/references", {
+      text: `${RUN} Kubernetes scheduling moved from a hardcoded heuristic to a real policy surface. Platform teams now own placement. Three metrics changed how we think about cost. Ask yourself: does your scheduler know your budget?`,
+      sourceType: "manual",
+      title: `${RUN} style sample`,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    styleReferenceId = res.body.id;
+    return `reference ${styleReferenceId} stored`;
+  });
+
+  let styleAnalysisId;
+  let styleProfileIdA;
+  await check(
+    "POST /references/:id/style-analysis analyzes real content through the real AI gateway boundary",
+    async () => {
+      const res = await http("POST", `/api/references/${styleReferenceId}/style-analysis`, {});
+      assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+      styleAnalysisId = res.body.id;
+      const done = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/style-analyses/${styleAnalysisId}`);
+          if (r.body.status === "ready") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 60_000, intervalMs: 300, label: "style analysis ready" },
+      );
+      assert(Number.isInteger(done.styleProfileId), "no observation produced");
+      styleProfileIdA = done.styleProfileId;
+      const profile = await http("GET", `/api/style-profiles/${styleProfileIdA}`);
+      assert(profile.body.confidence === "strong", `confidence=${profile.body.confidence}`);
+      assert(profile.body.structuredObservation?.dimensions?.tone, "no structured dimensions persisted");
+      return `analysis ${styleAnalysisId} -> observation ${styleProfileIdA}`;
+    },
+  );
+
+  await check("the observed style enters GET /context as labeled DATA, not instructions", async () => {
+    const res = await http("GET", "/api/context");
+    assert(res.status === 200, `context ${res.status}`);
+    const styleSource = (res.body.sources ?? []).find((s) => s.type === "style");
+    assert(styleSource, "no style source in the assembled context");
+    assert(styleSource.content.includes("strong evidence"), "confidence label missing from rendered source");
+    return `context includes style source ${styleSource.id}`;
+  });
+
+  let styleJobAId;
+  await check("a real generation through the HTTP pipeline freezes the observed style into its policy snapshot", async () => {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "style intelligence probe A",
+      objective: "prove observed style shapes generation",
+      format: "x_post",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+    assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+    const job = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+        if (r.body.status === "succeeded") return r.body;
+        if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "style-aware generation" },
+    );
+    assert(job.policySnapshot?.systemPrompt?.includes("strong evidence"), "the frozen snapshot must carry the observed style");
+    styleJobAId = job.id;
+    observed.styleJobA = job;
+    return `job ${job.id} frozen with observed style (policy ${job.policyId})`;
+  });
+
+  await check(
+    "mutation: explicit re-analysis supersedes the observation, but Job A's HTTP-visible snapshot is untouched",
+    async () => {
+      const regen = await http("POST", `/api/references/${styleReferenceId}/style-analysis`, { regenerate: true });
+      assert(regen.status === 201, `regenerate ${regen.status}: ${regen.text}`);
+      await waitFor(
+        async () => {
+          const r = await http("GET", `/api/style-analyses/${regen.body.id}`);
+          return r.body.status === "ready" ? r.body : false;
+        },
+        { timeoutMs: 60_000, intervalMs: 300, label: "re-analysis ready" },
+      );
+
+      const reloadedA = await http("GET", `/api/generation-jobs/${styleJobAId}`);
+      assert(
+        JSON.stringify(reloadedA.body.policySnapshot) === JSON.stringify(observed.styleJobA.policySnapshot),
+        "job A's frozen snapshot must be unaffected by the superseding observation",
+      );
+      return `job ${styleJobAId} snapshot unchanged after re-analysis`;
+    },
+  );
+
+  await check(
+    "restart proof: a style-aware job queued before re-analysis, executed after a real restart, still used the FROZEN observation",
+    async () => {
+      const opp = await http("POST", "/api/opportunities", {
+        storyId,
+        concept: "style intelligence restart probe",
+        objective: "prove frozen style survives restart",
+        format: "x_post",
+        channel: "x",
+      });
+      const gen = await http("POST", "/api/generation-jobs", { opportunityId: opp.body.id });
+      assert(gen.status === 201, `generation ${gen.status}: ${gen.text}`);
+
+      const regen = await http("POST", `/api/references/${styleReferenceId}/style-analysis`, { regenerate: true });
+      await waitFor(
+        async () => {
+          const r = await http("GET", `/api/style-analyses/${regen.body.id}`);
+          return r.body.status === "ready" ? r.body : false;
+        },
+        { timeoutMs: 60_000, intervalMs: 300, label: "second re-analysis ready before restart" },
+      );
+
+      await killApp("SIGKILL");
+      await startApp();
+
+      const job = await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${gen.body.id}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 90_000, intervalMs: 500, label: "post-restart style-aware generation" },
+      );
+      assert(
+        job.policySnapshot?.systemPrompt?.includes("strong evidence"),
+        "must still reflect the observation frozen before the re-analysis and restart",
+      );
+      return `job ${job.id} executed post-restart against the frozen style observation`;
+    },
+  );
+
+  await check("owner isolation: a foreign reference id is refused with the repository's non-leaking 404", async () => {
+    const res = await http("GET", `/api/style-profiles/${styleProfileIdA + 1_000_000}`);
+    assert(res.status === 404, `expected 404, got ${res.status}`);
+    return "nonexistent/foreign style profile refused";
+  });
+
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
 

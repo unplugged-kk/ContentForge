@@ -34,11 +34,23 @@ import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { runVisualGeneration } from "./visualService";
+import { registerStyleAnalyzer } from "./style";
+import { createGatewayStyleAnalyzer } from "./styleAnalyzer";
+import { createDatabaseStyleStorage, runStyleAnalysis, type StyleServiceDeps } from "./styleService";
 import cron from "node-cron";
 
 export const contentStorage = new DatabaseContentStorage(db);
 
 export const visualAssetStorage = createLocalAssetStorage();
+
+export const styleServiceDeps: StyleServiceDeps = {
+  storage: createDatabaseStyleStorage(db),
+};
+
+/** The one style analyzer wired for the running app — the existing AI gateway, narrowly scoped. */
+export function registerBuiltinStyleAnalyzers(): void {
+  registerStyleAnalyzer(createGatewayStyleAnalyzer());
+}
 
 /**
  * Visual production for the running app. The ONLY producer wired here is the
@@ -274,11 +286,61 @@ export function registerVisualRunJob(
   return definition;
 }
 
+// ── style.analyze ─────────────────────────────────────────────────────────────
+export const STYLE_ANALYZE_JOB_TYPE = "style.analyze";
+
+export const styleAnalyzePayloadSchema = z.object({
+  styleAnalysisId: z.number().int().positive(),
+});
+export type StyleAnalyzePayload = z.infer<typeof styleAnalyzePayloadSchema>;
+
+export function createStyleAnalyzeHandler(deps: StyleServiceDeps) {
+  return async (payload: StyleAnalyzePayload, ctx: JobContext): Promise<void> => {
+    const result = await runStyleAnalysis(payload.styleAnalysisId, deps);
+    if (result.status === "ready") {
+      ctx.logger.info(
+        { styleAnalysisId: result.styleAnalysisId, styleProfileId: result.styleProfileId, reused: result.reused },
+        "style analysis complete",
+      );
+      return;
+    }
+    const failureClass = result.failureClass ?? "transient";
+    const message = result.failureMessage ?? "style analysis failed";
+    if (failureClass === "transient") throw JobFailure.transient(message);
+    throw JobFailure.permanent(message);
+  };
+}
+
+export function registerStyleAnalyzeJob(
+  deps: StyleServiceDeps = styleServiceDeps,
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<StyleAnalyzePayload> | undefined {
+  if (hasJob(STYLE_ANALYZE_JOB_TYPE)) return undefined;
+  const definition: JobDefinition<StyleAnalyzePayload> = {
+    jobType: STYLE_ANALYZE_JOB_TYPE,
+    description: "Analyze real authored content into a durable style observation",
+    payloadSchema: styleAnalyzePayloadSchema,
+    queue: {
+      retryLimit: 3,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 10 * 60,
+      singletonSeconds: 30,
+      ...queueOverrides,
+    },
+    handler: createStyleAnalyzeHandler(deps),
+  };
+  registerJob(definition);
+  return definition;
+}
+
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
   registerBuiltinVisualProviders();
+  registerBuiltinStyleAnalyzers();
   registerGenerationRunJob();
+  registerStyleAnalyzeJob();
   registerPublicationRunJob();
   registerVisualRunJob();
 }
