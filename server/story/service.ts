@@ -95,11 +95,19 @@ export class ResearchJobHasNoEvidenceError extends Error {
  * (including failed/cancelled), and a completed job with no evidence. Multiple
  * Stories from one ResearchJob are legitimate (Ticket 03 §3) — there is no
  * one-story-per-job constraint and no idempotency key at this layer.
+ *
+ * `options.automationRunId` (Phase 13) records the AutomationRun this Story was
+ * derived for. It is NOT part of `synthesis`, so no HTTP caller can set it, and
+ * it is the only thing that makes Story creation idempotent: the database's
+ * unique `stories_automation_run_uq` index means one run can only ever own one
+ * Story (see `DatabaseStoryStorage.insertStory`). Omitted → null → unchanged
+ * behaviour for every existing caller.
  */
 export async function createStoryFromResearch(
   researchJobId: number,
   synthesis: StorySynthesis,
   deps: CreateStoryDeps,
+  options: { automationRunId?: number | null } = {},
 ): Promise<Story> {
   if (!Number.isInteger(researchJobId) || researchJobId <= 0) {
     throw new InvalidStoryInputError(["researchJobId must be a positive integer"]);
@@ -158,6 +166,7 @@ export async function createStoryFromResearch(
     angles: input.angles ?? [],
     evidenceRefs,
     status: input.status,
+    automationRunId: options.automationRunId ?? null,
   };
 
   return deps.stories.insertStory(row);

@@ -12,9 +12,19 @@ import { MODELS } from "../ai/config";
 import { JobFailure } from "../jobs/failures";
 import { registerJob, hasJob, type JobContext, type JobDefinition, type JobQueueConfig } from "../jobs/registry";
 import { researchStorage } from "../research/service";
+import { RESEARCH_RUN_JOB_TYPE } from "../research/job";
 import { storyStorage } from "../story/service";
 import { z } from "zod";
+import type { AutomationRun, GenerationJob } from "@shared/schema";
 import { DatabaseContentStorage } from "./storage";
+import { DatabaseAutomationStorage } from "./automationStorage";
+import {
+  advanceAutomationRun,
+  automationRunStepKey,
+  currentAutomationStep,
+  dispatchAutomationDueRuns,
+  type AutomationDeps,
+} from "./automation";
 import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 import { createDatabaseContextReader } from "./context";
 import {
@@ -40,6 +50,9 @@ import { createDatabaseStyleStorage, runStyleAnalysis, type StyleServiceDeps } f
 import cron from "node-cron";
 
 export const contentStorage = new DatabaseContentStorage(db);
+
+/** Durable automation policy/run persistence (Phase 13). */
+export const automationStorage = new DatabaseAutomationStorage(db);
 
 export const visualAssetStorage = createLocalAssetStorage();
 
@@ -334,6 +347,144 @@ export function registerStyleAnalyzeJob(
   return definition;
 }
 
+// ── automation.run ────────────────────────────────────────────────────────────
+/**
+ * Phase 13: the one automation job type. It is narrowly defined on purpose —
+ * the payload is a single durable id (`{ automationRunId }`), never a pipeline
+ * description or a content/context blob — and its handler advances the run by at
+ * most ONE bounded step. There is no generic "run anything" worker.
+ *
+ * Queue configuration follows the standard conventions exactly (retryLimit 3,
+ * retryDelaySeconds 60, retryBackoff, expireInSeconds 600, singletonSeconds 30):
+ * a recoverable step failure is re-delivered with backoff, and the durable run
+ * row is what is retried — never a re-composed workflow.
+ */
+export const AUTOMATION_RUN_JOB_TYPE = "automation.run";
+
+export const automationRunPayloadSchema = z.object({
+  automationRunId: z.number().int().positive(),
+});
+export type AutomationRunPayload = z.infer<typeof automationRunPayloadSchema>;
+
+export function createAutomationRunHandler(deps: AutomationDeps) {
+  return async (payload: AutomationRunPayload, ctx: JobContext): Promise<void> => {
+    const result = await advanceAutomationRun(payload.automationRunId, deps);
+
+    if (result.reason === "failed") {
+      // The run itself is terminally failed and durably recorded — retrying the
+      // queue job cannot change that, so it must not consume retry budget.
+      throw JobFailure.permanent(
+        result.failureMessage ?? `automation run ${payload.automationRunId} failed`,
+      );
+    }
+    if (result.reason === "retryable") {
+      throw JobFailure.transient(
+        result.failureMessage ?? `automation run ${payload.automationRunId} deferred`,
+      );
+    }
+
+    ctx.logger.info(
+      {
+        automationRunId: payload.automationRunId,
+        step: result.step,
+        reason: result.reason,
+        status: result.status,
+        advanced: result.advanced,
+      },
+      "automation run advanced",
+    );
+  };
+}
+
+export function registerAutomationRunJob(
+  deps: AutomationDeps = automationDeps,
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<AutomationRunPayload> | undefined {
+  if (hasJob(AUTOMATION_RUN_JOB_TYPE)) return undefined;
+  const definition: JobDefinition<AutomationRunPayload> = {
+    jobType: AUTOMATION_RUN_JOB_TYPE,
+    description: "Advance one durable AutomationRun by a single bounded step",
+    payloadSchema: automationRunPayloadSchema,
+    queue: {
+      retryLimit: 3,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 10 * 60,
+      singletonSeconds: 30,
+      ...queueOverrides,
+    },
+    handler: createAutomationRunHandler(deps),
+  };
+  registerJob(definition);
+  return definition;
+}
+
+/**
+ * Enqueue the automation worker for a durable run. The run row already exists,
+ * so a queue hiccup loses nothing — the scheduler tick re-enqueues every
+ * unfinished run on its next pass.
+ *
+ * The queue dedup key is the `(run, step)` pair, not the run: re-observing the
+ * same unfinished run schedules nothing new, while a run that has advanced to
+ * its next step is enqueued immediately instead of waiting out a dedup window.
+ * Redundant deliveries remain harmless — the run's lease plus the idempotent,
+ * derived-step advance make every step safe to attempt more than once.
+ */
+export async function enqueueAutomationRunJob(run: AutomationRun): Promise<boolean> {
+  const step = await currentAutomationStep(run, storyStorage);
+  const { getJobRuntime } = await import("../jobs/bootstrap");
+  const result = await getJobRuntime().enqueue({
+    jobType: AUTOMATION_RUN_JOB_TYPE,
+    payload: { automationRunId: run.id },
+    correlationId: run.correlationId,
+    idempotencyKey: automationRunStepKey(run.id, step),
+  });
+  return !result.deduplicated;
+}
+
+/**
+ * Automation composition root. Every dependency here is an EXISTING primitive —
+ * `researchStorage` (the real ResearchEngine's persistence + the `research.run`
+ * queue), `storyStorage`, `contentStorage`, and Phase 12's repurpose deps built
+ * from the SAME `generationDeps` manual creation uses. Automation owns no
+ * generation, research or publication mechanism of its own.
+ */
+export const automationDeps: AutomationDeps = {
+  automation: automationStorage,
+  content: contentStorage,
+  stories: storyStorage,
+  research: {
+    claimJob: (input) => researchStorage.claimJob(input),
+    getJob: (jobId) => researchStorage.getJob(jobId),
+    listEvidenceIds: (jobId) => researchStorage.listEvidenceIds(jobId),
+    getEvidence: (jobId) => researchStorage.getEvidenceForJob(jobId),
+    enqueueResearchRun: async (job) => {
+      const { getJobRuntime } = await import("../jobs/bootstrap");
+      await getJobRuntime().enqueue({
+        jobType: RESEARCH_RUN_JOB_TYPE,
+        payload: { jobId: job.id },
+        correlationId: job.correlationId,
+        idempotencyKey: job.idempotencyKey,
+      });
+    },
+  },
+  repurpose: {
+    opportunities: { opportunities: contentStorage, stories: storyStorage },
+    generation: generationDeps,
+  },
+  enqueueGeneration: async (job: GenerationJob) => {
+    const { getJobRuntime } = await import("../jobs/bootstrap");
+    const result = await getJobRuntime().enqueue({
+      jobType: GENERATION_RUN_JOB_TYPE,
+      payload: { generationJobId: job.id },
+      correlationId: job.correlationId,
+      idempotencyKey: job.idempotencyKey,
+    });
+    return !result.deduplicated;
+  },
+  enqueueAutomationRun: enqueueAutomationRunJob,
+};
+
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
@@ -343,21 +494,26 @@ export function registerContentJobs(): void {
   registerStyleAnalyzeJob();
   registerPublicationRunJob();
   registerVisualRunJob();
+  registerAutomationRunJob();
 }
 
 // ── Durable scheduler tick ────────────────────────────────────────────────────
 let contentSchedulerStarted = false;
 
 /**
- * Periodic scheduler loop (Phase 1.5).
+ * Periodic scheduler loop (Phase 1.5, extended in Phase 13).
  *
  * The scheduler owns WHEN: it materializes due Occurrences and enqueues
- * Publications. It never publishes — `publication.run` does that.
+ * Publications, and (Phase 13) it materializes due AutomationRuns and enqueues
+ * their advance jobs. It never publishes and never executes automation —
+ * `publication.run` and `automation.run` do that.
  *
  * Correctness lives in PostgreSQL, not in this timer: the occurrence
  * `pending → enqueued` compare-and-set means at most one tick (in any process)
  * claims an occurrence, and the UNIQUE publication identity means a re-tick
- * cannot create or enqueue a second Publication. The in-process flag only avoids
+ * cannot create or enqueue a second Publication. Phase 13 adds the same for
+ * automation: `automation_runs_idempotency_key_unique` means one run per logical
+ * trigger slot however many ticks overlap. The in-process flag only avoids
  * redundant overlapping ticks; losing the process loses nothing durable.
  */
 export function startContentScheduler(options: { cronExpression?: string } = {}): void {
@@ -403,16 +559,23 @@ export function startContentScheduler(options: { cronExpression?: string } = {})
         ...publicationDeps,
         enqueuePublication: enqueuePublicationJob,
       });
+      // Phase 13: create due scheduled AutomationRuns and re-enqueue every
+      // unfinished run. Same shape as the occurrence dispatch above — the tick
+      // materializes and enqueues; the worker advances. No second cron.
+      const automation = await dispatchAutomationDueRuns(now, automationDeps);
       if (
         result.materialized > 0 ||
         result.enqueued > 0 ||
         stale > 0 ||
         unknown.resolved > 0 ||
-        unknown.requeued > 0
+        unknown.requeued > 0 ||
+        automation.scheduled.created > 0 ||
+        automation.enqueued > 0
       ) {
         console.log(
           `[content-scheduler] materialized=${result.materialized} enqueued=${result.enqueued} stale=${stale} ` +
-            `reconciled(resolved=${unknown.resolved} requeued=${unknown.requeued} stillUnknown=${unknown.stillUnknown} exhausted=${unknown.exhausted})`,
+            `reconciled(resolved=${unknown.resolved} requeued=${unknown.requeued} stillUnknown=${unknown.stillUnknown} exhausted=${unknown.exhausted}) ` +
+            `automation(scheduled=${automation.scheduled.created} deduplicated=${automation.scheduled.deduplicated} limited=${automation.scheduled.limited} enqueued=${automation.enqueued})`,
         );
       }
     } catch (error) {

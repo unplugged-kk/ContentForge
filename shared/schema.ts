@@ -683,12 +683,23 @@ export const stories = pgTable(
     evidenceRefs: jsonb("evidence_refs").$type<number[]>().notNull().default([]),
     /** draft | ready | used | archived */
     status: varchar("status", { length: 20 }).notNull().default("draft"),
+    /**
+     * Phase 13: the AutomationRun that created this Story, when it was
+     * automation-derived. UNIQUE, so the DATABASE — not a convention — is the
+     * arbiter that makes automation's Story creation idempotent across worker
+     * retries, duplicate delivery and crash/restart (§17/§19). NULL for every
+     * human-authored Story, which keeps `createStoryFromResearch`'s existing
+     * "many Stories per ResearchJob" semantics untouched.
+     */
+    automationRunId: integer("automation_run_id").references((): AnyPgColumn => automationRuns.id),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   },
   (table) => [
     index("stories_research_job_idx").on(table.researchJobId),
     index("stories_status_idx").on(table.status),
+    /** One Story per AutomationRun — the idempotency arbiter for the story step. */
+    uniqueIndex("stories_automation_run_uq").on(table.automationRunId),
   ],
 );
 
@@ -1305,6 +1316,178 @@ export type VisualAsset = typeof visualAssets.$inferSelect;
 export type InsertVisualAsset = z.infer<typeof insertVisualAssetSchema>;
 export type VisualAssetRef = typeof visualAssetRefs.$inferSelect;
 export type InsertVisualAssetRef = z.infer<typeof insertVisualAssetRefSchema>;
+// ── AUTOMATION / AUTOPILOT FOUNDATION (Phase 13) ──────────────────────────────
+// Durable automation *intent*, not a second orchestration system. An
+// AutomationPolicy describes WHEN (trigger) and WHAT (research → targets →
+// generation → approval → publication); an AutomationRun records one logical
+// execution of that policy.
+//
+// Automation creates durable intent and then drives the EXISTING primitives —
+// it owns no domain state of its own:
+//
+//   AutomationPolicy ──▶ AutomationRun ──▶ ResearchJob → Story → Opportunity[N]
+//                                        → GenerationPolicy → GenerationJob
+//                                        → Artifact → approval → Schedule
+//                                        → Occurrence → Publication → Result
+//
+// A run freezes the policy it started under (`policyVersion` +
+// `policySnapshot`), so editing a policy can never change a running
+// execution — the same discipline GenerationPolicy established for
+// GenerationJob. `idempotencyKey` is the durable arbiter that collapses
+// duplicate deliveries of one logical trigger slot into a single run.
+
+export const automationPolicies = pgTable(
+  "automation_policies",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    name: varchar("name", { length: 200 }).notNull(),
+    /** active | paused | archived */
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    /**
+     * Monotonic revision counter, bumped on every mutation. An AutomationRun
+     * freezes the version it started under; nothing re-reads this row mid-run.
+     */
+    version: integer("version").notNull().default(1),
+    /** Content hash of the resolved policy spec (change detection / observability). */
+    specHash: varchar("spec_hash", { length: 64 }).notNull(),
+    /** manual | scheduled */
+    triggerType: varchar("trigger_type", { length: 30 }).notNull(),
+    /**
+     * Trigger configuration. `manual` takes none; `scheduled` takes
+     * `{ startAt, recurrence?, timezone? }` where `recurrence` is the EXISTING
+     * bounded grammar `every:<n><unit>` (m/h/d/w) — no second cron framework
+     * and no RRULE parsing.
+     */
+    triggerConfig: jsonb("trigger_config").$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Research configuration — validated by the EXISTING research request
+     * schema and executed by the EXISTING ResearchEngine. Automation never
+     * creates a research engine of its own.
+     */
+    researchConfig: jsonb("research_config").$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Bounded target definitions consumed verbatim by Phase 12's
+     * `repurposeStory()` (format/channel/concept/objective/…). No
+     * automation-specific target model exists.
+     */
+    targets: jsonb("targets").$type<unknown[]>().notNull().default([]),
+    /** Generation overrides forwarded to `createGenerationJob` (voice/template/model/constraints). */
+    generationConfig: jsonb("generation_config").$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * approval_required | trusted — the policy's EXPLICIT approval declaration.
+     * `approval_required` (default): automation stops at a durable
+     * `awaiting_approval` state. `trusted`: automation may move generated
+     * artifacts through the Artifact model's OWN documented transitions
+     * (`draft → in_review → approved`); there is no hidden approval state.
+     */
+    approvalMode: varchar("approval_mode", { length: 30 }).notNull().default("approval_required"),
+    /**
+     * Publication behavior declaration: `{ mode: "none" | "on_approval" }`.
+     * Defaults to `none`, so auto-publishing is never the default. `on_approval`
+     * requires `approvalMode = "trusted"` and still publishes only through the
+     * existing `approved Artifact → Schedule → Occurrence → Publication` path.
+     */
+    publicationConfig: jsonb("publication_config").$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Operational bounds (not billing): `maxRunsPerDay`,
+     * `maxOpportunitiesPerRun`, `maxGeneratedArtifactsPerRun`.
+     */
+    limits: jsonb("limits").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("automation_policies_user_idx").on(table.userId),
+    index("automation_policies_status_idx").on(table.status),
+    index("automation_policies_trigger_idx").on(table.triggerType, table.status),
+  ],
+);
+
+/**
+ * AutomationRun — one durable execution record for one logical trigger.
+ *
+ * It carries IDs and normalized durable references only — never a pipeline
+ * payload or a content blob. `outcomes` is a bounded per-target result list
+ * (the partial-success representation §16 requires), not a state machine.
+ */
+export const automationRuns = pgTable(
+  "automation_runs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    policyId: integer("policy_id").notNull().references(() => automationPolicies.id),
+    /** FROZEN policy identity — captured at run creation, never re-read. */
+    policyVersion: integer("policy_version").notNull(),
+    policySpecHash: varchar("policy_spec_hash", { length: 64 }).notNull(),
+    policySnapshot: jsonb("policy_snapshot").$type<Record<string, unknown>>().notNull(),
+    /** manual | scheduled */
+    triggerType: varchar("trigger_type", { length: 30 }).notNull(),
+    /**
+     * Logical trigger identity — a manual `requestKey` or the scheduled slot's
+     * absolute ISO instant. UNIQUE, so the DATABASE (not a lock) is the arbiter
+     * that collapses duplicate deliveries of one trigger slot into ONE run.
+     */
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    /** pending | running | awaiting_approval | completed | partial | failed */
+    status: varchar("status", { length: 30 }).notNull().default("pending"),
+    /** Durable reference to the ResearchJob this run created (idempotent by key). */
+    researchJobId: integer("research_job_id").references(() => researchJobs.id),
+    /**
+     * Bounded per-target outcomes:
+     * `[{ format, channel, status, opportunityId, generationJobId, artifactId, scheduleId, error }]`.
+     * IDs only — the entities remain the source of truth for their own state.
+     */
+    outcomes: jsonb("outcomes").$type<unknown[]>().notNull().default([]),
+    /** transient | rate_limited | permanent | policy_human (see jobs/failures). */
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    /**
+     * Single-flight orchestrator lease (mirrors the Publication lease). The DB
+     * is the only arbiter; a crashed advance is reclaimed when the lease expires.
+     */
+    advanceLeaseExpiresAt: timestamp("advance_lease_expires_at"),
+    /** How many times the orchestrator advanced this run. */
+    attempt: integer("attempt").notNull().default(0),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("automation_runs_policy_idx").on(table.policyId),
+    index("automation_runs_status_idx").on(table.status),
+    index("automation_runs_user_idx").on(table.userId),
+    index("automation_runs_research_idx").on(table.researchJobId),
+  ],
+);
+
+export const insertAutomationPolicySchema = createInsertSchema(automationPolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertAutomationRunSchema = createInsertSchema(automationRuns).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type AutomationPolicy = typeof automationPolicies.$inferSelect;
+export type InsertAutomationPolicy = z.infer<typeof insertAutomationPolicySchema>;
+export type AutomationRun = typeof automationRuns.$inferSelect;
+export type InsertAutomationRun = z.infer<typeof insertAutomationRunSchema>;
+export type AutomationRunStatus =
+  | "pending"
+  | "running"
+  | "awaiting_approval"
+  | "completed"
+  | "partial"
+  | "failed";
+export type AutomationTriggerType = "manual" | "scheduled";
+export type AutomationApprovalMode = "approval_required" | "trusted";
+
 export type VisualGenerationStatus = "requested" | "generating" | "ready" | "failed";
 export type VisualAssetStatus = "requested" | "generating" | "ready" | "failed" | "archived";
 export type OpportunityStatus = "proposed" | "selected" | "killed";

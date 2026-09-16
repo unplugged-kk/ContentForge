@@ -7,7 +7,7 @@
  * writes research content.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { stories, type Story } from "@shared/schema";
@@ -34,6 +34,11 @@ export interface InsertStoryRow {
   /** Research evidence IDs — references, never copies. */
   evidenceRefs: number[];
   status: StoryStatus;
+  /**
+   * Phase 13: set only when an AutomationRun derives this Story. UNIQUE in the
+   * database, so the insert is the idempotency arbiter (see `insertStory`).
+   */
+  automationRunId?: number | null;
 }
 
 export interface StoryStoragePort {
@@ -41,6 +46,8 @@ export interface StoryStoragePort {
   getStory(id: number): Promise<Story | undefined>;
   /** Multiple Stories per ResearchJob are legitimate (Ticket 03 §3), so this returns a list. */
   listStoriesByResearchJob(researchJobId: number): Promise<Story[]>;
+  /** The one Story an AutomationRun derived, if it has derived it yet (§4/§19). */
+  getStoryByAutomationRun(automationRunId: number): Promise<Story | undefined>;
   /** Lifecycle only: `draft → ready → used | archived` (Ticket 03 §2). */
   updateStoryStatus(id: number, status: StoryStatus): Promise<Story | undefined>;
 }
@@ -48,6 +55,14 @@ export interface StoryStoragePort {
 export class DatabaseStoryStorage implements StoryStoragePort {
   constructor(private readonly database: StoryDatabase = defaultDb) {}
 
+  /**
+   * Insert a Story. When `automationRunId` is set the insert is made idempotent
+   * by the `stories_automation_run_uq` unique index: a duplicate delivery, a
+   * worker retry, or a re-advance after a crash collapses onto the ONE Story
+   * already recorded for that run (the database is the arbiter — no check-then-
+   * insert race). Human-authored Stories (no run id) are unaffected: NULLs
+   * never conflict, so "many Stories per ResearchJob" still holds.
+   */
   async insertStory(row: InsertStoryRow): Promise<Story> {
     const inserted = await this.database
       .insert(stories)
@@ -61,9 +76,15 @@ export class DatabaseStoryStorage implements StoryStoragePort {
         angles: row.angles,
         evidenceRefs: row.evidenceRefs,
         status: row.status,
+        automationRunId: row.automationRunId ?? null,
       })
+      .onConflictDoNothing({ target: stories.automationRunId })
       .returning();
-    return inserted[0];
+
+    if (inserted.length > 0) return inserted[0];
+    // Only reachable for an automation-derived Story whose run already has one.
+    const existing = await this.getStoryByAutomationRun(row.automationRunId!);
+    return existing!;
   }
 
   async getStory(id: number): Promise<Story | undefined> {
@@ -77,6 +98,15 @@ export class DatabaseStoryStorage implements StoryStoragePort {
       .from(stories)
       .where(eq(stories.researchJobId, researchJobId))
       .orderBy(stories.id);
+  }
+
+  async getStoryByAutomationRun(automationRunId: number): Promise<Story | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(stories)
+      .where(and(eq(stories.automationRunId, automationRunId)))
+      .limit(1);
+    return row;
   }
 
   async updateStoryStatus(id: number, status: StoryStatus): Promise<Story | undefined> {

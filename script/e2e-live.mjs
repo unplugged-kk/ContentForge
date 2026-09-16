@@ -2219,6 +2219,421 @@ const observed = {};
     },
   );
 
+  // ── 6c4. PHASE 13 RED ARROWS (automation / autopilot foundation) ────────────
+  phase("Phase 13: AutomationPolicy -> AutomationRun -> ResearchJob -> Story -> Opportunities -> GenerationJobs");
+
+  await setActiveFeed(`${FIXTURE_BASE}/feed.xml`);
+
+  const automationPolicyBody = (overrides = {}) => ({
+    name: `${RUN}-automation`,
+    triggerType: "manual",
+    researchConfig: { kind: "directed", query: "kubernetes platform engineering", providerIds: ["rss"] },
+    targets: [{ format: "x_post", channel: "x" }],
+    ...overrides,
+  });
+
+  const automationRunFor = async (runId) =>
+    (await q("select * from automation_runs where id = $1", [runId]))[0];
+
+  /**
+   * Drive a run to a terminal state. The real periodic content-scheduler tick
+   * (CONTENT_SCHEDULER_ENABLED=1) is what actually advances automation; the
+   * deterministic `/api/automation/tick` call is used here only so the harness
+   * does not have to wait a full minute per step.
+   */
+  async function driveAutomation(runId, options) {
+    return waitFor(
+      async () => {
+        const row = await automationRunFor(runId);
+        if (!row) return false;
+        if (["awaiting_approval", "completed", "partial", "failed"].includes(row.status)) return row;
+        await http("POST", "/api/automation/tick", {}).catch(() => undefined);
+        return false;
+      },
+      options,
+    );
+  }
+
+  const createdPolicy = await check(
+    "POST /api/automation/policies persists a durable, versioned policy with safe defaults",
+    async () => {
+      const res = await http("POST", "/api/automation/policies", automationPolicyBody());
+      assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+      assert(res.body.version === 1, `expected v1, got ${res.body.version}`);
+      assert(res.body.status === "active", `expected active, got ${res.body.status}`);
+      assert(res.body.approvalMode === "approval_required", "approval_required is the default");
+      assert(res.body.publicationConfig.mode === "none", "auto-publishing is never the default");
+      assert(res.body.limits.maxRunsPerDay > 0, "operational limits default to a durable bound");
+      return withDetail({ id: res.body.id }, `policy ${res.body.id} v${res.body.version}`);
+    },
+  );
+  const automationPolicyId = createdPolicy?.id;
+
+  await check("invalid policies are refused before anything durable exists", async () => {
+    const unknownProvider = await http("POST", "/api/automation/policies", {
+      ...automationPolicyBody(),
+      researchConfig: { kind: "directed", query: "x", providerIds: ["not-a-provider"] },
+    });
+    assert(unknownProvider.status === 400, `unknown provider must be 400, got ${unknownProvider.status}`);
+    const badChannel = await http("POST", "/api/automation/policies", {
+      ...automationPolicyBody(),
+      targets: [{ format: "x_post", channel: "myspace" }],
+    });
+    assert(badChannel.status === 400, `unregistered channel must be 400, got ${badChannel.status}`);
+    const implicitAutopublish = await http("POST", "/api/automation/policies", {
+      ...automationPolicyBody(),
+      publicationConfig: { mode: "on_approval" },
+    });
+    assert(implicitAutopublish.status === 400, `implicit autopublish must be 400, got ${implicitAutopublish.status}`);
+    const badRecurrence = await http("POST", "/api/automation/policies", {
+      ...automationPolicyBody(),
+      triggerType: "scheduled",
+      triggerConfig: { startAt: new Date().toISOString(), recurrence: "0 6 * * *" },
+    });
+    assert(badRecurrence.status === 400, `cron must be rejected (no second grammar), got ${badRecurrence.status}`);
+    return "unknown provider / unregistered channel / implicit autopublish / cron all refused";
+  });
+
+  const triggered = await check(
+    "Path A: a manual trigger creates ONE durable run and enqueues the worker (never executes inline)",
+    async () => {
+      const res = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+        requestKey: `${RUN}-path-a`,
+      });
+      assert(res.status === 202, `expected 202, got ${res.status}: ${res.text}`);
+      assert(res.body.created === true, "a new run was created");
+      assert(res.body.policyVersion === 1, `the run froze v${res.body.policyVersion}`);
+      assert(res.body.status === "pending", `expected pending, got ${res.body.status}`);
+      return withDetail({ runId: res.body.runId }, `run ${res.body.runId} freezing policy v1`);
+    },
+  );
+  const automationRunId = triggered?.runId;
+
+  await check(
+    "Paths A+B: research -> story -> opportunity -> generation -> artifact, stopping at awaiting_approval",
+    async () => {
+      const row = await driveAutomation(automationRunId, {
+        timeoutMs: 240_000,
+        intervalMs: 3_000,
+        label: "automation run",
+      });
+      assert(
+        row.status === "awaiting_approval",
+        `expected awaiting_approval, got ${row.status} (${row.error_class}: ${row.error_message})`,
+      );
+      assert(row.research_job_id, "the run created a ResearchJob");
+
+      const storyRows = await q("select * from stories where automation_run_id = $1", [automationRunId]);
+      assert(storyRows.length === 1, `expected exactly ONE automation Story, got ${storyRows.length}`);
+      assert(
+        storyRows[0].research_job_id === row.research_job_id,
+        "the Story derives from the run's own ResearchJob",
+      );
+
+      const opps = await q("select * from opportunities where story_id = $1", [storyRows[0].id]);
+      assert(opps.length === 1, `expected one Opportunity (Phase 12 fan-out), got ${opps.length}`);
+      assert(opps[0].format === "x_post" && opps[0].channel === "x", "the target came from the policy");
+
+      const jobs = await q("select * from generation_jobs where opportunity_id = $1", [opps[0].id]);
+      assert(jobs.length === 1, `expected one GenerationJob, got ${jobs.length}`);
+      assert(jobs[0].status === "succeeded", `generation job ${jobs[0].id} is "${jobs[0].status}"`);
+
+      const arts = await q("select * from artifacts where opportunity_id = $1", [opps[0].id]);
+      assert(arts.length === 1, `expected one Artifact, got ${arts.length}`);
+      assert(arts[0].readiness === "draft", `expected a draft Artifact, got "${arts[0].readiness}"`);
+
+      const scheds = await q("select count(*)::int c from schedules where artifact_id = $1", [arts[0].id]);
+      assert(scheds[0].c === 0, "automation made NO publication decision — no Schedule exists");
+
+      return withDetail(
+        { artifactId: arts[0].id },
+        `research ${row.research_job_id} -> story ${storyRows[0].id} -> opportunity ${opps[0].id} -> job ${jobs[0].id} -> artifact ${arts[0].id} (draft, awaiting approval)`,
+      );
+    },
+  );
+
+  await check("GET /api/automation/runs/:id exposes durable status plus a derived downstream summary", async () => {
+    const res = await http("GET", `/api/automation/runs/${automationRunId}`);
+    assert(res.status === 200, `expected 200, got ${res.status}`);
+    assert(res.body.status === "awaiting_approval", `status ${res.body.status}`);
+    assert(res.body.policyVersion === 1, `policyVersion ${res.body.policyVersion}`);
+    assert(
+      typeof res.body.triggerIdentity === "string" && res.body.triggerIdentity.length > 0,
+      "the trigger identity is durable and queryable",
+    );
+    assert(res.body.summary.awaitingApproval === 1, `summary.awaitingApproval=${res.body.summary.awaitingApproval}`);
+    assert(res.body.summary.published === 0, `nothing may be published yet (${res.body.summary.published})`);
+    assert(res.body.summary.storyId, "the summary answers which Story the run created");
+    return `status=${res.body.status} v${res.body.policyVersion} awaitingApproval=${res.body.summary.awaitingApproval} published=${res.body.summary.published}`;
+  });
+
+  await check("Path C: the same logical trigger delivered twice collapses onto ONE run (DB arbiter)", async () => {
+    const first = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+      requestKey: `${RUN}-path-c`,
+    });
+    const second = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+      requestKey: `${RUN}-path-c`,
+    });
+    assert(first.status === 202, `first trigger ${first.status}`);
+    assert(first.body.created === true, "the first delivery creates the run");
+    assert(second.status === 200, `second trigger ${second.status}`);
+    assert(second.body.created === false, "the duplicate delivery must not create a run");
+    assert(second.body.runId === first.body.runId, `expected the same run, got ${second.body.runId}`);
+
+    const key = `automation:manual:${automationPolicyId}:${RUN}-path-c`;
+    const rows = await q("select count(*)::int c from automation_runs where idempotency_key = $1", [key]);
+    assert(rows[0].c === 1, `expected exactly one run for the logical key, got ${rows[0].c}`);
+
+    // An explicit rerun is a deliberate NEW execution, and the base key stays usable.
+    const rerun = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+      requestKey: `${RUN}-path-c`,
+      rerun: true,
+    });
+    assert(rerun.status === 202, `rerun ${rerun.status}`);
+    assert(rerun.body.created === true, "an explicit rerun creates a new run");
+    assert(rerun.body.runId !== first.body.runId, "the rerun is a distinct run");
+    const third = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+      requestKey: `${RUN}-path-c`,
+    });
+    assert(third.body.runId === first.body.runId, "ordinary duplicate delivery still collapses normally");
+    return `one run for the logical key, plus one explicit rerun (${first.body.runId}/${rerun.body.runId})`;
+  });
+
+  await check(
+    "Path E: mutating the policy to v2 cannot change the existing v1 run, and a new run uses v2",
+    async () => {
+      const v1Run = await automationRunFor(automationRunId);
+      assert(v1Run.policy_version === 1, `expected the existing run at v1, got ${v1Run.policy_version}`);
+      assert(
+        v1Run.policy_snapshot.targets[0].format === "x_post",
+        "the v1 snapshot targets x_post",
+      );
+
+      const patched = await http("PATCH", `/api/automation/policies/${automationPolicyId}`, {
+        targets: [{ format: "x_thread", channel: "x" }],
+      });
+      assert(patched.status === 200, `PATCH ${patched.status}: ${patched.text}`);
+      assert(patched.body.version === 2, `expected v2, got ${patched.body.version}`);
+      assert(
+        patched.body.specHash !== v1Run.policy_spec_hash,
+        "an execution-relevant edit changes the content-addressed identity",
+      );
+
+      const afterMutation = await automationRunFor(automationRunId);
+      assert(afterMutation.policy_version === 1, "the existing run still declares v1");
+      assert(
+        JSON.stringify(afterMutation.policy_snapshot) === JSON.stringify(v1Run.policy_snapshot),
+        "the existing run's frozen snapshot is byte-identical after the mutation",
+      );
+
+      const next = await http("POST", `/api/automation/policies/${automationPolicyId}/run`, {
+        requestKey: `${RUN}-path-e`,
+      });
+      assert(next.status === 202, `second trigger ${next.status}: ${next.text}`);
+      assert(next.body.policyVersion === 2, `the new run must use v2, got ${next.body.policyVersion}`);
+
+      const settled = await driveAutomation(next.body.runId, {
+        timeoutMs: 240_000,
+        intervalMs: 3_000,
+        label: "v2 automation run",
+      });
+      assert(
+        settled.status === "awaiting_approval",
+        `v2 run status ${settled.status} (${settled.error_class}: ${settled.error_message})`,
+      );
+      const story = (await q("select * from stories where automation_run_id = $1", [next.body.runId]))[0];
+      const opps = await q("select * from opportunities where story_id = $1", [story.id]);
+      assert(
+        opps[0].format === "x_thread",
+        `the v2 run produced "${opps[0].format}", expected x_thread`,
+      );
+
+      // ...and the v1 run's own domain work is untouched by the v2 run.
+      const v1Story = (await q("select * from stories where automation_run_id = $1", [automationRunId]))[0];
+      const v1Opps = await q("select * from opportunities where story_id = $1", [v1Story.id]);
+      assert(v1Opps[0].format === "x_post", "the v1 run's Opportunity is unchanged");
+
+      return `existing run stayed v1 (${v1Run.policy_spec_hash.slice(0, 8)}), new run used v2 (${patched.body.specHash.slice(0, 8)}) -> ${opps[0].format}`;
+    },
+  );
+
+  await check(
+    "trusted automation: approval goes through the Artifact model, then the UNCHANGED publication pipeline publishes",
+    async () => {
+      const policy = await http("POST", "/api/automation/policies", {
+        ...automationPolicyBody({ name: `${RUN}-automation-trusted` }),
+        approvalMode: "trusted",
+        publicationConfig: { mode: "on_approval" },
+      });
+      assert(policy.status === 201, `create ${policy.status}: ${policy.text}`);
+
+      const trig = await http("POST", `/api/automation/policies/${policy.body.id}/run`, {
+        requestKey: `${RUN}-trusted`,
+      });
+      assert(trig.status === 202, `trigger ${trig.status}: ${trig.text}`);
+
+      const done = await driveAutomation(trig.body.runId, {
+        timeoutMs: 240_000,
+        intervalMs: 3_000,
+        label: "trusted automation run",
+      });
+      assert(
+        done.status === "completed",
+        `expected completed, got ${done.status} (${done.error_class}: ${done.error_message})`,
+      );
+
+      const story = (await q("select * from stories where automation_run_id = $1", [trig.body.runId]))[0];
+      const opps = await q("select * from opportunities where story_id = $1", [story.id]);
+      const arts = await q("select * from artifacts where opportunity_id = $1", [opps[0].id]);
+      assert(arts[0].readiness === "approved", `expected approved, got "${arts[0].readiness}"`);
+      assert(arts[0].approved_at !== null, "the approval is durably recorded");
+
+      const scheds = await q("select * from schedules where artifact_id = $1", [arts[0].id]);
+      assert(scheds.length === 1, `expected one Schedule from createSchedule, got ${scheds.length}`);
+
+      // From here on NOTHING is automation code: the real scheduler materializes
+      // the Occurrence, the real worker publishes through the real X adapter.
+      const published = await waitFor(
+        async () => {
+          await http("POST", "/api/publications/dispatch", {}).catch(() => undefined);
+          const rows = await q("select * from publications where schedule_id = $1", [scheds[0].id]);
+          if (!rows[0]) return false;
+          const result = (await q("select * from results where publication_id = $1", [rows[0].id]))[0];
+          if (result?.outcome === "published") return { publication: rows[0], result };
+          if (result?.outcome === "failed") {
+            throw new Error(`publication failed: ${result.error_class} ${result.error_message}`);
+          }
+          return false;
+        },
+        { timeoutMs: 240_000, intervalMs: 3_000, label: "published Result" },
+      );
+
+      const run = await http("GET", `/api/automation/runs/${trig.body.runId}`);
+      assert(run.body.summary.published === 1, `summary.published=${run.body.summary.published}`);
+      assert(run.body.summary.unknown === 0, "no unknown publication");
+
+      return `trusted run: artifact ${arts[0].id} approved -> schedule ${scheds[0].id} -> publication ${published.publication.id} -> result ${published.result.external_id}`;
+    },
+  );
+
+  await check("POST /api/automation/tick is the deterministic driver, not a second scheduler", async () => {
+    const res = await http("POST", "/api/automation/tick", {});
+    assert(res.status === 200, `tick ${res.status}: ${res.text}`);
+    assert(typeof res.body.scheduled === "object", "a scheduled-trigger summary");
+    assert(typeof res.body.enqueued === "number", "an enqueue count");
+    assert(typeof res.body.scheduled.deduplicated === "number", "duplicate collapse is observable");
+    return `scheduled.created=${res.body.scheduled.created} deduplicated=${res.body.scheduled.deduplicated} limited=${res.body.scheduled.limited} enqueued=${res.body.enqueued}`;
+  });
+
+  await check("extra ticks create no duplicate ResearchJob, Story, Opportunity or GenerationJob", async () => {
+    const story = (await q("select * from stories where automation_run_id = $1", [automationRunId]))[0];
+    const before = {
+      research: (await q("select count(*)::int c from research_jobs"))[0].c,
+      stories: (await q("select count(*)::int c from stories where automation_run_id = $1", [automationRunId]))[0].c,
+      opportunities: (await q("select count(*)::int c from opportunities where story_id = $1", [story.id]))[0].c,
+      jobs: (
+        await q(
+          "select count(*)::int c from generation_jobs j join opportunities o on o.id = j.opportunity_id where o.story_id = $1",
+          [story.id],
+        )
+      )[0].c,
+      runs: (await q("select count(*)::int c from automation_runs where policy_id = $1", [automationPolicyId]))[0].c,
+    };
+
+    await http("POST", "/api/automation/tick", {});
+    await http("POST", "/api/automation/tick", {});
+
+    const after = {
+      research: (await q("select count(*)::int c from research_jobs"))[0].c,
+      stories: (await q("select count(*)::int c from stories where automation_run_id = $1", [automationRunId]))[0].c,
+      opportunities: (await q("select count(*)::int c from opportunities where story_id = $1", [story.id]))[0].c,
+      jobs: (
+        await q(
+          "select count(*)::int c from generation_jobs j join opportunities o on o.id = j.opportunity_id where o.story_id = $1",
+          [story.id],
+        )
+      )[0].c,
+      runs: (await q("select count(*)::int c from automation_runs where policy_id = $1", [automationPolicyId]))[0].c,
+    };
+
+    assert(
+      JSON.stringify(before) === JSON.stringify(after),
+      `ticks must be idempotent: before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+    );
+    return `stable across two extra ticks: ${JSON.stringify(after)}`;
+  });
+
+  await check("ownership: a foreign or nonexistent automation policy/run is refused with a non-leaking 404", async () => {
+    const missingPolicy = automationPolicyId + 1_000_000;
+    const trigger = await http("POST", `/api/automation/policies/${missingPolicy}/run`, {});
+    assert(trigger.status === 404, `trigger expected 404, got ${trigger.status}`);
+    const readPolicy = await http("GET", `/api/automation/policies/${missingPolicy}`);
+    assert(readPolicy.status === 404, `read expected 404, got ${readPolicy.status}`);
+    const readRun = await http("GET", `/api/automation/runs/${automationRunId + 1_000_000}`);
+    assert(readRun.status === 404, `run read expected 404, got ${readRun.status}`);
+    const patchForeign = await http("PATCH", `/api/automation/policies/${missingPolicy}`, { name: "hijack" });
+    assert(patchForeign.status === 404, `patch expected 404, got ${patchForeign.status}`);
+    return "no policy/run existence is leaked";
+  });
+
+  await check(
+    "Path D: SIGKILL mid-run, restart, and the SAME run completes from durable state with no duplicates",
+    async () => {
+      const policy = await http("POST", "/api/automation/policies", {
+        ...automationPolicyBody({ name: `${RUN}-automation-restart` }),
+      });
+      assert(policy.status === 201, `create ${policy.status}: ${policy.text}`);
+      const trig = await http("POST", `/api/automation/policies/${policy.body.id}/run`, {
+        requestKey: `${RUN}-path-d`,
+      });
+      assert(trig.status === 202, `trigger ${trig.status}: ${trig.text}`);
+      const runId = trig.body.runId;
+
+      // Let a durable INTERMEDIATE state exist, then kill without warning.
+      const mid = await waitFor(
+        async () => {
+          const row = await automationRunFor(runId);
+          if (!row) return false;
+          if (row.status !== "pending" && row.status !== "running") return row;
+          return row.research_job_id ? row : false;
+        },
+        { timeoutMs: 120_000, intervalMs: 2_000, label: "durable intermediate state" },
+      );
+      assert(mid.research_job_id, "no durable ResearchJob reference existed before the kill");
+      const jobsBefore = (await q("select count(*)::int c from generation_jobs"))[0].c;
+
+      await killApp("SIGKILL");
+      await startApp();
+      await setActiveFeed(`${FIXTURE_BASE}/feed.xml`);
+
+      const done = await driveAutomation(runId, {
+        timeoutMs: 300_000,
+        intervalMs: 3_000,
+        label: "post-restart automation run",
+      });
+      assert(
+        done.status === "awaiting_approval" || done.status === "partial" || done.status === "completed",
+        `post-restart status ${done.status} (${done.error_class}: ${done.error_message})`,
+      );
+
+      const runs = await q("select count(*)::int c from automation_runs where policy_id = $1", [policy.body.id]);
+      assert(runs[0].c === 1, `expected exactly ONE run after restart, got ${runs[0].c}`);
+      const stories = await q("select * from stories where automation_run_id = $1", [runId]);
+      assert(stories.length === 1, `expected exactly ONE Story after restart, got ${stories.length}`);
+      const opps = await q("select count(*)::int c from opportunities where story_id = $1", [stories[0].id]);
+      assert(opps[0].c === 1, `expected exactly ONE Opportunity after restart, got ${opps[0].c}`);
+      const jobs = await q(
+        "select count(*)::int c from generation_jobs j join opportunities o on o.id = j.opportunity_id where o.story_id = $1",
+        [stories[0].id],
+      );
+      assert(jobs[0].c === 1, `expected exactly ONE GenerationJob after restart, got ${jobs[0].c}`);
+      const jobsAfter = (await q("select count(*)::int c from generation_jobs"))[0].c;
+      assert(jobsAfter === jobsBefore + 1, `expected exactly one new GenerationJob overall (${jobsBefore} -> ${jobsAfter})`);
+
+      return `run ${runId} survived SIGKILL: 1 run, 1 Story, 1 Opportunity, 1 GenerationJob, status ${done.status}`;
+    },
+  );
+
   // ── 6d. PHASE 2 RED ARROWS (research intelligence expansion) ────────────────
   phase("Phase 2: mixed-provider research, capability surface, SSRF boundary, no re-research");
 

@@ -373,6 +373,13 @@ export interface ContentStoragePort {
   listStalePublishing(now: Date, limit: number): Promise<Publication[]>;
   /** Publications parked as `unknown` (transport invoked, outcome unconfirmed) — reconciliation candidates. */
   listUnknownPublications(limit: number): Promise<Publication[]>;
+  /**
+   * Every Publication ever created for one Schedule, oldest first (Phase 13
+   * observability: an AutomationRun derives its downstream publication picture
+   * from durable references). Optional so the hand-built `ContentStoragePort`
+   * test doubles that predate this phase are unaffected.
+   */
+  listPublicationsBySchedule?(scheduleId: number): Promise<Publication[]>;
 
   /** Insert a Result, or resolve an existing `unknown` one — never overwrites a terminal Result. */
   insertResult(row: InsertResultRow): Promise<Result | undefined>;
@@ -1198,6 +1205,14 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(and(eq(publications.state, "failed"), eq(publications.providerCalled, true)))
       .orderBy(asc(publications.id))
       .limit(limit);
+  }
+
+  async listPublicationsBySchedule(scheduleId: number): Promise<Publication[]> {
+    return this.database
+      .select()
+      .from(publications)
+      .where(eq(publications.scheduleId, scheduleId))
+      .orderBy(asc(publications.id));
   }
 
   // ── Result ──────────────────────────────────────────────────────────────────

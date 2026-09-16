@@ -173,6 +173,12 @@ app.use((req, res, next) => {
   const { createDefaultContentRouter } = await import("./content/routes");
   app.use("/api", await createDefaultContentRouter());
 
+  // Automation API (Phase 13): durable AutomationPolicy + AutomationRun. It
+  // persists automation *intent* and enqueues `automation.run`; it never runs
+  // research, generation or publication inline, and it reaches no provider.
+  const { createDefaultAutomationRouter } = await import("./content/automationRoutes");
+  app.use("/api/automation", await createDefaultAutomationRouter());
+
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 

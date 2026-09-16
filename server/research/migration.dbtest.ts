@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 46, `expected 46 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 16, "all sixteen migrations recorded");
+      assert.equal(tables.length, 48, `expected 48 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 17, "all seventeen migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -112,18 +112,36 @@ describeDb("migration chain (db)", () => {
         "visual_generations",
         "visual_assets",
         "visual_asset_refs",
+        "automation_policies",
+        "automation_runs",
         "rss_sources",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
       }
 
       // Story provenance is FK-protected: research cannot be deleted out from
-      // under a Story (0006 adds the FK, not just the column).
+      // under a Story (0006 adds the FK, not just the column). 0016 adds a
+      // second, independent FK — `stories.automation_run_id` — which is what
+      // makes automation's Story creation idempotent; assert the exact set so a
+      // dropped or duplicated constraint is caught rather than tolerated.
       const storyFk = await pool.query<{ conname: string }>(
         `select conname from pg_constraint
-          where conrelid = 'stories'::regclass and contype = 'f'`,
+          where conrelid = 'stories'::regclass and contype = 'f'
+          order by conname`,
       );
-      assert.equal(storyFk.rows.length, 1, "stories.research_job_id has one FK");
+      assert.deepEqual(
+        storyFk.rows.map((r) => r.conname),
+        [
+          "stories_automation_run_id_automation_runs_id_fk",
+          "stories_research_job_id_research_jobs_id_fk",
+        ],
+        "stories carries exactly the research-job and automation-run FKs",
+      );
+      const storyUnique = await pool.query<{ indexname: string }>(
+        `select indexname from pg_indexes
+          where tablename = 'stories' and indexname = 'stories_automation_run_uq'`,
+      );
+      assert.equal(storyUnique.rows.length, 1, "one Story per AutomationRun is enforced by the database");
 
       // Artifact content immutability is enforced by the database, not just by
       // convention (0007 trigger). Same for visual assets (0012 trigger).
@@ -183,12 +201,14 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 46, `expected 46 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 16, "0003-0015 recorded after upgrade");
+      assert.equal(tables.length, 48, `expected 48 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 17, "0003-0016 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
       assert.ok(tables.includes("artifacts"), "0007 table created on the upgrade path");
+      assert.ok(tables.includes("automation_policies"), "0016 table created on the upgrade path");
+      assert.ok(tables.includes("automation_runs"), "0016 table created on the upgrade path");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });
