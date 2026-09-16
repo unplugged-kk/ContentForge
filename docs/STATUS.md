@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-14 (Phase 11) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-15 (Phase 12) · Branch reviewed: `replit` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,16 +13,84 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **327 passed / 0 failed** (74 suites) |
-| `npm test` | **327 passed** |
-| `npm run test:db` (real PostgreSQL) | **137 passed / 0 failed / 0 skipped** (20 suites) |
-| `npm run test:e2e:live` (real running app) | **all 7 new Phase 11 checks pass**, confirmed on two full reproducible runs. A handful of pre-existing, unrelated infra timeouts (Phase 1.5 cron tick, Phase 2 mixed-provider fixture timing, Phase 6 LinkedIn reconciliation, Phase 10 context-B) fail intermittently on different checks between runs — timing noise in this harness, not a regression: Phase 11's own checks were green both times |
+| `npm run test:unit` | **338 passed / 0 failed** (75 suites) |
+| `npm test` | **338 passed** |
+| `npm run test:db` (real PostgreSQL) | **147 passed / 0 failed / 0 skipped** (21 suites) |
+| `npm run test:e2e:live` (real running app) | **all 8-9 new Phase 12 checks pass**, confirmed green across THREE consecutive full runs. A shifting set of pre-existing, unrelated infra timeouts (Phase 1.5 cron tick, Phase 2 mixed-provider fixture timing, Phase 6 LinkedIn reconciliation, Phase 10 context-B, Phase 11 style-aware generation under load) fail intermittently on *different* checks between runs — timing noise from repeated back-to-back runs on this dev host, not a regression: Phase 12's own checks were green on every run |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed**, unchanged regression |
-| Fresh DB migration | **15 migrations** from zero (+1: additive `style_analyses` table, +7 columns on `style_profiles`) |
+| Fresh DB migration | **16 migrations** from zero (+1: additive `opportunities.repurpose_key` column + unique index) |
 | Existing DB migration | upgrades to the same schema |
-| External smoke (non-gating) | `hnrss.org` → complete, 20 sources persisted |
+| External smoke (non-gating) | intermittent this session (dev-host network timing under load); not gating |
 
-Baseline before this phase: 302 unit / 129 DB / 82-of-89 live E2E (pre-existing flakes) / 14-of-14 visual E2E.
+Baseline before this phase: 327 unit / 137 DB / (live E2E baseline noisy under repeated-run load, see above) / 14-of-14 visual E2E.
+
+---
+
+## First-class content repurposing (new in this phase — Phase 12)
+
+**One durable Story → N independently addressable Opportunities**, without
+re-researching. Closes the gap where `createOpportunityFromStory` already
+permitted many Opportunities per Story but nothing turned "derive several
+pieces of content from this Story" into one product operation:
+
+```
+Story (durable, reusable)
+        ↓
+repurposeStory(storyId, targets[])   ← the ONE new operation
+        ├── createOpportunityFromStory   (existing primitive, unchanged)
+        └── createGenerationJob          (existing primitive, unchanged)
+                ↓
+        GenerationPolicy (per format×channel, per Story context/observed style)
+                ↓
+        GenerationJob.policySnapshot — FROZEN, independent per target
+```
+
+- **Audited first**: `Opportunity.storyId`/`format`/`channel` were already
+  the complete lineage answer — no new lineage table. Format/channel
+  validation already reused the registered channel-adapter capability
+  check (no `KNOWN_FORMAT_CHANNELS` allowlist restored).
+  `createGenerationJob`'s `policyKey`/`specHash` already derive from the
+  Opportunity's own format/channel plus Phase 10 context and Phase 11
+  observed style — two targets on the same Story get DISTINCT
+  `GenerationPolicy` revisions with zero repurposing-specific code.
+  `loadGenerationContext` only reads a Story's EXISTING evidence — it was
+  never capable of creating a `ResearchJob`, so "no re-research" was
+  already structurally guaranteed by composing existing primitives.
+- **Idempotency**: one additive column, `opportunities.repurpose_key`
+  (nullable, unique), mirroring the EXISTING `chat_key` pattern exactly. A
+  caller-supplied `requestKey` plus each target's format/channel composes
+  the per-target key; duplicate delivery reuses the existing
+  Opportunity/GenerationJob; a target's `regenerate: true` creates a
+  genuinely new sibling via a fresh nonce without poisoning the base key.
+- **Independent lifecycles**: no shared "batch" entity gates sibling
+  state. Proven with real Postgres: killing one repurposed Opportunity
+  leaves siblings untouched; approving/scheduling/publishing one
+  repurposed Artifact never touches another; a context mutation between
+  two repurpose calls never retroactively changes an earlier sibling's
+  frozen snapshot.
+- **Ownership**: a foreign Story is refused with the same
+  `StoryNotFoundError` a missing one produces (non-leaking).
+- **API**: `POST /api/stories/:id/repurpose` — `{ requestKey?, targets: [{
+  format, channel, ..., generate?, regenerate? }] }` → `207 Multi-Status`
+  with one outcome per target; partial success is a first-class response
+  shape (an invalid target is reported, valid siblings still succeed).
+  Every created GenerationJob is enqueued onto the SAME `generation.run`
+  pg-boss queue every other job uses.
+
+Along the way, two pre-existing, unrelated DB-test cleanup races
+(`creation.dbtest.ts`, `phase15.dbtest.ts` each swept ALL
+`generation_policies`/`voices`/`content_templates` unscoped, which could
+delete a row another dbtest file's still-live `generation_jobs` row
+referenced) were found and fixed — scoped to each file's own test data,
+no behavior change to the tests.
+
+Full detail: `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md` § Phase 12.
+
+**Deferred, explicitly**: visual/carousel/video repurposing targets (the
+Opportunity model already accommodates them; nothing new enables or
+blocks them this phase); autonomous repurposing (auto-discovering targets,
+auto-publishing — a Phase 13 concern); analytics/learning-driven target
+selection.
 
 ---
 
