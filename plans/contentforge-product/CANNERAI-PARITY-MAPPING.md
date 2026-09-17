@@ -36,7 +36,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | YouTube ingestion | `youtube` provider → NormalizedSource | PARTIALLY IMPLEMENTED — public channel feeds, **metadata-only** (`fetch`/transcript deliberately undeclared). No Data-API backend, no transcripts |
 | Source deduplication | durable unique identities | IMPLEMENTED — `(job, canonical_url)` and `(job, provider, native_id)` unique indexes, proven against real PostgreSQL |
 | One Story → many formats | Opportunity (`format` × `channel`) | IMPLEMENTED (x_post + x_thread) |
-| Voice / writing-style matching | Voice → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — **API foundation complete**: reusable voice profiles with immutable revisions (create / revise / archive / revisions), feeding an immutable policy revision and the rendered prompt. **Deferred**: automatic style analysis of the user's own posts, and any UI |
+| Voice / writing-style matching | Voice → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — reusable voice profiles + Phase 11 observed-style evidence. **Phase 14 does not auto-apply learning signals to voice.** Deferred: automatic style mutation, drift correction, UI |
 | Templates | ContentTemplate → GenerationPolicy → GenerationJob | PARTIALLY IMPLEMENTED — **API foundation complete**: structure/variables/constraints/instructions as data, immutable revisions, deterministic rendering with explicit `[missing: var]` markers and undeclared-variable rejection. **Deferred**: authoring UI, seeded corpus |
 | Platform-aware formatting | Format profile → policy prompt | IMPLEMENTED for x_post/x_thread; other pairs are one registration away |
 | Multi-platform formatting | format × channel dimensions | ARCHITECTURALLY READY — only X formats are implemented; no fake placeholders registered |
@@ -48,7 +48,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Scheduling | Schedule → Occurrence | PARTIALLY IMPLEMENTED — **durable periodic scheduler tick implemented** (cron → compare-and-set claim → idempotent publication claim → pg-boss); one-shot only, **recurrence expansion still deferred and explicitly rejected** rather than faked |
 | Publishing | Publication → ChannelAdapter | IMPLEMENTED for X (x_post/x_thread via existing xQuick); other channels ARCHITECTURALLY READY |
 | Publication reconciliation | Publication lease + `Result(unknown)` | PARTIALLY IMPLEMENTED — reconcile-first is enforced; the X `reconcile()` resolver is a stub |
-| Analytics | Publication → Result | PARTIALLY IMPLEMENTED — one durable Result per Publication; metric mappers deferred |
+| Analytics | Publication → Result → PerformanceSignal → LearningSignal | PARTIALLY IMPLEMENTED — **P-8 corpus exists**: typed edit/approval/publication/performance/derived signals, timestamped metric snapshots, ChannelAdapter metric seam (X mapped; LinkedIn `not_available`), descriptive summaries, owner isolation. **Not** post-level ranking, best times, topic/voice performance scores, or research→performance recommenders. Legacy `analytics`/`viral_scores` remain a closed posts-table island. No UI |
 | Image generation | Visual provider → VisualGeneration → VisualAsset → Artifact | PARTIALLY IMPLEMENTED — **durable pipeline complete**: provider contract with declared capabilities, async `visual.run` worker, `image` payload schema (asset reference + alt/caption/role), immutable asset revisions, cross-user isolation. The only producer is the deterministic fixture; **no real image vendor is wired**. Deferred: real provider, UI |
 | Carousel | Opportunity(format) → GenerationJob → Artifact | PARTIALLY IMPLEMENTED — **structured and durable**: ordered `slides`, each a real asset revision (`carousel_slide`), independently addressable refs, same Story without re-research. Deferred: slide-layout UI, auto-layout policy |
 | Carousel generation (visual slides) | Visual provider (`generate_slide`) → VisualAsset | PARTIALLY IMPLEMENTED — capability declared and the fixture produces deterministic slides. Deferred: real provider |
@@ -56,7 +56,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Thumbnail | VisualAsset → Artifact (`thumbnail` payload) | PARTIALLY IMPLEMENTED — payload schema + profile registered; produced exactly like images. Deferred: sizing/derivation policy |
 | Video script | format + frozen policy export | DEFERRED (Video Factory untouched; see contract note below) |
 | Second Brain / Context Vault | future context subsystem | DEFERRED — must feed policy/research context, **never bolted onto Story** |
-| Style analysis of real posts | observed-evidence layer | DEFERRED |
+| Style analysis of real posts | observed-evidence layer | PARTIALLY IMPLEMENTED — Phase 11 stores versioned observations; Phase 14 stores performance/edit/approval signals **without** rewriting style. Automatic re-analysis / style mutation: DEFERRED |
 | One-click transforms | new Artifact revision | DEFERRED |
 | Multi-brand / collaboration | identity model | DEFERRED |
 | Notifications, search, activity feed | new surfaces | DEFERRED |

@@ -21,9 +21,12 @@ import {
   payloadSchemaRegistry,
 } from "../artifacts/payloadSchemas";
 import type { ContentStoragePort, JsonRecord } from "./storage";
+import type { LearningRecorder } from "./learning/record";
 
 export interface ArtifactDeps {
   artifacts: ContentStoragePort;
+  /** Optional so existing tests that only persist artifacts stay unchanged. */
+  learning?: LearningRecorder;
 }
 
 export class ArtifactNotFoundError extends Error {
@@ -220,6 +223,10 @@ export async function approveArtifact(
   }
   const updated = await deps.artifacts.setArtifactReadiness(artifactId, "approved", new Date());
   if (!updated) throw new ArtifactNotFoundError(artifactId);
+  if (deps.learning) {
+    const chain = await getArtifactHistory(artifactId, deps);
+    await deps.learning.recordApproval(updated, chain);
+  }
   return updated;
 }
 
@@ -235,6 +242,10 @@ export async function rejectArtifact(
   }
   const updated = await deps.artifacts.setArtifactReadiness(artifactId, "rejected", null);
   if (!updated) throw new ArtifactNotFoundError(artifactId);
+  if (deps.learning) {
+    const chain = await getArtifactHistory(artifactId, deps);
+    await deps.learning.recordApproval(updated, chain);
+  }
   return updated;
 }
 
@@ -292,7 +303,7 @@ export async function createHumanEditRevision(
   const prior = await deps.artifacts.getArtifact(priorArtifactId);
   if (!prior) throw new ArtifactNotFoundError(priorArtifactId);
 
-  return createArtifact(
+  const created = await createArtifact(
     {
       userId: prior.userId ?? null,
       generationJobId: null,
@@ -308,6 +319,8 @@ export async function createHumanEditRevision(
     },
     deps,
   );
+  if (deps.learning) await deps.learning.recordEdit(prior, created);
+  return created;
 }
 
 export type { ArtifactReadiness, GenerationJob };

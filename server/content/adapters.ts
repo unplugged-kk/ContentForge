@@ -14,12 +14,22 @@
 import type { JsonRecord } from "./storage";
 import {
   fetchTweetTextByIdViaOfficialApi,
+  fetchXPublicMetrics,
   postContentToX,
   reconcileXQuickWriteAction,
   translateXError,
   uploadMediaToX,
   XWriteActionPendingError,
 } from "../social/x";
+import { PERFORMANCE_SCHEMA_VERSION } from "./learning/constants";
+import { hourWindow } from "./learning/identity";
+import {
+  classifyMetricsHttpFailure,
+  missingMetricsOutcome,
+  normalizeProviderMetrics,
+  type MetricFetchOutcome,
+  type MetricFetchRequest,
+} from "./learning/metrics";
 import {
   LinkedInPublishAmbiguousError,
   postTextToLinkedIn,
@@ -87,6 +97,11 @@ export interface ChannelAdapter {
   publish(request: PublishRequest): Promise<PublishOutcome>;
   /** Best-effort resolution of an unknown outcome. Null = cannot determine. */
   reconcile(request: PublishRequest): Promise<PublishOutcome | null>;
+  /**
+   * Optional analytics capability. Maps provider observations into the shared
+   * NormalizedPerformanceSignal model. Missing metrics are `not_available`.
+   */
+  fetchMetrics?(request: MetricFetchRequest): Promise<MetricFetchOutcome>;
 }
 
 function unavailable(format: string, channel: string): PublishOutcome {
@@ -384,6 +399,45 @@ export function createXChannelAdapter(): ChannelAdapter {
       // No durable identifier to check at all.
       return null;
     },
+
+    async fetchMetrics(request: MetricFetchRequest): Promise<MetricFetchOutcome> {
+      const now = new Date();
+      const window = hourWindow(now);
+      const ids = request.externalId.split(",").map((s) => s.trim()).filter(Boolean);
+      const fetched = await fetchXPublicMetrics(ids);
+      if (!fetched.ok) {
+        if (fetched.status === 501) {
+          return missingMetricsOutcome("x", request.externalId, fetched.retrievedAt, window.observedAt, window.window);
+        }
+        const errorClass = classifyMetricsHttpFailure(fetched.status, fetched.message);
+        return {
+          ok: false,
+          provider: "x",
+          retrievedAt: fetched.retrievedAt,
+          observedAt: window.observedAt,
+          measurementWindow: window.window,
+          externalId: request.externalId,
+          normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+          metrics: [],
+          errorClass,
+          errorMessage: fetched.message,
+        };
+      }
+      const merged: Record<string, unknown> = {};
+      for (const row of fetched.rows) {
+        if (row && typeof row === "object") Object.assign(merged, row);
+      }
+      return {
+        ok: true,
+        provider: "x",
+        retrievedAt: fetched.retrievedAt,
+        observedAt: window.observedAt,
+        measurementWindow: window.window,
+        externalId: request.externalId,
+        normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+        metrics: normalizeProviderMetrics(merged, "x"),
+      };
+    },
   };
 }
 
@@ -505,6 +559,18 @@ export function createLinkedInChannelAdapter(): ChannelAdapter {
         externalUrl: status.url,
         publishedAt: new Date(),
       };
+    },
+
+    async fetchMetrics(request: MetricFetchRequest): Promise<MetricFetchOutcome> {
+      const now = new Date();
+      const window = hourWindow(now);
+      return missingMetricsOutcome(
+        "linkedin",
+        request.externalId,
+        now,
+        window.observedAt,
+        window.window,
+      );
     },
   };
 }

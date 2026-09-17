@@ -439,6 +439,8 @@ export interface AutomationDeps {
    * request handler.
    */
   enqueueAutomationRun: (run: AutomationRun) => Promise<boolean>;
+  /** Phase 14: same learning corpus as manual approval. */
+  learning?: import("./learning/record").LearningRecorder;
 }
 
 // ── policy service ────────────────────────────────────────────────────────────
@@ -1155,11 +1157,17 @@ async function settleTrustedArtifact(
   if (!artifact) return null;
 
   if (artifact.readiness === "draft") {
-    artifact = await submitArtifactForReview(artifactId, { artifacts: deps.content });
+    artifact = await submitArtifactForReview(artifactId, {
+      artifacts: deps.content,
+      learning: deps.learning,
+    });
   }
   if (artifact.readiness === "in_review") {
     try {
-      artifact = await approveArtifact(artifactId, { artifacts: deps.content });
+      artifact = await approveArtifact(artifactId, {
+        artifacts: deps.content,
+        learning: deps.learning,
+      });
     } catch (error) {
       if (!(error instanceof ArtifactStateError)) throw error;
       artifact = await deps.content.getArtifact(artifactId);

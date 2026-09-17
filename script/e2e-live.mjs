@@ -192,6 +192,7 @@ async function startApp() {
       XQUICK_API_BASE_URL: FIXTURE_BASE,
       XQUICK_API_KEY: "fixture-key",
       XQUICK_ACCOUNT: "cf_e2e",
+      XQUICK_ANALYTICS_ENDPOINT: "/x/analytics",
       // Fast, deterministic write-action polling for the Phase 5 reconciliation
       // scenario (1 attempt, no delay) rather than the 6x2s production default.
       XQUICK_WRITE_POLL_ATTEMPTS: "1",
@@ -2892,6 +2893,120 @@ const observed = {};
         v
   Story ${storyId}   (researchJobId ${researchJobId}, no re-research)`);
     return "correlation id present in HTTP response, DB row, queue envelope, and app logs";
+  });
+
+  phase("Phase 14: Artifact -> lifecycle signal -> PerformanceSignal -> LearningSignal");
+
+  await check("Path A: published Artifact Result -> performance ingestion -> learning signal", async () => {
+    const refresh = await http("POST", `/api/learning/publications/${publicationId}/refresh?sync=1`, {});
+    assert(refresh.status === 200, `refresh ${refresh.status}: ${refresh.text}`);
+    const snaps = await http("GET", `/api/learning/publications/${publicationId}/performance`);
+    assert(snaps.status === 200, `performance ${snaps.status}`);
+    assert(Array.isArray(snaps.body), "performance is not a list");
+    const observedLikes = snaps.body.find((r) => r.metric === "likes" && r.availability === "observed");
+    assert(observedLikes, "fixture analytics did not persist likes");
+    assert(observedLikes.value !== null && Number(observedLikes.value) > 0, "likes fabricated or missing");
+    const signals = await http("GET", `/api/learning/signals?publicationId=${publicationId}&limit=200`);
+    assert(signals.status === 200);
+    assert(Array.isArray(signals.body), "signals is not a list");
+    assert(signals.body.every((s) => s.publicationId === publicationId), "list leaked another publication");
+    assert(signals.body.some((s) => s.signalType === "publication"), "no publication signal");
+    assert(signals.body.some((s) => s.signalType === "performance"), "no performance learning signal");
+    return `publication ${publicationId} has ${snaps.body.length} snapshots`;
+  });
+
+  let learningRevisionId = null;
+  await check("Path B: Artifact edited -> new revision -> edit signal", async () => {
+    const history = await http("GET", `/api/artifacts/${artifactId}/history`);
+    const head = history.body[history.body.length - 1];
+    const rev = await http("POST", `/api/artifacts/${head.id}/revise`, {
+      baseArtifactId: head.id,
+      payload: { text: "Phase 14 learning-loop rewrite of the hook and a much longer body for the corpus." },
+    });
+    assert(rev.status === 201, `revise ${rev.status}: ${rev.text}`);
+    learningRevisionId = rev.body.id;
+    const signals = await http("GET", "/api/learning/signals");
+    assert(signals.body.some((s) => s.signalType === "edit" && s.artifactId === learningRevisionId));
+    return `revision ${learningRevisionId}`;
+  });
+
+  await check("Path C: approval after edit -> approval signal", async () => {
+    await http("POST", `/api/artifacts/${learningRevisionId}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${learningRevisionId}/approve`, {});
+    assert(approved.status === 200, `approve ${approved.status}: ${approved.text}`);
+    const signals = await http("GET", "/api/learning/signals");
+    const row = signals.body.find((s) => s.signalType === "approval" && s.artifactId === learningRevisionId);
+    assert(row, "no approval signal");
+    assert(row.payload.kind === "edited_then_approved" || row.payload.kind === "approved_after_multiple_revisions");
+    return row.payload.kind;
+  });
+
+  await check("Path D: repeated performance ingestion collapses to one logical observation", async () => {
+    const at = "2026-09-17T06:00:00.000Z";
+    const body = {
+      observedAt: at,
+      provider: "operator",
+      metrics: [
+        { metric: "likes", value: 11, availability: "observed" },
+        { metric: "clicks", value: null, availability: "not_available" },
+      ],
+    };
+    const first = await http("POST", `/api/learning/publications/${publicationId}/observations`, body);
+    const second = await http("POST", `/api/learning/publications/${publicationId}/observations`, body);
+    assert(first.status === 201 && second.status === 201, `${first.status}/${second.status}`);
+    assert(first.body.created > 0, "first ingest created nothing");
+    assert(second.body.created === 0, "repeat ingest duplicated measurements");
+    const click = (await http("GET", `/api/learning/publications/${publicationId}/performance`)).body.find(
+      (r) => r.metric === "clicks" && r.provider === "operator",
+    );
+    assert(click && click.availability === "not_available" && click.value === null, "missing metric stored as zero");
+    return `created=${first.body.created} reused=${second.body.reused}`;
+  });
+
+  await check("Path E: analytics summary matches durable DB state", async () => {
+    const summary = await http("GET", "/api/learning/summary");
+    assert(summary.status === 200, `summary ${summary.status}: ${summary.text}`);
+    const published = await q("select count(*)::int c from publications where state = 'published' and user_id = 1");
+    assert(summary.body.publishedCount === published[0].c, `summary ${summary.body.publishedCount} vs db ${published[0].c}`);
+    assert(summary.body.signalCounts.edit >= 1, "edit counts missing");
+    return `publishedCount=${summary.body.publishedCount}`;
+  });
+
+  await check("Path F: ownership isolation does not leak foreign learning rows", async () => {
+    const missing = await http("GET", "/api/learning/signals/99999999");
+    assert(missing.status === 404, `expected 404, got ${missing.status}`);
+    const foreignPub = await http("GET", "/api/learning/publications/99999999/performance");
+    assert(foreignPub.status === 404, `expected 404, got ${foreignPub.status}`);
+    return "foreign ids 404";
+  });
+
+  await check("Path G: SIGKILL mid analytics.refresh, restart, no duplicate snapshots", async () => {
+    const before = await q(
+      "select count(*)::int c from performance_signals where publication_id = $1",
+      [publicationId],
+    );
+    const queued = await http("POST", `/api/learning/publications/${publicationId}/refresh`, {});
+    assert(queued.status === 202, `enqueue ${queued.status}: ${queued.text}`);
+    await killApp("SIGKILL");
+    await startApp();
+    await waitFor(
+      async () => {
+        const rows = await q(
+          "select count(*)::int c from performance_signals where publication_id = $1",
+          [publicationId],
+        );
+        return rows[0].c >= before[0].c ? rows : false;
+      },
+      { timeoutMs: 90_000, intervalMs: 500, label: "analytics refresh resume" },
+    );
+    const again = await http("POST", `/api/learning/publications/${publicationId}/refresh`, {});
+    assert(again.status === 202, `re-enqueue ${again.status}`);
+    const after = await q(
+      "select count(*)::int c from performance_signals where publication_id = $1",
+      [publicationId],
+    );
+    assert(after[0].c >= before[0].c, "signals disappeared after restart");
+    return `snapshots ${before[0].c} -> ${after[0].c}`;
   });
 
   // ── 9. EXTERNAL SMOKE (optional, non-gating) ────────────────────────────────

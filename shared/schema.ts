@@ -1499,3 +1499,109 @@ export type PublicationState =
   | "published"
   | "failed"
   | "cancelled";
+
+// ── P-8 LEARNING / ANALYTICS (Phase 14) ───────────────────────────────────────
+/**
+ * PerformanceSignal — one timestamped, versioned metric observation for a
+ * Publication. Snapshots at T1/T2/T3 coexist; identity is the uniqueness
+ * arbiter so repeated polling cannot duplicate the same logical measurement.
+ * Missing provider data is stored as availability=`not_available` with a NULL
+ * value — never fabricated as zero.
+ */
+export const performanceSignals = pgTable(
+  "performance_signals",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    publicationId: integer("publication_id")
+      .notNull()
+      .references(() => publications.id),
+    resultId: integer("result_id").references(() => results.id),
+    artifactId: integer("artifact_id").references(() => artifacts.id),
+    channel: varchar("channel", { length: 50 }).notNull(),
+    provider: varchar("provider", { length: 60 }).notNull(),
+    externalId: varchar("external_id", { length: 200 }),
+    metric: varchar("metric", { length: 60 }).notNull(),
+    /** Null when availability is not_available — never coerced to 0. */
+    value: decimal("value", { precision: 18, scale: 6 }),
+    /** observed | not_available */
+    availability: varchar("availability", { length: 20 }).notNull(),
+    observedAt: timestamp("observed_at").notNull(),
+    retrievedAt: timestamp("retrieved_at").notNull(),
+    measurementWindow: varchar("measurement_window", { length: 80 }),
+    /** e.g. performance.v1 — changing interpretation does not rewrite history. */
+    normalizationVersion: varchar("normalization_version", { length: 40 }).notNull(),
+    sourceRevision: varchar("source_revision", { length: 80 }),
+    /** Bounded diagnostic provenance — never a full provider payload. */
+    provenance: jsonb("provenance").$type<Record<string, unknown>>().notNull().default({}),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("performance_signals_identity_uq").on(table.identityKey),
+    index("performance_signals_user_idx").on(table.userId),
+    index("performance_signals_publication_idx").on(table.publicationId),
+    index("performance_signals_observed_idx").on(table.publicationId, table.observedAt),
+  ],
+);
+
+/**
+ * LearningSignal — the canonical durable representation of an observation that
+ * may later influence personalization. Payloads are typed and versioned; this
+ * is not a second ContextAssembly and does not mutate profile/style/memory.
+ */
+export const learningSignals = pgTable(
+  "learning_signals",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    /** edit | approval | publication | performance | derived */
+    signalType: varchar("signal_type", { length: 40 }).notNull(),
+    /** artifact_revision | publication | result | performance_signal */
+    sourceType: varchar("source_type", { length: 40 }).notNull(),
+    sourceId: integer("source_id").notNull(),
+    artifactId: integer("artifact_id").references(() => artifacts.id),
+    priorArtifactId: integer("prior_artifact_id").references(() => artifacts.id),
+    publicationId: integer("publication_id").references(() => publications.id),
+    resultId: integer("result_id").references(() => results.id),
+    performanceSignalId: integer("performance_signal_id").references(() => performanceSignals.id),
+    generationJobId: integer("generation_job_id").references(() => generationJobs.id),
+    generationPolicyId: integer("generation_policy_id").references(() => generationPolicies.id),
+    opportunityId: integer("opportunity_id").references(() => opportunities.id),
+    storyId: integer("story_id").references(() => stories.id),
+    automationRunId: integer("automation_run_id").references(() => automationRuns.id),
+    channel: varchar("channel", { length: 50 }),
+    format: varchar("format", { length: 50 }),
+    observedAt: timestamp("observed_at").notNull(),
+    schemaVersion: varchar("schema_version", { length: 40 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    /** Evidence strength of the observation — not a quality/viral score. */
+    confidence: varchar("confidence", { length: 40 }),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("learning_signals_identity_uq").on(table.identityKey),
+    index("learning_signals_user_idx").on(table.userId),
+    index("learning_signals_type_idx").on(table.signalType),
+    index("learning_signals_artifact_idx").on(table.artifactId),
+    index("learning_signals_publication_idx").on(table.publicationId),
+    index("learning_signals_story_idx").on(table.storyId),
+  ],
+);
+
+export const insertPerformanceSignalSchema = createInsertSchema(performanceSignals).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertLearningSignalSchema = createInsertSchema(learningSignals).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type PerformanceSignal = typeof performanceSignals.$inferSelect;
+export type InsertPerformanceSignal = z.infer<typeof insertPerformanceSignalSchema>;
+export type LearningSignal = typeof learningSignals.$inferSelect;
+export type InsertLearningSignal = z.infer<typeof insertLearningSignalSchema>;
+export type LearningSignalType = "edit" | "approval" | "publication" | "performance" | "derived";
+export type PerformanceAvailability = "observed" | "not_available";

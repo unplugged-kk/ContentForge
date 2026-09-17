@@ -112,6 +112,7 @@ export interface ContentApiDeps {
   /** Optional so existing test doubles that build `ContentApiDeps` by hand are unaffected. */
   style?: import("./styleService").StyleServiceDeps;
   enqueueStyleAnalysis?: (analysis: import("@shared/schema").StyleAnalysis) => Promise<boolean>;
+  learning?: import("./learning/record").LearningRecorder;
 }
 
 // ── serializers ───────────────────────────────────────────────────────────────
@@ -634,7 +635,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const id = parseId(req.params.id);
       if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
       try {
-        const artifact = await handler(id, { artifacts: deps.content });
+        const artifact = await handler(id, { artifacts: deps.content, learning: deps.learning });
         return res.json(serializeArtifact(artifact));
       } catch (error) {
         if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
@@ -676,7 +677,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const artifact = await createHumanEditRevision(
         id,
         body.payload,
-        { artifacts: deps.content },
+        { artifacts: deps.content, learning: deps.learning },
         { attributionReason: body.attributionReason ?? null },
       );
       return res.status(201).json(serializeArtifact(artifact));
@@ -1261,6 +1262,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
       generationDeps,
       chatDeps,
       styleServiceDeps,
+      learningRecorder,
       registerContentJobs,
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
@@ -1320,5 +1322,6 @@ export async function createDefaultContentRouter(): Promise<Router> {
       });
       return !result.deduplicated;
     },
+    learning: learningRecorder,
   });
 }

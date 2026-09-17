@@ -33,6 +33,7 @@ export interface PublicationDeps {
   leaseMs?: number;
   /** Identifies this worker for the lease. */
   owner?: string;
+  learning?: import("./learning/record").LearningRecorder;
 }
 
 /** A media reference could not be resolved to a publishable, pinned attachment. */
@@ -347,6 +348,18 @@ async function recordPublished(
     correlationId: publication.correlationId,
   });
   await deps.content.markOccurrenceStatus(publication.occurrenceId, "published");
+
+  if (deps.learning) {
+    const result = await deps.content.getResultByPublication(publication.id);
+    await deps.learning.recordPublication(
+      {
+        ...publication,
+        state: "published",
+        externalId: outcome.externalId ?? publication.externalId,
+      },
+      result ?? null,
+    );
+  }
 
   // A one-shot series is complete once its single occurrence publishes.
   const schedule = await deps.content.getSchedule(publication.scheduleId);

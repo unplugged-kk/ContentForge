@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 48, `expected 48 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 17, "all seventeen migrations recorded");
+      assert.equal(tables.length, 50, `expected 50 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 18, "all eighteen migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -114,6 +114,8 @@ describeDb("migration chain (db)", () => {
         "visual_asset_refs",
         "automation_policies",
         "automation_runs",
+        "learning_signals",
+        "performance_signals",
         "rss_sources",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
@@ -201,14 +203,16 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 48, `expected 48 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 17, "0003-0016 recorded after upgrade");
+      assert.equal(tables.length, 50, `expected 50 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 18, "0003-0017 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
       assert.ok(tables.includes("artifacts"), "0007 table created on the upgrade path");
       assert.ok(tables.includes("automation_policies"), "0016 table created on the upgrade path");
       assert.ok(tables.includes("automation_runs"), "0016 table created on the upgrade path");
+      assert.ok(tables.includes("learning_signals"), "0017 table created on the upgrade path");
+      assert.ok(tables.includes("performance_signals"), "0017 table created on the upgrade path");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

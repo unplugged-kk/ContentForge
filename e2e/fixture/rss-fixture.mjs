@@ -122,6 +122,7 @@ let modelDelayMs = 0;
 let xWriteMode = "immediate";
 let xPendingMarker = null;
 let xPendingSeq = 0;
+let xAnalyticsMode = "ok";
 /** writeActionId -> { status: "pending" | "success" | "failed", tweetId?, url?, message? } */
 const xWriteActions = new Map();
 /**
@@ -294,6 +295,40 @@ async function handlePost(req, res, url) {
       return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post", true));
     }
     return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post"));
+  }
+
+  // Arms the NEXT `POST /x/tweets` to return 202 + writeActionId instead of an
+  // immediate tweet id — simulates xQuick accepting a write asynchronously.
+  if (url.pathname === "/x/analytics") {
+    const body = await readBody(req);
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    if (xAnalyticsMode === "fail-transient") {
+      xAnalyticsMode = "ok";
+      return send(503, { message: "analytics upstream timeout" });
+    }
+    if (xAnalyticsMode === "fail-permanent") {
+      xAnalyticsMode = "ok";
+      return send(401, { message: "invalid credentials" });
+    }
+    return send(200, {
+      data: ids.map((id) => ({
+        id,
+        public_metrics: {
+          impression_count: 100,
+          like_count: 7,
+          retweet_count: 2,
+          reply_count: 1,
+          quote_count: 0,
+          bookmark_count: 3,
+        },
+      })),
+    });
+  }
+
+  if (url.pathname === "/control/x-analytics-mode") {
+    const body = await readBody(req);
+    xAnalyticsMode = body.mode === "fail-transient" || body.mode === "fail-permanent" ? body.mode : "ok";
+    return send(200, { ok: true, mode: xAnalyticsMode });
   }
 
   // Arms the NEXT `POST /x/tweets` to return 202 + writeActionId instead of an

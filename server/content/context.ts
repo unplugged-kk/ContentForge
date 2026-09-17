@@ -41,7 +41,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { contextVault, styleProfiles, userProfile } from "@shared/schema";
 
-export type ContextSourceType = "profile" | "reference" | "style" | "voice" | "template";
+export type ContextSourceType = "profile" | "reference" | "style" | "voice" | "template" | "learning";
 
 /** One durable, owner-scoped piece of context. Content is always DATA. */
 export interface ContextSource {
@@ -109,6 +109,11 @@ export interface ContextStorageReader {
       analysisId: number | null;
     }>
   >;
+  /**
+   * Phase 14: optional bounded learning counts. Omitted by test doubles that
+   * predate this source; assembly then behaves exactly as Phase 10/11.
+   */
+  listLearningSummary?(ownerId: number): Promise<{ text: string; provenance: string } | null>;
 }
 
 export function createDatabaseContextReader(
@@ -173,6 +178,10 @@ export function createDatabaseContextReader(
         .limit(limit * 2);
       return rows.filter((r) => r.confidence !== "insufficient").slice(0, limit);
     },
+    async listLearningSummary(ownerId) {
+      const { learningSummaryForContext } = await import("./learning/summary");
+      return learningSummaryForContext(db, ownerId);
+    },
   };
 }
 
@@ -209,8 +218,10 @@ function renderProfileSource(profile: NonNullable<Awaited<ReturnType<ContextStor
 
 /**
  * Resolve the current, owner-scoped context. Deterministic: fixed source
- * order (profile, then references, then style), fixed per-source and total
- * character budgets, no ranking/relevance scoring, no embeddings.
+ * order (profile, then references, then style, then learning summary),
+ * fixed per-source and total character budgets, no ranking/relevance
+ * scoring, no embeddings. Learning is counts-only DATA and never mutates
+ * profile/style/memory.
  */
 export async function assembleContext(
   ownerId: number | null,
@@ -258,6 +269,20 @@ export async function assembleContext(
       provenance: item.analysisId ? `style_profiles#${item.id}(analysis#${item.analysisId})` : `style_profiles#${item.id}`,
       metadata: { usageCount: item.usageCount ?? 0, confidence: item.confidence },
     });
+  }
+
+  if (typeof reader.listLearningSummary === "function") {
+    const learning = await reader.listLearningSummary(ownerId);
+    if (learning?.text) {
+      sources.push({
+        id: `learning:${ownerId}`,
+        type: "learning",
+        ownerId,
+        content: truncate(learning.text, MAX_CHARS_PER_SOURCE),
+        provenance: learning.provenance,
+        metadata: {},
+      });
+    }
   }
 
   // Deterministic total-budget truncation: sources are already in a fixed

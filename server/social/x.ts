@@ -635,6 +635,52 @@ export async function refreshXAnalytics(days = 30): Promise<void> {
  * Current public X API docs expose post/thread publishing via /2/tweets.
  * Keep article publishing gated until a stable public API contract is available.
  */
+/**
+ * Transport-only X public-metrics fetch for the Phase 14 channel metric seam.
+ * Does not write the legacy `analytics` table. Missing endpoint / config is
+ * reported so the caller can record `not_available` rather than fabricate zeros.
+ */
+export async function fetchXPublicMetrics(ids: string[]): Promise<
+  | { ok: true; rows: unknown[]; retrievedAt: Date }
+  | { ok: false; status: number; message: string; retrievedAt: Date }
+> {
+  const retrievedAt = new Date();
+  const tweetIds = ids.map((id) => id.trim()).filter(Boolean);
+  if (tweetIds.length === 0) {
+    return { ok: false, status: 400, message: "no external ids", retrievedAt };
+  }
+  const config = await getXQuickApiConfig();
+  const endpoint = getXQuickAnalyticsEndpoint();
+  if (!config || !endpoint) {
+    return { ok: false, status: 501, message: "x analytics endpoint not configured", retrievedAt };
+  }
+  try {
+    const res = await fetch(joinUrl(config.baseUrl, endpoint), {
+      method: "POST",
+      headers: buildXQuickHeaders(config.token),
+      body: JSON.stringify({ ids: tweetIds }),
+      signal: AbortSignal.timeout(
+        Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000),
+      ),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        message: `xQuick analytics returned HTTP ${res.status}`,
+        retrievedAt,
+      };
+    }
+    const data = (await res.json()) as { data?: unknown; posts?: unknown; tweets?: unknown };
+    const rows = (data.data ?? data.posts ?? data.tweets ?? []) as unknown[];
+    return { ok: true, rows: Array.isArray(rows) ? rows : [], retrievedAt };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = /timeout|aborted/i.test(message) ? 408 : 503;
+    return { ok: false, status, message, retrievedAt };
+  }
+}
+
 export async function getXArticlePublishCapability(): Promise<XArticlePublishCapability> {
   const status = await getXPostingConfigSummary();
   if (!status.canAttemptPost) {

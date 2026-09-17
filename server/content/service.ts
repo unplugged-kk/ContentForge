@@ -18,6 +18,10 @@ import { z } from "zod";
 import type { AutomationRun, GenerationJob } from "@shared/schema";
 import { DatabaseContentStorage } from "./storage";
 import { DatabaseAutomationStorage } from "./automationStorage";
+import { DatabaseLearningStorage } from "./learning/store";
+import { createLearningRecorder } from "./learning/record";
+import { refreshPublicationMetrics } from "./learning/refresh";
+import { hourWindow } from "./learning/identity";
 import {
   advanceAutomationRun,
   automationRunStepKey,
@@ -53,6 +57,9 @@ export const contentStorage = new DatabaseContentStorage(db);
 
 /** Durable automation policy/run persistence (Phase 13). */
 export const automationStorage = new DatabaseAutomationStorage(db);
+
+export const learningStorage = new DatabaseLearningStorage(db);
+export const learningRecorder = createLearningRecorder(learningStorage, db);
 
 export const visualAssetStorage = createLocalAssetStorage();
 
@@ -118,6 +125,7 @@ export const generationDeps: GenerationDeps = {
 export const publicationDeps: PublicationDeps = {
   content: contentStorage,
   storage: visualAssetStorage,
+  learning: learningRecorder,
 };
 
 /** Chat-to-post: conversational input becomes a normal Story → Opportunity → job. */
@@ -483,7 +491,61 @@ export const automationDeps: AutomationDeps = {
     return !result.deduplicated;
   },
   enqueueAutomationRun: enqueueAutomationRunJob,
+  learning: learningRecorder,
 };
+
+export const ANALYTICS_REFRESH_JOB_TYPE = "analytics.refresh";
+export const analyticsRefreshPayloadSchema = z.object({
+  publicationId: z.number().int().positive(),
+});
+export type AnalyticsRefreshPayload = z.infer<typeof analyticsRefreshPayloadSchema>;
+
+export function registerAnalyticsRefreshJob(
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<AnalyticsRefreshPayload> | undefined {
+  if (hasJob(ANALYTICS_REFRESH_JOB_TYPE)) return undefined;
+  const definition: JobDefinition<AnalyticsRefreshPayload> = {
+    jobType: ANALYTICS_REFRESH_JOB_TYPE,
+    description: "Fetch and persist normalized performance metrics for one Publication",
+    payloadSchema: analyticsRefreshPayloadSchema,
+    queue: {
+      retryLimit: 3,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 5 * 60,
+      singletonSeconds: 60 * 60,
+      ...queueOverrides,
+    },
+    handler: async (payload, ctx) => {
+      const result = await refreshPublicationMetrics(payload.publicationId, {
+        content: contentStorage,
+        learning: learningStorage,
+        database: db,
+      });
+      ctx.logger.info(
+        { publicationId: result.publicationId, status: result.status, created: result.created, reused: result.reused },
+        "analytics refresh complete",
+      );
+    },
+  };
+  registerJob(definition);
+  return definition;
+}
+
+export async function enqueueAnalyticsRefreshJob(
+  publicationId: number,
+  correlationId: string,
+): Promise<boolean> {
+  const { getJobRuntime } = await import("../jobs/bootstrap");
+  const window = hourWindow(new Date());
+  const result = await getJobRuntime().enqueue({
+    jobType: ANALYTICS_REFRESH_JOB_TYPE,
+    payload: { publicationId },
+    correlationId,
+    idempotencyKey: `analytics:${publicationId}:${window.window}`,
+  });
+  return !result.deduplicated;
+}
 
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
@@ -495,6 +557,7 @@ export function registerContentJobs(): void {
   registerPublicationRunJob();
   registerVisualRunJob();
   registerAutomationRunJob();
+  registerAnalyticsRefreshJob();
 }
 
 // ── Durable scheduler tick ────────────────────────────────────────────────────
@@ -563,6 +626,14 @@ export function startContentScheduler(options: { cronExpression?: string } = {})
       // unfinished run. Same shape as the occurrence dispatch above — the tick
       // materializes and enqueues; the worker advances. No second cron.
       const automation = await dispatchAutomationDueRuns(now, automationDeps);
+      const dueAnalytics = await learningStorage.listRecentPublishedPublicationIds(20);
+      let analyticsEnqueued = 0;
+      for (const publicationId of dueAnalytics.slice(0, 10)) {
+        const publication = await contentStorage.getPublication(publicationId);
+        if (!publication) continue;
+        const enqueued = await enqueueAnalyticsRefreshJob(publication.id, publication.correlationId);
+        if (enqueued) analyticsEnqueued += 1;
+      }
       if (
         result.materialized > 0 ||
         result.enqueued > 0 ||
@@ -570,7 +641,8 @@ export function startContentScheduler(options: { cronExpression?: string } = {})
         unknown.resolved > 0 ||
         unknown.requeued > 0 ||
         automation.scheduled.created > 0 ||
-        automation.enqueued > 0
+        automation.enqueued > 0 ||
+        analyticsEnqueued > 0
       ) {
         console.log(
           `[content-scheduler] materialized=${result.materialized} enqueued=${result.enqueued} stale=${stale} ` +

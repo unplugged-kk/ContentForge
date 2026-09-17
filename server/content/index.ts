@@ -222,7 +222,11 @@ export {
   createAutomationRunHandler,
   enqueueAutomationRunJob,
   registerAutomationRunJob,
+  registerAnalyticsRefreshJob,
+  enqueueAnalyticsRefreshJob,
   automationRunPayloadSchema,
+  ANALYTICS_REFRESH_JOB_TYPE,
+  analyticsRefreshPayloadSchema,
   AUTOMATION_RUN_JOB_TYPE,
   type AutomationRunPayload,
   createGenerationRunHandler,
@@ -377,6 +381,17 @@ export {
   createAutomationRouter,
   createDefaultAutomationRouter,
 } from "./automationRoutes";
+
+export {
+  createLearningRouter,
+  DatabaseLearningStorage,
+  createLearningRecorder,
+  deriveEditMetrics,
+  deriveApprovalDecision,
+  normalizeProviderMetrics,
+} from "./learning";
+
+export { createDefaultLearningRouter } from "./learning/http";
 
 // ── Phase 1.5 additions ───────────────────────────────────────────────────────
 export { createHumanEditRevision, getArtifactHistory } from "./artifact";

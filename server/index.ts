@@ -205,6 +205,9 @@ app.use((req, res, next) => {
   const { createDefaultAutomationRouter } = await import("./content/automationRoutes");
   app.use("/api/automation", await createDefaultAutomationRouter());
 
+  const { createDefaultLearningRouter } = await import("./content/learning/http");
+  app.use("/api/learning", await createDefaultLearningRouter());
+
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 

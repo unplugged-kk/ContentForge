@@ -156,6 +156,105 @@ Three layers, all green:
 | Fresh DB migrate | bootstraps to 46 tables / 13 migrations from zero |
 | Existing DB migrate | upgrades a 0000–0002 database to the current schema |
 
+## Phase 14 — analytics + P-8 learning-signal foundation (done)
+
+**The problem this closes**: the pipeline could create, edit, approve, schedule
+and publish Artifacts, but nothing durable observed *what happened afterwards*
+as a learning corpus. P-8 (`Artifact → edit/approval → Publication → Result →
+Performance Signal → Learning Signal`) was unspecified. This phase records
+those observations. It is **not** a self-learning system.
+
+```
+Artifact / lifecycle event / Result
+        │
+        ▼
+Signal (typed: edit | approval | publication | performance | derived)
+        │
+        ▼
+LearningSignalStore   (performance_signals + learning_signals)
+        │
+        └── optional bounded counts → ContextAssembly (DATA only, snapshot-frozen)
+```
+
+**Audit first.** Legacy `analytics`, `viral_scores`, `getAnalyticsSummary`,
+`syncPostAnalyticsFromX`, `/api/analytics/*` and the analytics UI remain a
+**closed posts-table island**. They were not wired into Story → Artifact →
+Publication. Phase 14 does not generalize them. The canonical outcome remains
+`Result`; new tables snapshot metrics and learning signals on top of it.
+
+**Signal model**
+
+| Type | When | Schema |
+|---|---|---|
+| edit | `createHumanEditRevision` | `edit.v1` — length/added/removed, hook/CTA/formatting flags, before-approval/publication. No full text copy. |
+| approval | approve / reject | `approval.v1` — rejected / approved_without_edit / edited_then_approved / approved_after_multiple_revisions. Rejection is a user decision, not "bad content". |
+| publication | successful `recordPublished` | `publication.v1` — exact revision, channel, Publication id, external id, status. |
+| performance | adapter fetch or operator ingest | `performance.v1` — one row per metric per `(publication, metric, observedAt, provider, normalizationVersion)`. |
+| derived | from the above | `learning.v1` — `edit_required`, `approval_clean`, `publication_success`, `performance_observed`. Evidence, not a quality score. |
+
+**Performance model.** Canonical metrics: impressions, likes, comments, shares,
+clicks, saves, replies, followers_gained, engagement_rate. Missing data is
+`availability=not_available` with `value=NULL` — never zero. Snapshots at T1/T2
+coexist. X maps `public_metrics` through `ChannelAdapter.fetchMetrics`; LinkedIn
+returns `not_available` for every metric (no analytics API). Transient failures
+(429/5xx/timeout) retry via pg-boss `analytics.refresh`; permanent failures
+(401/404/invalid) do not write fabricated metrics.
+
+**Idempotency.** `performance_signals.identity_key` UNIQUE =
+`publicationId + metric + observedAt + provider + normalizationVersion`.
+Repeated polling of the same logical measurement is a no-op. Schema v1 and v2
+can coexist for the same metric at the same timestamp.
+
+**Lineage.** Every learning row stores Artifact, prior revision, Publication,
+Result, GenerationJob, GenerationPolicy, Opportunity, Story, AutomationRun
+when those exist. `GET /api/learning/signals/:id` re-walks the same chain.
+
+**Analytics.** Descriptive read model only (`GET /api/learning/summary`):
+published count, success/approval rates, edits-before-approval, by channel /
+format / Story, signal counts. No best-time, no ranking, no causality.
+
+**Context.** Optional bounded counts enter ContextAssembly last, labeled DATA.
+A queued GenerationJob's `policySnapshot` is frozen — later signals cannot
+change it (proven in `learning.dbtest.ts`). Live analytics never mutate
+GenerationPolicy, `user_profile`, style, `memoryJson`, or `brandingJson`.
+
+**Automation.** Phase 13 is unchanged. Trusted approval and `publication.run`
+use the same recorder, so automation-created content joins the same corpus.
+`automation_run_id` is lineage, not a separate signal type.
+
+**Ownership.** `*ForOwner` SQL filters. Foreign ids 404.
+
+**HTTP (no UI):** `/api/learning/signals` (optional `publicationId` /
+`artifactId` / `signalType`, owner-scoped SQL filters), `/signals/:id`,
+`/publications/:id/performance`, `POST .../refresh`, `POST .../observations`,
+`GET /summary`. Refresh is a pg-boss job on the existing scheduler tick
+(bounded, hourly identity), not a second scheduler.
+
+**Verification:** unit +12 (`learning.test.ts`); real Postgres +11
+(`learning.dbtest.ts`); live HTTP Paths A–G including SIGKILL mid-refresh
+(116/116 on the post-fix run); visual E2E 14/14; migration
+`0017_learning_signals.sql` (two tables). Fresh migrate: 50 tables /
+18 migrations.
+
+A first live-HTTP run failed Path A because `GET /api/learning/signals`
+defaulted to the 50 newest rows and the golden-path Publication was older
+than later-suite signals. That was a Phase 14 list-window bug, not host
+noise: owner-scoped `publicationId` / `artifactId` / `signalType` query
+filters were added and Path A now queries by `publicationId`. The same run
+also showed two Phase 10 generation checks (`rate-limited after retries`
+then a cascade `opportunityId: Required`). Those two did **not** reproduce
+on the subsequent full live run (116/116) and match prior rate-limit
+cascade documentation; they are recorded here as environmental timing
+noise, not as weakened assertions.
+
+**Status labels**:
+- Durable edit / approval / publication / performance / derived learning signals: **IMPLEMENTED**.
+- Timestamped, versioned metric snapshots with idempotent identity: **IMPLEMENTED**.
+- Channel metric seam on ChannelAdapter (X mapped, LinkedIn not_available): **IMPLEMENTED**.
+- Descriptive analytics summaries: **IMPLEMENTED**.
+- Optional frozen learning counts in ContextAssembly: **IMPLEMENTED**.
+- Automatic style mutation, ranking, best-time, topic recommendation, embeddings, UI, Chrome: **DEFERRED**.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product
