@@ -16,13 +16,38 @@ summary kept in the review PR.
 | `npm run test:unit` | **376 passed / 0 failed** (86 suites) |
 | `npm test` | **376 passed** |
 | `npm run test:db` (real PostgreSQL) | **161 passed / 0 failed / 0 skipped** (22 suites) |
-| `npm run test:e2e:live` (real running app) | **all 12 new Phase 13 checks pass** (Paths A–E), green in THREE consecutive full runs. A shifting set of pre-existing, unrelated infra timeouts fail intermittently on a *different* check each run — run 2: Phase 6 LinkedIn reconciliation + Phase 10 post-restart context; run 3: Phase 6 only; run 4: Phase 6 + the Phase B restart/recovery check. Measured **host freezes of 951 s / 915 s (run 2) and 102 s (run 3)** inside the waiting windows, and the LinkedIn publication is confirmed `published` with a `published` Result in PostgreSQL — the code was correct, the 90 s wait was not. Phase 13's own checks were green on every run; Phase 6 LinkedIn reconciliation is named as a known flake in the Phase 12 notes |
+| `npm run test:e2e:live` (real running app) | **109 passed / 0 failed** — the FULL suite green in a single run, including all 12 new Phase 13 checks (Paths A–E). Earlier runs in the same session showed the known pre-existing host-timing flakes (Phase 6 LinkedIn reconciliation, Phase 10 post-restart context, Phase B restart recovery) failing on a *different* check each time, with measured **host freezes of 951 s / 915 s / 102 s** inside the waiting windows — those runs are what identified the freezes; the final clean run confirms they were environmental, not regressions. Phase 13's own checks were green on every run |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed**, unchanged regression |
+| `npm run dev` (tsx/ESM dev runtime — what `.replit` runs) | **boots and serves** (0 errors): migrations apply, job runtime + content scheduler start, real HTTP API responds. See "Dev runtime" below |
+| `npm run build && node dist/index.cjs` (production CJS bundle) | **boots and serves**, unchanged; build emits **0 new warnings** |
 | Fresh DB migration | **17 migrations / 48 tables** from zero (+1: additive `automation_policies` + `automation_runs` + nullable `stories.automation_run_id` + unique index) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
 Baseline before this phase: 338 unit / 147 DB / 14-of-14 visual E2E.
+
+---
+
+## Dev runtime (fixed this session)
+
+`npm run dev` — the command `.replit`'s `run = "npm run dev"` and the "Project"
+workflow execute, and what `make dev` calls — failed immediately on this tree
+with `ReferenceError: __dirname is not defined`. The package is
+`"type": "module"`, so tsx runs `server/index.ts` as ESM, where the CJS
+`__dirname` global does not exist. **Production was never affected** (esbuild
+bundles to CJS, where `__dirname` is defined), which is why the built bundle and
+the live E2E suite were always green while the dev server was not — the defect
+was first recorded as a finding in the Phase B notes and is now resolved there.
+
+`server/index.ts` and `server/static.ts` resolve their directory with
+`typeof __dirname !== "undefined" ? __dirname : process.cwd()` (safe under ESM:
+`typeof` on an undeclared identifier yields `"undefined"` rather than throwing),
+and the migrations folder is searched across the bundle-adjacent, `../` and
+working-directory layouts rather than assuming one. Deliberately **not**
+`import.meta.url`: esbuild folds it to nothing in the CJS output format and
+emits a build warning, trading a dev-time crash for permanent build noise.
+
+Both runtimes are reverified after the change (see the table above).
 
 ---
 
