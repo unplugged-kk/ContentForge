@@ -1630,6 +1630,17 @@ non-gating external smoke against `hnrss.org` completed with 20 real sources.
    undefined in ESM. Pre-existing and unrelated. The supported runtime (production,
    Playwright E2E, and this harness) is the built CJS bundle:
    `npm run build && node dist/index.cjs`.
+   → **FIXED (Phase 13 follow-up).** `server/index.ts` and `server/static.ts` now
+   resolve their directory with
+   `typeof __dirname !== "undefined" ? __dirname : process.cwd()` (and the
+   migrations folder is searched across the bundle-adjacent, `../` and
+   working-directory layouts). `npm run dev` — which is what `.replit`'s
+   `run = "npm run dev"` and the `Project` workflow actually execute — now boots
+   under tsx/ESM: migrations apply, the job runtime starts, and the HTTP API
+   (including `/api/automation/*`) serves. The production CJS bundle is
+   unchanged and reverified (`node dist/index.cjs` boots and serves), and the
+   build emits no new warnings. Deliberately not `import.meta.url`, which esbuild
+   folds to nothing with a build warning in the CJS output format.
 2. **Deterministic fixtures need port 80.** The SSRF syntax gate allows only
    `http(s)` on 80/443 and rejects URL *IP literals* in non-routable space, so a
    local fixture must be fetched as a hostname on port 80. Docker publishes it

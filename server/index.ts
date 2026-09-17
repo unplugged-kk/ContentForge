@@ -16,6 +16,22 @@ import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
 import { sessionUser } from "./middleware/userContext";
 
+/**
+ * Directory the migrations folder is resolved against, under BOTH supported
+ * runtimes:
+ *
+ *  • production runs the esbuild CJS bundle (`dist/index.cjs`), where `__dirname`
+ *    is `dist/` and the build copies `migrations/` beside it;
+ *  • `npm run dev` runs this file through tsx as ESM (the package is
+ *    `"type": "module"`), where `__dirname` does not exist at all — `typeof` on
+ *    an undeclared identifier is safe and simply yields `"undefined"` — and the
+ *    repo root is the working directory npm runs from.
+ *
+ * Deliberately not `import.meta.url`: that is unavailable in the CJS production
+ * bundle (esbuild would emit a build warning and fold it to nothing).
+ */
+const appDir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+
 const app = express();
 const httpServer = createServer(app);
 
@@ -132,9 +148,19 @@ app.use((req, res, next) => {
   // Run drizzle migrations automatically on every startup.
   // Migration files live in ./migrations/ (committed to repo, copied to dist/migrations/ by build).
   // drizzle tracks applied migrations in __drizzle_migrations — only new ones run.
-  const migrationsFolder = path.join(__dirname, "migrations");
-  if (!existsSync(migrationsFolder)) {
-    throw new Error(`Missing migrations folder at startup: ${migrationsFolder}`);
+  //
+  // Resolve the folder across both layouts: the production bundle sits next to
+  // `dist/migrations`, while under tsx (dev) the repo root is the working
+  // directory, so the committed `./migrations` is found there.
+  const migrationsFolder = [
+    path.join(appDir, "migrations"),
+    path.resolve(appDir, "..", "migrations"),
+    path.resolve(process.cwd(), "migrations"),
+  ].find((candidate) => existsSync(candidate));
+  if (!migrationsFolder) {
+    throw new Error(
+      `Missing migrations folder at startup (looked next to the bundle, in ../, and in ${process.cwd()})`,
+    );
   }
   await migrate(db, { migrationsFolder });
   log("database migrations applied", "db");
