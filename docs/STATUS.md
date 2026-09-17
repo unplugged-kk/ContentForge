@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-17 (Phase 16) · Branch reviewed: `replit` @ `2dc29c2` (implementation landed)
+Last updated: 2026-09-17 (Phase 17) · Branch reviewed: `replit` @ `cb1b669` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,22 +13,58 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **403 passed / 0 failed** (95 suites) |
-| `npm test` | **403 passed** |
-| `npm run test:db` (real PostgreSQL) | **189 passed / 0 failed / 0 skipped** (24 suites) |
-| `npm run test:e2e:live` (real running app) | **125 passed / 0 failed** (125 checks). Phase 16 Paths A–I all green, including SIGKILL with no duplicate Publication. Prior Phase 10 rate-limit flakes did **not** reproduce this run; assertions were not weakened |
+| `npm run test:unit` | **415 passed / 0 failed** (99 suites) |
+| `npm test` | **415 passed** |
+| `npm run test:db` (real PostgreSQL) | **199 passed / 0 failed / 0 skipped** (25 suites) |
+| `npm run test:e2e:live` (real running app) | **134 passed / 0 failed** (134 checks). Phase 17 Paths A–I green (Path G SIGKILL no duplicate). Path J/K credential-blocked, not simulated. Prior suites including Phase 16 remained green |
 | `npm run test:e2e:visual` (real running app) | **19 passed / 0 failed** |
 | `npm run build` (production CJS bundle) | **succeeds**; live E2E boots `dist/index.cjs` |
-| Fresh DB migration | **20 migrations / 50 tables** from zero (`0019_distribution_fanout.sql` additive `schedules.intent_key`) |
+| Fresh DB migration | **21 migrations / 50 tables** from zero (`0020_threads_connected_accounts.sql` additive unique `(user_id, platform)`) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema |
-| Real provider network smoke | **BLOCKED** — `AI_API_KEY` present; configured OpenRouter model `openai/dall-e-3` returned `404 No model found`. Contract tests against a local HTTP double: pass |
+| Real Threads network verification | **BLOCKED — credential unavailable** |
+| Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 389 unit / 179 DB / 114+2 live E2E / 19 visual E2E / 19 migrations / 50 tables.
+Baseline before this phase: 403 unit / 189 DB / 125 live E2E / 19 visual E2E / 20 migrations / 50 tables.
 
 ---
 
-## Multi-channel distribution generalization (new in this phase — Phase 16)
+## Threads Channel Integration (new in this phase — Phase 17)
+
+**PARTIALLY IMPLEMENTED — provider adapter and contract complete; live network verification blocked by missing credential.**
+
+```
+Artifact revision
+        ├─ Publication(X)
+        ├─ Publication(LinkedIn)
+        └─ Publication(threads) → Schedule → Occurrence → Threads ChannelAdapter → Result
+                                              ↓
+                                    PerformanceSignal → LearningSignal
+```
+
+One registered `ChannelAdapter` (`createThreadsChannelAdapter`). Transport:
+`server/social/threads.ts` (Graph `v1.0` on `graph.threads.net`). Capabilities:
+text only (`x_post`, `linkedin_post`). No `threads_post` format. No carousel,
+video, replies, or discovery.
+
+Publish: create TEXT container → `threads_publish` → media id as `externalId`.
+Provider idempotency: **none** (ContentForge Publication identity + lease).
+Ambiguous outcomes stay `unknown` with `{text, attemptedAt, creationId?}`.
+Listing miss ≠ not published. Container `ERROR`/`EXPIRED` can prove absence.
+
+Metrics: `views,likes,replies,reposts,quotes,shares`. views→impressions,
+likes, replies, shares (else reposts). quotes in `provenance.unmapped`.
+
+Auth: `connected_accounts` + `getConnectedAccountForOwner`. Scopes:
+`threads_basic`, `threads_content_publish`, `threads_manage_insights`.
+No UI. `POST /api/artifacts/:id/publications` `{ channel: "threads" }`.
+
+**Not in this phase:** Instagram, YouTube, TikTok, Bluesky, Threads media,
+account UI, Chrome.
+
+---
+
+## Multi-channel distribution generalization (previous — Phase 16)
 
 **IMPLEMENTED — one Artifact revision → N independent Publications. X and LinkedIn only. No second publication system.**
 
