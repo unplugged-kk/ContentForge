@@ -99,7 +99,7 @@ describe("openai image provider — real HTTP call against a local double", () =
   it("declares image-only capabilities and the configured model, synchronously", async () => {
     const { createOpenAiImageProvider } = await import("./openaiImage");
     const provider = createOpenAiImageProvider({ providerId: "openai-image-test", models: ["gpt-image-1"] });
-    assert.deepEqual(provider.capabilities, ["generate_image"]);
+    assert.deepEqual(provider.capabilities, ["generate_image", "generate_image_variations", "refine_image"]);
     assert.deepEqual(provider.modalities, ["image"]);
     assert.deepEqual(provider.models, ["gpt-image-1"]);
     assert.equal(provider.synchronous, true);

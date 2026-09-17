@@ -32,6 +32,7 @@ import {
 import { DatabaseContentStorage } from "./storage";
 import { DatabaseStoryStorage } from "../story/storage";
 import { createOpportunityFromStory } from "./opportunity";
+import { createGenerationJob } from "./generation";
 import { approveArtifact, createArtifact, submitArtifactForReview } from "./artifact";
 import { createSchedule, dispatchDueOccurrences } from "./scheduling";
 import { runPublication } from "./publication";
@@ -124,6 +125,10 @@ describeDb("visual intelligence (db)", () => {
     }
     if (artIds.length) await db.delete(artifacts).where(inArray(artifacts.id, artIds));
     if (genIds.length) {
+      await db
+        .update(visualGenerations)
+        .set({ sourceVisualAssetId: null })
+        .where(inArray(visualGenerations.id, genIds));
       const assetRows = await db
         .select({ id: visualAssets.id })
         .from(visualAssets)
@@ -150,7 +155,7 @@ describeDb("visual intelligence (db)", () => {
     await pool.end().catch(() => {});
   });
 
-  async function seedOpportunity(suffix: string) {
+  async function seedOpportunity(suffix: string, format = "x_post") {
     const [story] = await db
       .insert(stories)
       .values({
@@ -699,5 +704,252 @@ describeDb("visual intelligence (db)", () => {
 
       registerVisualProvider(createFixtureVisualProvider({ providerId: "local-fixture" }));
     });
+  });
+
+  it("one generation produces ordered variations and duplicate delivery reuses them", async () => {
+    const { opportunity } = await seedOpportunity("variations");
+    const deps = visualDeps();
+    const first = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        kind: "image",
+        variationCount: 3,
+        intent: { subject: `${RUN} three variations` },
+      },
+      deps,
+    );
+    const run = await runVisualGeneration(first.generation.id, deps);
+    assert.equal(run.status, "ready");
+    assert.equal(run.visualAssetIds?.length, 3);
+    const assets = await content().listVisualAssetsForGeneration(first.generation.id);
+    assert.deepEqual(assets.map((a) => a.position), [0, 1, 2]);
+    const again = await runVisualGeneration(first.generation.id, deps);
+    assert.equal(again.reused, true);
+    const after = await content().listVisualAssetsForGeneration(first.generation.id);
+    assert.equal(after.length, 3);
+    const duplicate = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        kind: "image",
+        variationCount: 3,
+        intent: { subject: `${RUN} three variations` },
+      },
+      deps,
+    );
+    assert.equal(duplicate.created, false);
+    assert.equal(duplicate.generation.id, first.generation.id);
+  });
+
+  it("explicit regenerate creates a new generation lineage", async () => {
+    const { opportunity } = await seedOpportunity("regen-lineage");
+    const deps = visualDeps();
+    const body = {
+      opportunityId: opportunity.id,
+      kind: "image" as const,
+      intent: { subject: `${RUN} regen lineage` },
+    };
+    const first = await createVisualGeneration(1, body, deps);
+    await runVisualGeneration(first.generation.id, deps);
+    const second = await createVisualGeneration(1, { ...body, regenerate: true, regenerationNonce: "n-2" }, deps);
+    assert.notEqual(second.generation.id, first.generation.id);
+    await runVisualGeneration(second.generation.id, deps);
+    const a = await content().listVisualAssetsForGeneration(first.generation.id);
+    const b = await content().listVisualAssetsForGeneration(second.generation.id);
+    assert.equal(a.length, 1);
+    assert.equal(b.length, 1);
+    assert.notEqual(a[0]!.id, b[0]!.id);
+  });
+
+  it("refinement creates a new asset without mutating the source", async () => {
+    const { opportunity } = await seedOpportunity("refine");
+    const deps = visualDeps();
+    const sourceGen = await createVisualGeneration(
+      1,
+      { opportunityId: opportunity.id, kind: "image", intent: { subject: `${RUN} refine source` } },
+      deps,
+    );
+    const produced = await runVisualGeneration(sourceGen.generation.id, deps);
+    const source = await content().getVisualAsset(produced.visualAssetId!);
+    const refined = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        kind: "image",
+        capability: "refine_image",
+        sourceVisualAssetId: source!.id,
+        instruction: "Make the contrast higher",
+        intent: { subject: `${RUN} refined` },
+        regenerate: true,
+      },
+      deps,
+    );
+    const run = await runVisualGeneration(refined.generation.id, deps);
+    assert.equal(run.status, "ready");
+    const afterSource = await content().getVisualAsset(source!.id);
+    assert.equal(afterSource!.storageKey, source!.storageKey);
+    assert.equal(afterSource!.id, source!.id);
+    assert.notEqual(run.visualAssetId, source!.id);
+    assert.equal(refined.generation.sourceVisualAssetId, source!.id);
+  });
+
+  it("carousel generation is ordered; incomplete carousels are not ready", async () => {
+    resetVisualProviders();
+    registerVisualProvider(createFixtureVisualProvider({ failAtIndex: 1 }));
+    const { opportunity, story } = await seedOpportunity("carousel-gen");
+    const deps = visualDeps();
+    const { generation } = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        kind: "carousel",
+        slideCount: 3,
+        intent: { subject: `${RUN} carousel gen` },
+      },
+      deps,
+    );
+    const run = await runVisualGeneration(generation.id, deps);
+    assert.equal(run.status, "partial");
+    assert.ok((run.visualAssetIds?.length ?? 0) >= 1);
+    assert.ok((run.visualAssetIds?.length ?? 0) < 3);
+    const readyAssets = (await content().listVisualAssetsForGeneration(generation.id)).filter((a) => a.status === "ready");
+    assert.ok(readyAssets.length >= 1, "successful sibling assets are kept");
+    registerVisualProvider(createFixtureVisualProvider());
+    const complete = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        kind: "carousel",
+        slideCount: 3,
+        intent: { subject: `${RUN} carousel complete` },
+        regenerate: true,
+        regenerationNonce: "carousel-ok",
+      },
+      deps,
+    );
+    const done = await runVisualGeneration(complete.generation.id, deps);
+    assert.equal(done.status, "ready");
+    assert.equal(done.visualAssetIds?.length, 3);
+    const artifact = await createArtifact(
+      {
+        userId: 1,
+        generationJobId: null,
+        opportunityId: opportunity.id,
+        format: "carousel",
+        channel: "x",
+        payload: {
+          slides: (done.visualAssetIds ?? []).map((visualAssetId, i) => ({
+            visualAssetId,
+            caption: `slide ${i + 1}`,
+          })),
+        },
+        provenance: "generated",
+        attribution: [],
+        attributionReason: "fixture",
+      },
+      { artifacts: content() },
+    );
+    const refs = await content().listVisualAssetRefs(artifact.id);
+    assert.deepEqual(refs.map((r) => r.position), [0, 1, 2]);
+    assert.equal(story.researchJobId, null);
+  });
+
+  it("owner isolation: a foreign user cannot read another owner's generation", async () => {
+    const { opportunity } = await seedOpportunity("owner-iso");
+    const deps = visualDeps();
+    const { generation } = await createVisualGeneration(
+      1,
+      { opportunityId: opportunity.id, kind: "image", intent: { subject: `${RUN} owned` } },
+      deps,
+    );
+    const foreign = await content().getVisualGenerationForOwner(generation.id, 99);
+    assert.equal(foreign, undefined);
+    const owned = await content().getVisualGenerationForOwner(generation.id, 1);
+    assert.equal(owned?.id, generation.id);
+  });
+
+  it("Story → Opportunity → GenerationJob → visual generation does not re-research, and context is frozen", async () => {
+    const { opportunity, story } = await seedOpportunity("story-visual", "image");
+    const deps = visualDeps();
+    const { job } = await createGenerationJob(
+      opportunity.id,
+      {},
+      {
+        content: content(),
+        stories: { getStory: (id: number) => storyStore().getStory(id) },
+        evidence: { listEvidence: async () => [] },
+        model: {
+          provider: "fake-model",
+          async generate() {
+            return { payload: { visualAssetId: 1 }, model: "fake-1", provider: "fake-model", cost: null, usage: {} };
+          },
+        },
+        defaultModel: "fake-1",
+      },
+    );
+    let calls = 0;
+    const reader = {
+      async getUserProfile() {
+        calls += 1;
+        return {
+          niche: calls === 1 ? "data-ai" : "CHANGED",
+          audienceDescription: "engineers",
+          brandVoice: "direct",
+          writingStyleNotes: null,
+          contentGoals: "teach",
+          messagingPillars: ["mlops"],
+          targetPlatforms: null,
+          postingFrequency: null,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+      },
+      async listFavoriteVaultItems() {
+        return [];
+      },
+      async listFavoriteStyleProfiles() {
+        return [];
+      },
+    };
+    const created = await createVisualGeneration(
+      1,
+      {
+        opportunityId: opportunity.id,
+        generationJobId: job.id,
+        kind: "image",
+        intent: { subject: `${RUN} story visual` },
+      },
+      { ...deps, contextReader: reader as never },
+    );
+    const snapshot = created.generation.requestSnapshot as { context?: { renderedBlock?: string; contextHash?: string } };
+    assert.match(String(snapshot.context?.renderedBlock ?? ""), /data-ai/);
+    const hash = snapshot.context?.contextHash;
+    await reader.getUserProfile();
+    const again = await content().getVisualGeneration(created.generation.id);
+    const later = again!.requestSnapshot as { context?: { renderedBlock?: string; contextHash?: string } };
+    assert.equal(later.context?.contextHash, hash, "queued visual snapshot must not follow live context");
+    assert.match(String(later.context?.renderedBlock ?? ""), /data-ai/);
+    assert.equal(created.generation.generationJobId, job.id);
+    assert.equal(story.researchJobId, null);
+  });
+
+  it("asset rows store storage keys, never image bytes", async () => {
+    const cols = await pool.query<{ column_name: string }>(
+      `select column_name from information_schema.columns where table_schema='public' and table_name='visual_assets'`,
+    );
+    const names = cols.rows.map((r) => r.column_name);
+    assert.equal(names.includes("bytes"), false);
+    assert.equal(names.includes("data"), false);
+    const { opportunity } = await seedOpportunity("no-bytes");
+    const deps = visualDeps();
+    const { generation } = await createVisualGeneration(
+      1,
+      { opportunityId: opportunity.id, kind: "image", intent: { subject: `${RUN} no bytes` } },
+      deps,
+    );
+    await runVisualGeneration(generation.id, deps);
+    const [row] = await db.select().from(visualAssets).where(eq(visualAssets.visualGenerationId, generation.id));
+    assert.match(row.storageKey, /^local:[0-9a-f]+$/);
+    assert.equal(typeof (row as { bytes?: unknown }).bytes, "undefined");
   });
 });

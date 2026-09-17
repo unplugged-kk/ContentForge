@@ -33,6 +33,7 @@ export interface FormatProfile {
      * Artifact is blocked until the visual exists).
      */
     visual?: "none" | "optional" | "required";
+    visualSpecId?: string;
   };
 }
 
@@ -71,7 +72,7 @@ const PROFILES: readonly FormatProfile[] = [
       "A single supporting image for the post. It must reinforce the Artifact's thesis, " +
       "stay readable at small sizes, and carry no misleading claims (no invented charts " +
       "or fake data viz). Prefer high contrast and one focal subject.",
-    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required" },
+    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required", visualSpecId: "x_image" },
   },
   {
     format: "carousel",
@@ -80,7 +81,7 @@ const PROFILES: readonly FormatProfile[] = [
       "An ordered carousel of 2–10 slides telling one argument. Slide 1 is the hook. " +
       "Each slide carries one idea with minimal text; the last slide lands the takeaway. " +
       "Every slide keeps its own asset reference — never collapse slides into one image.",
-    constraints: { minUnits: 2, maxUnits: 10, sequential: true, hookFirst: true, visual: "required" },
+    constraints: { minUnits: 2, maxUnits: 10, sequential: true, hookFirst: true, visual: "required", visualSpecId: "generic_square" },
   },
   {
     format: "thumbnail",
@@ -88,7 +89,7 @@ const PROFILES: readonly FormatProfile[] = [
     guidance:
       "A single 16:9 thumbnail that reads at small sizes: one focal subject, large " +
       "legible title text if any, no fine detail that collapses at 120px wide.",
-    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required" },
+    constraints: { maxCharacters: 280, maxUnits: 1, visual: "required", visualSpecId: "thumbnail" },
   },
 ];
 

@@ -1211,7 +1211,7 @@ export const visualGenerations = pgTable(
     requestSnapshot: jsonb("request_snapshot").$type<Record<string, unknown>>().notNull().default({}),
     /** Authoritative idempotency arbiter (Ticket 06 §7 pattern). */
     idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
-    /** requested | generating | ready | failed */
+    /** requested | generating | ready | partial | failed */
     status: varchar("status", { length: 20 }).notNull().default("requested"),
     attempt: integer("attempt").notNull().default(1),
     model: varchar("model", { length: 120 }),
@@ -1222,6 +1222,11 @@ export const visualGenerations = pgTable(
     generationJobId: integer("generation_job_id").references(() => generationJobs.id),
     opportunityId: integer("opportunity_id").references(() => opportunities.id),
     correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    /** Requested sibling count for this generation (1 = single image). */
+    variationCount: integer("variation_count").notNull().default(1),
+    /** Refinement parent — never mutated; a new generation always. */
+    sourceVisualAssetId: integer("source_visual_asset_id").references((): AnyPgColumn => visualAssets.id),
+    specId: varchar("spec_id", { length: 60 }),
     startedAt: timestamp("started_at"),
     finishedAt: timestamp("finished_at"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -1262,6 +1267,8 @@ export const visualAssets = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     supersedesId: integer("supersedes_id").references((): AnyPgColumn => visualAssets.id),
     provenance: varchar("provenance", { length: 20 }).notNull().default("generated"),
+    /** 0-based order within a VisualGeneration (variations / carousel slides). */
+    position: integer("position").notNull().default(0),
     /** requested | generating | ready | failed | archived */
     status: varchar("status", { length: 20 }).notNull().default("ready"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -1270,6 +1277,9 @@ export const visualAssets = pgTable(
     index("visual_assets_generation_idx").on(table.visualGenerationId),
     index("visual_assets_status_idx").on(table.status),
     uniqueIndex("visual_assets_supersedes_uq").on(table.supersedesId),
+    uniqueIndex("visual_assets_generation_position_uq")
+      .on(table.visualGenerationId, table.position)
+      .where(sql`${table.supersedesId} IS NULL`),
   ],
 );
 
@@ -1294,6 +1304,7 @@ export const visualAssetRefs = pgTable(
   (table) => [
     index("visual_asset_refs_artifact_idx").on(table.artifactId),
     uniqueIndex("visual_asset_refs_artifact_asset_uq").on(table.artifactId, table.visualAssetId),
+    uniqueIndex("visual_asset_refs_artifact_position_uq").on(table.artifactId, table.position),
   ],
 );
 

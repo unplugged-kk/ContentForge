@@ -103,7 +103,12 @@ describe("visual provider registry", () => {
     const fixture = createFixtureVisualProvider();
     registerVisualProvider(fixture);
     assert.equal(hasVisualProvider("local-fixture"), true);
-    assert.deepEqual(getVisualProvider("local-fixture").capabilities, ["generate_image", "generate_slide"]);
+    assert.deepEqual(getVisualProvider("local-fixture").capabilities, [
+      "generate_image",
+      "generate_image_variations",
+      "refine_image",
+      "generate_slide",
+    ]);
     assert.throws(() => getVisualProvider("nope"), VisualProviderNotRegisteredError);
     resetVisualProviders();
   });
@@ -125,6 +130,8 @@ describe("visual provider registry", () => {
 describe("media modality (Phase 9 §5) — provider-agnostic capability model", () => {
   it("derives modality from capability without assuming image-only forever", () => {
     assert.equal(modalityOfCapability("generate_image"), "image");
+    assert.equal(modalityOfCapability("generate_image_variations"), "image");
+    assert.equal(modalityOfCapability("refine_image"), "image");
     assert.equal(modalityOfCapability("edit_image"), "image");
     assert.equal(modalityOfCapability("generate_slide"), "image");
     assert.equal(modalityOfCapability("generate_video"), "video");
@@ -175,5 +182,21 @@ describe("local asset storage (content-addressed seam)", () => {
     const { storageKey } = await storage.put(png(), "image/png");
     await storage.archive(storageKey);
     await assert.rejects(() => storage.get(storageKey), InvalidVisualInputError);
+  });
+});
+
+describe("visual specs and variation identity", () => {
+  it("resolves specs from id, format×channel, and aspect ratio without a channel allowlist", async () => {
+    const { resolveVisualSpec, getVisualSpec, validateVariationCount, variationIdentityKey, validateCarouselSlideCount } =
+      await import("./visualSpecs");
+    assert.equal(resolveVisualSpec({ specId: "x_image" }).usage, "x_image");
+    assert.equal(resolveVisualSpec({ format: "image", channel: "linkedin" }).id, "linkedin_image");
+    assert.equal(resolveVisualSpec({ aspectRatio: "16:9" }).id, "generic_landscape");
+    assert.ok(getVisualSpec("social_portrait"));
+    assert.equal(validateVariationCount(0), "variationCount must be an integer 1–8");
+    assert.equal(validateVariationCount(4), null);
+    assert.ok(validateCarouselSlideCount(1));
+    assert.equal(validateCarouselSlideCount(3), null);
+    assert.equal(variationIdentityKey(9, 2), "vg:9:pos:2");
   });
 });

@@ -255,6 +255,121 @@ noise, not as weakened assertions.
 - Optional frozen learning counts in ContextAssembly: **IMPLEMENTED**.
 - Automatic style mutation, ranking, best-time, topic recommendation, embeddings, UI, Chrome: **DEFERRED**.
 
+## Phase 15 — visual content production completion (done)
+
+**The problem this closes**: Phase 3/7/9 left a real visual pipeline (one
+`VisualProviderPort`, `VisualGeneration` → `VisualAsset` → optional Artifact,
+`AssetStoragePort`, fixture + `openai-image`) but a generation still produced
+one asset, carousel was N independent slide generations, refinement was only a
+revision helper, and image specs were not a registry. This phase generalizes
+those primitives. It does **not** add a second visual system, UI, video/audio,
+or new publishing channels.
+
+```
+Prompt / Creative Intent
+        │
+        ▼
+VisualGeneration (one durable intent, variationCount 1–8 / carousel 2–10)
+        │
+        ▼
+VisualProviderPort  (generate_image | generate_image_variations | refine_image | generate_slide)
+        │
+        ▼
+VisualAsset[N]  (position, unique (generation, position) WHERE supersedes_id IS NULL)
+        │
+        ▼
+optional Artifact  (payload names asset ids; visual_asset_refs is the audit trail)
+        │
+        ▼
+existing approval → Schedule → Publication → Result → Phase 14 signals
+```
+
+Where derived from researched content:
+
+```
+Story → Opportunity → GenerationPolicy → GenerationJob → VisualGeneration → VisualAsset → Artifact
+```
+
+No re-research. ContextAssembly is snapshotted at create (`requestSnapshot.context`
+with `sourceRefs`, `contextHash`, `renderedBlock`) and the worker never re-reads
+live profile/style/learning.
+
+**Variations.** One VisualGeneration may request `variationCount` 1–8. Each
+position is independently addressable. Duplicate delivery / retry of the same
+idempotency key reuses the same generation and fills missing positions only.
+Explicit `regenerate` (+ nonce) is a new generation. Partial provider failure
+marks status `partial`, keeps successful siblings, and retries only unoccupied
+positions. Retry is not “generate more variations.”
+
+**Refinement.** `POST /api/visual-assets/:id/refine` (or `capability=refine_image`
++ `sourceVisualAssetId`) creates a **new** VisualGeneration. Source bytes are
+loaded in the worker through `AssetStoragePort`; queue payloads carry IDs only.
+The source row is never mutated. Instructions are DATA, not worker execution.
+Ownership: foreign source ids 404 with the same shape as missing.
+
+**Image specifications.** `server/content/visualSpecs.ts` is the one canonical
+registry (`VisualSpec`: width/height/aspect/usage/mime/maxBytes). Format
+profiles may name a `visualSpecId`; resolution is id → format×channel → aspect
+ratio. This is not a channel allowlist and not a second capability registry.
+Generate-time specs are advisory for provider size presets; Artifact readiness
+validates MIME, positive in-range dimensions, owner, ready status, and
+carousel completeness (contiguous ≥2 slides). Exact pixel match is not
+required so the 1×1 fixture still publishes.
+
+**Carousel.** `kind=carousel` is one VisualGeneration producing N
+`carousel_slide` assets with durable `position`. The Artifact payload is
+ordered `slides[]` of asset ids (2–10). Incomplete generations stay `partial`
+and cannot be marked ready; successful slide assets remain. X/LinkedIn
+carousel *publishing* remains deferred (`formatChannelError` / adapter
+`supports("carousel") === false`).
+
+**Provider.** Still exactly one `VisualProviderPort`. `openai-image` declares
+`generate_image`, `generate_image_variations`, and `refine_image` on the
+existing `ai.images.generate` client (no second media client). Refinement is
+prompt-conditioned generation with in-process source metadata; native
+`images.edit` is not a second client and is not wired. Live network smoke
+against the configured OpenRouter model `openai/dall-e-3` returned **404 No
+model found** — credential present, model unavailable on that endpoint.
+Contract tests against a local HTTP double remain green.
+
+**Storage.** `AssetStoragePort` only. `visual_assets` has `storage_key`, never
+a bytes column. pg-boss payloads are `{ visualGenerationId }`.
+
+**Story integration.** An image Opportunity can carry `generationJobId` on the
+VisualGeneration. Proven in Postgres: human Story (`research_job_id` null) →
+Opportunity(format=image) → GenerationJob → VisualGeneration; no ResearchJob
+created. Frozen context proven: later profile mutation does not change the
+queued snapshot.
+
+**Publication / analytics.** Existing X image/thumbnail delivery is unchanged
+and live-green. Visual publications still emit Phase 14 publication/performance
+signals through the existing recorder — no `VisualLearningSignal`. Visual
+generation is not the default AutomationPolicy path.
+
+**HTTP (no UI):** `POST /api/visual-generations` (`variationCount` /
+`slideCount` / `specId` / `sourceVisualAssetId`), `GET` includes ordered
+`assets[]`, `POST /api/visual-assets/:id/refine`, existing
+`POST /api/opportunities/:id/artifacts` for image Artifacts.
+
+**Verification:** unit 389/389; real Postgres 179/179; visual live E2E 19/19
+(Paths A–E plus prior G/H/restart F); migration `0018_visual_production.sql`.
+Fresh migrate: 50 tables / 19 migrations. Live golden-path E2E this session:
+**114 passed / 2 failed (116 checks)**. The two failures are the same Phase 10
+generation `rate-limited after retries` then cascade `opportunityId: Required`
+recorded in Phase 14; they did not appear in visual E2E or unit/db suites.
+Assertions were not weakened.
+
+**Status labels**:
+- Multiple image variations with durable order and idempotency: **IMPLEMENTED**.
+- Explicit image refinement (new generation, immutable source): **IMPLEMENTED**.
+- Canonical visual spec registry: **IMPLEMENTED**.
+- Carousel as ordered multi-asset generation + Artifact: **IMPLEMENTED**.
+- Carousel / X carousel / LinkedIn carousel publishing: **DEFERRED**.
+- Story → visual via existing Opportunity/GenerationJob: **IMPLEMENTED** (API).
+- Brand-aware visual context via ContextAssembly stable profile fields: **PARTIALLY IMPLEMENTED** (voice/niche/audience/goals/pillars as DATA in the frozen snapshot; `memoryJson`/`brandingJson` excluded).
+- Real vendor network image generation: **PARTIALLY IMPLEMENTED** (provider code + double tests; live OpenRouter model 404).
+- Video/audio generation, visual autopilot, UI: **DEFERRED**.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

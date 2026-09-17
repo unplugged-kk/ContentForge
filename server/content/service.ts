@@ -275,6 +275,20 @@ export function createVisualRunHandler(deps: VisualRunDeps) {
       );
       return;
     }
+    if (result.status === "partial") {
+      ctx.logger.info(
+        {
+          visualGenerationId: result.visualGenerationId,
+          visualAssetIds: result.visualAssetIds,
+          failureClass: result.failureClass,
+        },
+        "visual generation partial",
+      );
+      if (result.failureClass === "transient" || result.failureClass === "rate_limited") {
+        throw JobFailure.transient(result.failureMessage ?? "partial visual generation");
+      }
+      return;
+    }
     const failureClass = result.failureClass ?? "transient";
     const message = result.failureMessage ?? "visual generation failed";
     if (failureClass === "rate_limited") throw JobFailure.rateLimited(message);

@@ -324,6 +324,95 @@ async function killApp(signal = "SIGKILL") {
     return "same generation, one asset";
   });
 
+  phase("Phase 15: variations, refinement, carousel, ownership");
+
+  let variationGenerationId = null;
+  await check("Path A: image generation with multiple variations", async () => {
+    const res = await http("POST", "/api/visual-generations", {
+      kind: "image",
+      providerId: "local-fixture",
+      variationCount: 3,
+      intent: { subject: `${RUN} variation pack`, aspectRatio: "1:1" },
+    });
+    assert(res.status === 201, `create ${res.status}: ${res.text}`);
+    variationGenerationId = res.body.id;
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${variationGenerationId}`);
+        if (r.body.status === "ready" && Array.isArray(r.body.assets) && r.body.assets.length === 3) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "variations ready" },
+    );
+    assert(JSON.stringify(row.assets.map((a) => a.position)) === "[0,1,2]", "variation order not durable");
+    return `generation ${row.id} produced ${row.assets.length} variations`;
+  });
+
+  await check("Path B: refinement of one generated image", async () => {
+    const sourceId = (await http("GET", `/api/visual-generations/${variationGenerationId}`)).body.assets[0].id;
+    const res = await http("POST", `/api/visual-assets/${sourceId}/refine`, { instruction: "Increase contrast" });
+    assert(res.status === 201, `refine ${res.status}: ${res.text}`);
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${res.body.id}`);
+        if (r.body.status === "ready") return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "refine ready" },
+    );
+    assert(row.sourceVisualAssetId === sourceId, "source lineage missing");
+    assert(row.visualAssetId !== sourceId, "refinement mutated the source");
+    const source = await http("GET", `/api/visual-assets/${sourceId}`);
+    assert(source.status === 200, "source asset disappeared");
+    return `refined ${sourceId} -> ${row.visualAssetId}`;
+  });
+
+  await check("Path C: carousel generation with ordered images", async () => {
+    const res = await http("POST", "/api/visual-generations", {
+      kind: "carousel",
+      providerId: "local-fixture",
+      slideCount: 3,
+      intent: { subject: `${RUN} carousel pack` },
+    });
+    assert(res.status === 201, `carousel ${res.status}: ${res.text}`);
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${res.body.id}`);
+        if (r.body.status === "ready" && r.body.assets?.length === 3) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "carousel ready" },
+    );
+    assert(JSON.stringify(row.assets.map((a) => a.position)) === "[0,1,2]", "carousel order not durable");
+    assert(row.assets.every((a) => a.kind === "carousel_slide"));
+    return `carousel ${row.id} slides ${row.assets.map((a) => a.id).join(",")}`;
+  });
+
+  await check("Path D: ownership isolation", async () => {
+    const missing = await http("GET", "/api/visual-generations/99999999");
+    assert(missing.status === 404, `expected 404, got ${missing.status}`);
+    const foreignAsset = await http("GET", "/api/visual-assets/99999999");
+    assert(foreignAsset.status === 404, `expected 404, got ${foreignAsset.status}`);
+    const refine = await http("POST", "/api/visual-assets/99999999/refine", { instruction: "nope" });
+    assert(refine.status === 404, `expected 404, got ${refine.status}`);
+    return "foreign ids 404";
+  });
+
+  await check("Path E: duplicate variation request collapses", async () => {
+    const again = await http("POST", "/api/visual-generations", {
+      kind: "image",
+      providerId: "local-fixture",
+      variationCount: 3,
+      intent: { subject: `${RUN} variation pack`, aspectRatio: "1:1" },
+    });
+    assert(again.status === 200, `expected 200, got ${again.status}`);
+    assert(again.body.id === variationGenerationId, "duplicate created a new generation");
+    return `reused ${again.body.id}`;
+  });
+
   let publishOpportunityId, publishArtifactId, publishAssetId;
   await check(
     "POST /api/opportunities/:id/artifacts creates an image Artifact through real HTTP, pinning the exact asset revision",

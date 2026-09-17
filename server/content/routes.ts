@@ -181,6 +181,9 @@ const serializeVisualGeneration = (g: VisualGeneration) => ({
   errorClass: g.errorClass,
   errorMessage: g.errorMessage,
   correlationId: g.correlationId,
+  variationCount: g.variationCount,
+  specId: g.specId,
+  sourceVisualAssetId: g.sourceVisualAssetId,
   startedAt: g.startedAt,
   finishedAt: g.finishedAt,
   createdAt: g.createdAt,
@@ -201,6 +204,7 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   provenance: a.provenance,
   status: a.status,
   visualGenerationId: a.visualGenerationId,
+  position: a.position,
   createdAt: a.createdAt,
 });
 
@@ -998,7 +1002,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const { generation, created } = await createVisualGeneration(
         getUserId(req) ?? 1,
         req.body ?? {},
-        { content: deps.content, storage: deps.visualStorage },
+        { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
       );
       if (generation.status === "requested") {
         try {
@@ -1028,11 +1032,66 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid visual generation id" });
     try {
+      const ownerId = getUserId(req) ?? 1;
       const generation = await deps.content.getVisualGeneration(id);
-      if (!generation) return res.status(404).json({ message: "Visual generation not found" });
-      const asset = await deps.content.getLatestVisualAssetForGeneration(generation.id);
-      return res.json({ ...serializeVisualGeneration(generation), visualAssetId: asset?.id ?? null });
+      if (!generation || (generation.userId !== null && generation.userId !== ownerId)) {
+        return res.status(404).json({ message: "Visual generation not found" });
+      }
+      const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+      const owned = assets.filter((a) => a.userId === null || a.userId === ownerId);
+      return res.json({
+        ...serializeVisualGeneration(generation),
+        visualAssetId: owned[0]?.id ?? null,
+        assets: owned.map(serializeVisualAsset),
+      });
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/visual-assets/:id/refine", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const source = await deps.content.getVisualAsset(id);
+      if (!source || (source.userId !== null && source.userId !== ownerId)) {
+        return res.status(404).json({ message: "Visual asset not found" });
+      }
+      const instruction = typeof req.body?.instruction === "string" ? req.body.instruction : "";
+      const { generation, created } = await createVisualGeneration(
+        ownerId,
+        {
+          kind: source.kind === "thumbnail" ? "thumbnail" : "image",
+          providerId: (req.body?.providerId as string | undefined) ?? "local-fixture",
+          capability: "refine_image",
+          intent: { subject: "refinement", instruction },
+          sourceVisualAssetId: source.id,
+          instruction,
+          regenerate: true,
+        },
+        { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
+      );
+      if (generation.status === "requested") {
+        try {
+          await deps.enqueueVisual(generation);
+        } catch (error) {
+          return res.status(503).json({
+            message: "Visual queue unavailable",
+            id: generation.id,
+            correlationId: generation.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      return res.status(created ? 201 : 200).json(serializeVisualGeneration(generation));
+    } catch (error) {
+      if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof VisualCapabilityUnsupportedError || error instanceof VisualModelUnsupportedError) {
+        return res.status(409).json({ message: error.message });
+      }
       return next(error);
     }
   });

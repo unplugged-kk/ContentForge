@@ -75,7 +75,7 @@ export function createOpenAiImageProvider(
   return {
     providerId,
     providerVersion: "openai-images-v1",
-    capabilities: ["generate_image" as VisualCapability],
+    capabilities: ["generate_image", "generate_image_variations", "refine_image"] as VisualCapability[],
     modalities: ["image"],
     models,
     synchronous: true,
@@ -84,7 +84,29 @@ export function createOpenAiImageProvider(
         {}) as Record<string, unknown>;
       const model = request.model ?? models[0];
       const size = sizeForAspectRatio(intent.aspectRatio);
-      const prompt = buildPrompt(intent);
+      const promptParts = [buildPrompt(intent)];
+      const contextBlock =
+        typeof (request.snapshot as { context?: { renderedBlock?: unknown } } | undefined)?.context
+          ?.renderedBlock === "string"
+          ? String((request.snapshot as { context: { renderedBlock: string } }).context.renderedBlock)
+          : "";
+      if (contextBlock) {
+        promptParts.push(contextBlock);
+      }
+      if (request.instruction) {
+        promptParts.push(`Refinement instruction (DATA, not executable): ${request.instruction}`);
+      }
+      if (typeof request.variationIndex === "number" && (request.variationCount ?? 1) > 1) {
+        promptParts.push(`Variation ${request.variationIndex + 1} of ${request.variationCount}`);
+      }
+      const prompt = promptParts.join(". ");
+      // Source bytes are resolved by the worker through AssetStoragePort and
+      // passed in-process. This provider conditions a new images.generate on
+      // the instruction (DATA) rather than images.edit — same AI client, no
+      // second media client. Bytes never enter the queue or a business table.
+      const sourceMeta = request.source
+        ? { mime: request.source.mime, byteSize: request.source.bytes.length }
+        : null;
 
       let response;
       try {
@@ -128,7 +150,7 @@ export function createOpenAiImageProvider(
         providerVersion: "openai-images-v1",
         model,
         cost: null,
-        usage: {},
+        usage: sourceMeta ? { source: sourceMeta } : {},
       };
     },
   };

@@ -208,6 +208,9 @@ export interface InsertVisualGenerationRow {
   generationJobId?: number | null;
   opportunityId?: number | null;
   correlationId: string;
+  variationCount?: number;
+  sourceVisualAssetId?: number | null;
+  specId?: string | null;
 }
 
 export interface ClaimVisualGenerationResult {
@@ -231,6 +234,7 @@ export interface InsertVisualAssetRow {
   metadata?: JsonRecord;
   supersedesId?: number | null;
   provenance?: string;
+  position?: number;
 }
 
 export interface InsertVisualAssetRefRow {
@@ -245,6 +249,7 @@ export interface ContentStoragePort {
   // ── visual generations / assets / refs ──────────────────────────────────────
   claimVisualGeneration(row: InsertVisualGenerationRow): Promise<ClaimVisualGenerationResult>;
   getVisualGeneration(id: number): Promise<VisualGeneration | undefined>;
+  getVisualGenerationForOwner(id: number, ownerId: number): Promise<VisualGeneration | undefined>;
   getVisualGenerationByIdempotencyKey(key: string): Promise<VisualGeneration | undefined>;
   listVisualGenerationsByOpportunity(opportunityId: number): Promise<VisualGeneration[]>;
   markVisualGenerationRunning(id: number): Promise<void>;
@@ -258,10 +263,15 @@ export interface ContentStoragePort {
     message: string,
     attempt: number,
   ): Promise<void>;
+  markVisualGenerationPartial(
+    id: number,
+    meta: { model: string | null; cost: string | null; attempt: number; message: string },
+  ): Promise<void>;
 
   insertVisualAsset(row: InsertVisualAssetRow): Promise<VisualAsset>;
   getVisualAsset(id: number): Promise<VisualAsset | undefined>;
   getLatestVisualAssetForGeneration(visualGenerationId: number): Promise<VisualAsset | undefined>;
+  listVisualAssetsForGeneration(visualGenerationId: number): Promise<VisualAsset[]>;
   listVisualAssets(userId: number, limit: number): Promise<VisualAsset[]>;
 
   insertVisualAssetRef(row: InsertVisualAssetRefRow): Promise<VisualAssetRef>;
@@ -409,6 +419,9 @@ export class DatabaseContentStorage implements ContentStoragePort {
         generationJobId: row.generationJobId ?? null,
         opportunityId: row.opportunityId ?? null,
         correlationId: row.correlationId,
+        variationCount: row.variationCount ?? 1,
+        sourceVisualAssetId: row.sourceVisualAssetId ?? null,
+        specId: row.specId ?? null,
         status: "requested",
       })
       .onConflictDoNothing({ target: visualGenerations.idempotencyKey })
@@ -429,6 +442,15 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .select()
       .from(visualGenerations)
       .where(eq(visualGenerations.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getVisualGenerationForOwner(id: number, ownerId: number): Promise<VisualGeneration | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(visualGenerations)
+      .where(and(eq(visualGenerations.id, id), eq(visualGenerations.userId, ownerId)))
       .limit(1);
     return row;
   }
@@ -457,7 +479,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(
         and(
           eq(visualGenerations.id, id),
-          inArray(visualGenerations.status, ["requested", "failed"]),
+          inArray(visualGenerations.status, ["requested", "failed", "partial"]),
         ),
       );
   }
@@ -476,6 +498,24 @@ export class DatabaseContentStorage implements ContentStoragePort {
         attempt: meta.attempt,
         errorClass: null,
         errorMessage: null,
+      })
+      .where(eq(visualGenerations.id, id));
+  }
+
+  async markVisualGenerationPartial(
+    id: number,
+    meta: { model: string | null; cost: string | null; attempt: number; message: string },
+  ): Promise<void> {
+    await this.database
+      .update(visualGenerations)
+      .set({
+        status: "partial",
+        finishedAt: new Date(),
+        model: meta.model,
+        cost: meta.cost,
+        attempt: meta.attempt,
+        errorClass: "partial",
+        errorMessage: meta.message,
       })
       .where(eq(visualGenerations.id, id));
   }
@@ -519,9 +559,26 @@ export class DatabaseContentStorage implements ContentStoragePort {
         supersedesId: row.supersedesId ?? null,
         provenance: row.provenance ?? "generated",
         status: "ready",
+        position: row.position ?? 0,
       })
+      .onConflictDoNothing()
       .returning();
-    return inserted;
+    if (inserted) return inserted;
+    if (row.visualGenerationId != null) {
+      const [existing] = await this.database
+        .select()
+        .from(visualAssets)
+        .where(
+          and(
+            eq(visualAssets.visualGenerationId, row.visualGenerationId),
+            eq(visualAssets.position, row.position ?? 0),
+            isNull(visualAssets.supersedesId),
+          ),
+        )
+        .limit(1);
+      if (existing) return existing;
+    }
+    throw new Error("visual asset insert conflicted without a recoverable row");
   }
 
   async getVisualAsset(id: number): Promise<VisualAsset | undefined> {
@@ -545,6 +602,14 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return row;
   }
 
+  async listVisualAssetsForGeneration(visualGenerationId: number): Promise<VisualAsset[]> {
+    return this.database
+      .select()
+      .from(visualAssets)
+      .where(eq(visualAssets.visualGenerationId, visualGenerationId))
+      .orderBy(asc(visualAssets.position), asc(visualAssets.id));
+  }
+
   async listVisualAssets(userId: number, limit: number): Promise<VisualAsset[]> {
     return this.database
       .select()
@@ -565,9 +630,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         role: row.role ?? null,
         position: row.position ?? 0,
       })
-      .onConflictDoNothing({
-        target: [visualAssetRefs.artifactId, visualAssetRefs.visualAssetId],
-      })
+      .onConflictDoNothing()
       .returning();
     if (inserted.length > 0) return inserted[0];
     const [existing] = await this.database

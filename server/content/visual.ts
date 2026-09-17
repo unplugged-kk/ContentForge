@@ -36,12 +36,21 @@ export function modalityOfCapability(capability: VisualCapability): MediaModalit
 // ── Visual provider contract ──────────────────────────────────────────────────
 export type VisualCapability =
   | "generate_image"
+  | "generate_image_variations"
+  | "refine_image"
   | "edit_image"
   | "generate_slide"
   // Declared for capability-readiness only (Phase 9 §5/§23/§24) — no provider
   // registers these yet, and none may claim to without a real implementation.
   | "generate_video"
   | "generate_audio";
+
+export interface VisualSourceImage {
+  mime: string;
+  width: number | null;
+  height: number | null;
+  bytes: Buffer;
+}
 
 export interface VisualGenerationRequest {
   kind: "image" | "carousel_slide" | "thumbnail";
@@ -51,6 +60,12 @@ export interface VisualGenerationRequest {
   correlationId: string;
   /** Explicit model preference, already validated against `provider.models`. */
   model?: string | null;
+  variationIndex?: number;
+  variationCount?: number;
+  /** In-process source bytes for refine — never a queue payload, never a DB blob. */
+  source?: VisualSourceImage;
+  /** User instruction treated as DATA, never as worker execution. */
+  instruction?: string | null;
 }
 
 export interface VisualGenerationOutput {
@@ -227,7 +242,7 @@ export function hashIntent(intent: Record<string, unknown>): string {
   return createHash("sha256").update(`{${entries.join(",")}}`, "utf8").digest("hex");
 }
 
-export type VisualKind = "image" | "carousel_slide" | "thumbnail";
+export type VisualKind = "image" | "carousel_slide" | "thumbnail" | "carousel";
 
 export function visualGenerationIdempotencyKey(input: {
   opportunityId?: number | null;

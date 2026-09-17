@@ -117,7 +117,7 @@ describe("payload schema registry", () => {
     });
     assert.equal(parsed.slides.length, 2);
     assert.throws(
-      () => payloadSchemaRegistry.validate("carousel", { slides: [] }),
+      () => payloadSchemaRegistry.validate("carousel", { slides: [{ visualAssetId: 1 }] }),
       PayloadValidationError,
     );
   });

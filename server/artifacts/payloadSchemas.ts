@@ -224,8 +224,8 @@ export const carouselPayloadSchema = z.object({
         role: z.string().trim().max(60).optional(),
       }),
     )
-    .min(1)
-    .max(25),
+    .min(2)
+    .max(10),
   aspectRatio: z.enum(["1:1", "4:5", "16:9", "9:16"]).optional(),
 });
 
@@ -284,7 +284,7 @@ payloadSchemaRegistry.register<CarouselPayload>({
   format: "carousel",
   version: 1,
   description: "Carousel of ordered, independently addressable visual slides",
-  limits: { maxUnits: 25 },
+  limits: { maxUnits: 10 },
   schema: carouselPayloadSchema,
   mediaRefs: (payload) =>
     payload.slides.map((slide, position) => ({

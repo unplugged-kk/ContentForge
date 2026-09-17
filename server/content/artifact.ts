@@ -22,6 +22,7 @@ import {
 } from "../artifacts/payloadSchemas";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 import type { LearningRecorder } from "./learning/record";
+import { ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
 
 export interface ArtifactDeps {
   artifacts: ContentStoragePort;
@@ -150,6 +151,34 @@ export async function createArtifact(
         ref.visualAssetId,
         `visual asset ${ref.visualAssetId} is "${asset.status}", not ready`,
       );
+    }
+    if (!(ALLOWED_VISUAL_MIMES as readonly string[]).includes(asset.mime)) {
+      throw new ArtifactMediaReferenceError(
+        input.format,
+        ref.visualAssetId,
+        `visual asset ${ref.visualAssetId} has disallowed mime "${asset.mime}"`,
+      );
+    }
+    for (const [label, value] of [
+      ["width", asset.width],
+      ["height", asset.height],
+    ] as const) {
+      if (typeof value === "number" && (!Number.isInteger(value) || value <= 0 || value > MAX_VISUAL_DIMENSION)) {
+        throw new ArtifactMediaReferenceError(
+          input.format,
+          ref.visualAssetId,
+          `visual asset ${ref.visualAssetId} ${label} is out of range`,
+        );
+      }
+    }
+  }
+  if (input.format === "carousel") {
+    const positions = mediaRefs.map((r) => r.position);
+    const expected = mediaRefs.map((_, i) => i);
+    if (mediaRefs.length < 2 || JSON.stringify(positions) !== JSON.stringify(expected)) {
+      throw new InvalidArtifactPayloadError(input.format, [
+        "carousel must contain a contiguous ordered sequence of at least 2 ready slides",
+      ]);
     }
   }
 

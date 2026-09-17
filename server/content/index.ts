@@ -300,6 +300,19 @@ export {
   createFixtureVisualProvider,
 } from "./visualFixture";
 
+export {
+  MAX_VARIATION_COUNT,
+  MIN_CAROUSEL_SLIDES,
+  MAX_CAROUSEL_SLIDES,
+  listVisualSpecs,
+  getVisualSpec,
+  resolveVisualSpec,
+  validateVariationCount,
+  validateCarouselSlideCount,
+  variationIdentityKey,
+  type VisualSpec,
+} from "./visualSpecs";
+
 export type {
   ClaimVisualGenerationResult,
   InsertVisualAssetRefRow,
