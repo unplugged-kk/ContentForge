@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-17 (Phase 15) · Branch reviewed: `replit` @ `ff546f4` (implementation landed)
+Last updated: 2026-09-17 (Phase 16) · Branch reviewed: `replit` @ `2dc29c2` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,18 +13,54 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **389 passed / 0 failed** (91 suites) |
-| `npm test` | **389 passed** |
-| `npm run test:db` (real PostgreSQL) | **179 passed / 0 failed / 0 skipped** (23 suites) |
-| `npm run test:e2e:live` (real running app) | **114 passed / 2 failed** (116 checks). The two failures are the documented Phase 10 generation `rate-limited after retries` then cascade `opportunityId: Required`. They did **not** reproduce in unit, db, or visual E2E; assertions were not weakened. Phase 14 Paths A–G including SIGKILL mid-`analytics.refresh` remained green |
-| `npm run test:e2e:visual` (real running app) | **19 passed / 0 failed** (Paths A–E Phase 15 + prior G/H + SIGKILL restart F) |
+| `npm run test:unit` | **403 passed / 0 failed** (95 suites) |
+| `npm test` | **403 passed** |
+| `npm run test:db` (real PostgreSQL) | **189 passed / 0 failed / 0 skipped** (24 suites) |
+| `npm run test:e2e:live` (real running app) | **125 passed / 0 failed** (125 checks). Phase 16 Paths A–I all green, including SIGKILL with no duplicate Publication. Prior Phase 10 rate-limit flakes did **not** reproduce this run; assertions were not weakened |
+| `npm run test:e2e:visual` (real running app) | **19 passed / 0 failed** |
 | `npm run build` (production CJS bundle) | **succeeds**; live E2E boots `dist/index.cjs` |
-| Fresh DB migration | **19 migrations / 50 tables** from zero (`0018_visual_production.sql` additive) |
+| Fresh DB migration | **20 migrations / 50 tables** from zero (`0019_distribution_fanout.sql` additive `schedules.intent_key`) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema |
 | Real provider network smoke | **BLOCKED** — `AI_API_KEY` present; configured OpenRouter model `openai/dall-e-3` returned `404 No model found`. Contract tests against a local HTTP double: pass |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 388 unit / 172 DB / 116 live E2E / 14 visual E2E / 18 migrations / 50 tables.
+Baseline before this phase: 389 unit / 179 DB / 114+2 live E2E / 19 visual E2E / 19 migrations / 50 tables.
+
+---
+
+## Multi-channel distribution generalization (new in this phase — Phase 16)
+
+**IMPLEMENTED — one Artifact revision → N independent Publications. X and LinkedIn only. No second publication system.**
+
+```
+Artifact revision (immutable content)
+        ├─ Publication(X)       → Schedule/Occurrence → X adapter → Result
+        └─ Publication(LinkedIn) → Schedule/Occurrence → LinkedIn adapter → Result
+```
+
+Artifact is the authored revision. Publication is the channel-specific delivery
+intent. `Publication.channel` is authoritative at execution; `Artifact.channel`
+is retained as historical generation origin and never overrides dispatch.
+
+Format (what the content is) stays distinct from channel (where it is published).
+No new cosmetic format. Compatible `{ text }` payloads (`x_post` / `linkedin_post`)
+are delivered by both adapters. Generation still requires a format profile.
+Distribution uses `channelSupportsFormat` only. Carousel / thread-on-LinkedIn /
+image-on-LinkedIn remain rejected.
+
+Fan-out: `POST /api/artifacts/:id/publications` `{ targets: [{ channel: "x" }, { channel: "linkedin" }] }`.
+Creates independent Schedules; the existing dispatcher creates Publications.
+Logical identity `dist:{artifactId}:{channel}:{startAt|asap}:{count}:{recurrence|once}:{nonce}`
+with UNIQUE `schedules.intent_key` as the concurrency arbiter. Duplicate fan-out
+reuses; `republishKey` creates a new Publication. Legacy `POST /api/schedules`
+keeps null `intent_key` and always inserts.
+
+Approval remains Artifact-scoped. Schedules, execution, failure, retry,
+reconciliation, Result, and Phase 14 signals are Publication-scoped. Automation
+and repurposing still use existing primitives.
+
+**Not in this phase:** Threads, Instagram, YouTube, carousel publishing, UI,
+Chrome, `memoryJson` / `brandingJson`.
 
 ---
 
@@ -1121,5 +1157,6 @@ full iCalendar/RRULE recurrence.
 
 ## Next boundary
 
-Not decided here. Phase 15 is not started. The next implementation phase is
-selected externally after review of this status.
+Not decided here. Phase 16 is landed on `replit` (`2dc29c2`). The next
+implementation phase is selected externally after review of this status. Do not
+start Phase 17 from this document.
