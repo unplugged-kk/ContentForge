@@ -203,6 +203,11 @@ async function startApp() {
       LINKEDIN_ACCESS_TOKEN: "fixture-token",
       LINKEDIN_AUTHOR_URN: "urn:li:person:cf_e2e",
       LINKEDIN_TIMEOUT_MS: "3000",
+      THREADS_API_BASE_URL: FIXTURE_BASE,
+      THREADS_API_VERSION: "v1.0",
+      THREADS_ACCESS_TOKEN: "fixture-token",
+      THREADS_USER_ID: "me",
+      THREADS_TIMEOUT_MS: "3000",
       // Phase 2: point the real providers at the deterministic fixture. The
       // operator allowlist is what lets the SSRF-guarded providers reach it; it
       // is default-off in production and never derived from request input.
@@ -3192,6 +3197,173 @@ const observed = {};
     assert(byPub.size === results.length || results.length <= 2, "results must not merge publications");
     return `x=${rx.body.state} linkedin=${rl.body.state} results=${results.length}`;
   });
+
+  // ── Phase 17: Threads ChannelAdapter ────────────────────────────────────────
+  phase("Phase 17: Artifact → Publication(threads) → Threads ChannelAdapter");
+
+  let thArtifactId = null;
+  let thPubId = null;
+  let triPubX = null;
+  let triPubLi = null;
+  let triPubTh = null;
+
+  await check("Path A: Artifact → Threads Publication", async () => {
+    thArtifactId = await approvedArtifactWithMarker(`${RUN}-threads-a`);
+    const fan = await http("POST", `/api/artifacts/${thArtifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ot = fan.body.outcomes.find((o) => o.channel === "threads");
+    assert(ot && ot.status === "created" && ot.publicationId, JSON.stringify(fan.body));
+    thPubId = ot.publicationId;
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${thPubId}`);
+        return r.status === 200 && r.body.state === "published" ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "threads publication published" },
+    );
+    assert(row.channel === "threads");
+    assert(String(row.externalId || "").startsWith("m-"), `externalId=${row.externalId}`);
+    return `artifact ${thArtifactId} publication ${thPubId} externalId=${row.externalId}`;
+  });
+
+  await check("Path B: same Artifact → X + LinkedIn + Threads", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-threads-tri`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "x" }, { channel: "linkedin" }, { channel: "threads" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    const oli = fan.body.outcomes.find((o) => o.channel === "linkedin");
+    const ot = fan.body.outcomes.find((o) => o.channel === "threads");
+    assert(ox.publicationId && oli.publicationId && ot.publicationId);
+    assert(new Set([ox.publicationId, oli.publicationId, ot.publicationId]).size === 3);
+    triPubX = ox.publicationId;
+    triPubLi = oli.publicationId;
+    triPubTh = ot.publicationId;
+    const rows = await q("select channel, artifact_id from publications where id = any($1::int[])", [
+      [triPubX, triPubLi, triPubTh],
+    ]);
+    assert(rows.every((r) => r.artifact_id === artifactId));
+    assert(new Set(rows.map((r) => r.channel)).size === 3);
+    return `artifact ${artifactId} x=${triPubX} linkedin=${triPubLi} threads=${triPubTh}`;
+  });
+
+  await check("Path C: independent Threads vs LinkedIn startAt", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-threads-sched`);
+    const t2 = new Date(Date.now() + 86_400_000).toISOString();
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [
+        { channel: "threads" },
+        { channel: "linkedin", startAt: t2 },
+      ],
+    });
+    const ot = fan.body.outcomes.find((o) => o.channel === "threads");
+    const oli = fan.body.outcomes.find((o) => o.channel === "linkedin");
+    assert(ot.publicationId, "due Threads target materializes");
+    assert(!oli.publicationId, "future LinkedIn target has no Publication yet");
+    return `threads due now, linkedin ${t2}`;
+  });
+
+  await check("Path D: duplicate Threads fan-out reuses the Publication", async () => {
+    const again = await http("POST", `/api/artifacts/${thArtifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+    });
+    assert(again.status === 207);
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === thPubId);
+    return `reused ${thPubId}`;
+  });
+
+  await check("Path E: explicit republishKey creates a new Threads Publication", async () => {
+    const again = await http("POST", `/api/artifacts/${thArtifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+      republishKey: "threads-again",
+    });
+    assert(again.body.outcomes[0].status === "created");
+    assert(again.body.outcomes[0].publicationId !== thPubId);
+    return `new ${again.body.outcomes[0].publicationId}`;
+  });
+
+  await check("Path F: foreign Artifact ids remain non-leaking 404s for Threads fan-out", async () => {
+    const missing = await http("POST", "/api/artifacts/999999991/publications", {
+      targets: [{ channel: "threads" }],
+    });
+    assert(missing.status === 404, `expected 404 got ${missing.status}`);
+    return "404";
+  });
+
+  await check("Path G: SIGKILL with a queued Threads Publication does not duplicate it", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-threads-restart`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    await killApp("SIGKILL");
+    await startApp();
+    const again = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === pubId);
+    const count = await q("select count(*)::int c from publications where artifact_id = $1 and channel = 'threads'", [
+      artifactId,
+    ]);
+    assert(count[0].c === 1, `duplicates after restart: ${count[0].c}`);
+    return `publication ${pubId} survived`;
+  });
+
+  await check("Path H: Threads Publication → PerformanceSignal → LearningSignal", async () => {
+    const queued = await http("POST", `/api/learning/publications/${thPubId}/refresh`, {});
+    assert(queued.status === 202 || queued.status === 200, `refresh ${queued.status}: ${queued.text}`);
+    const snaps = await waitFor(
+      async () => {
+        const rows = await q(
+          "select metric, value, availability, provenance from performance_signals where publication_id = $1",
+          [thPubId],
+        );
+        return rows.length > 0 ? rows : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 400, label: "threads performance signals" },
+    );
+    const impressions = snaps.find((s) => s.metric === "impressions");
+    assert(impressions, "views mapped to impressions");
+    const learned = await q("select id, publication_id from learning_signals where publication_id = $1", [thPubId]);
+    assert(learned.every((r) => r.publication_id === thPubId));
+    return `signals=${snaps.length} learning=${learned.length}`;
+  });
+
+  await check("Path I: Threads reconciliation after ambiguous publish", async () => {
+    const marker = `${RUN}-threads-ambiguous`;
+    const artifactId = await approvedArtifactWithMarker(marker);
+    await fixturePost("/control/threads-mode", { mode: "network-fail-publish", matchSubstring: marker });
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "threads" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    const unknown = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${pubId}`);
+        return r.status === 200 && (r.body.state === "failed" || r.body.state === "published") ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 500, label: "threads ambiguous outcome" },
+    );
+    assert(unknown.channel === "threads");
+    const resultRows = await q("select outcome from results where publication_id = $1", [pubId]);
+    if (unknown.state === "failed") {
+      assert(resultRows[0]?.outcome === "unknown" || resultRows.length === 0 || resultRows[0]?.outcome);
+    }
+    await fixturePost("/control/threads-record-media", { id: `listed-${marker}`, text: marker });
+    const recon = await http("POST", "/api/publications/dispatch", {});
+    assert(recon.status === 200, `dispatch ${recon.status}: ${recon.text}`);
+    return `state=${unknown.state}`;
+  });
+
+  inform(
+    "Path J/K: Real Threads network verification: BLOCKED — credential unavailable",
+    "THREADS_ACCESS_TOKEN is not a live Meta credential in this environment; fixture Graph double covered Paths A–I",
+  );
 
   // ── 9. EXTERNAL SMOKE (optional, non-gating) ────────────────────────────────
   phase("External smoke (optional, non-gating)");

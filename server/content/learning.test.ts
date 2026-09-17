@@ -85,6 +85,19 @@ describe("provider metric normalization", () => {
     assert.equal(by.comments.value, null);
   });
 
+  it("maps Threads views to impressions and leaves quotes unmapped", () => {
+    const rows = normalizeProviderMetrics(
+      { views: 40, likes: 5, replies: 2, shares: 4, quotes: 3 },
+      "threads",
+    );
+    const by = Object.fromEntries(rows.map((r) => [r.metric, r]));
+    assert.equal(by.impressions.value, 40);
+    assert.equal(by.likes.value, 5);
+    assert.equal(by.replies.value, 2);
+    assert.equal(by.shares.value, 4);
+    assert.equal(rows.some((r) => r.metric === ("quotes" as never)), false);
+  });
+
   it("treats a missing metric as not_available rather than zero", () => {
     const rows = notAvailableMetrics();
     assert.ok(rows.every((r) => r.availability === "not_available" && r.value === null));

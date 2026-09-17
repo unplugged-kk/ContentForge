@@ -58,6 +58,7 @@ async function fetchViaAdapter(
     externalId: publication.externalId,
     publicationId: publication.id,
     correlationId: publication.correlationId,
+    ownerUserId: publication.userId ?? null,
   });
 }
 
@@ -91,6 +92,9 @@ export async function ingestNormalizedOutcome(
       provenance: {
         source: "channel_adapter",
         retrievedAt: outcome.retrievedAt.toISOString(),
+        ...(outcome.unmapped && Object.keys(outcome.unmapped).length > 0
+          ? { unmapped: outcome.unmapped }
+          : {}),
       },
     },
     outcome.metrics,

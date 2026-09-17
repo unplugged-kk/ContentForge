@@ -15,6 +15,8 @@ import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
+import { getThreadsConfigSummary, verifyThreadsAccessToken } from "./social/threads";
+import { getUserId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
@@ -1805,6 +1807,17 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
+  app.get("/api/social/threads/status", async (_req, res) => {
+    try {
+      res.json({
+        ...(await getThreadsConfigSummary()),
+        hint: "Publishing uses the Threads Graph API. Connect via POST /api/accounts/connect { platform: \"threads\", accessToken } or set THREADS_ACCESS_TOKEN and THREADS_USER_ID. Scopes: threads_basic, threads_content_publish, threads_manage_insights.",
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/accounts", async (_req, res) => {
     try {
       const accounts = await storage.getConnectedAccounts();
@@ -1861,11 +1874,26 @@ Each tweet under ${charLimit} characters.` },
       }
 
       if (platform === "threads") {
+        const ownerId = getUserId(req);
+        let usernameResolved = username || "pending";
+        let profileData: Record<string, unknown> = {};
+        try {
+          const profile = await verifyThreadsAccessToken(accessToken);
+          if (profile?.id) {
+            usernameResolved = profile.id;
+            profileData = { id: profile.id, username: profile.username, name: profile.name };
+          }
+        } catch {
+          /* token stored even if /me is unreachable — same pattern as xQuick */
+        }
         const account = await storage.upsertConnectedAccount({
           platform: "threads",
-          username: username || "pending",
+          userId: ownerId,
+          username: usernameResolved,
+          displayName: typeof profileData.name === "string" ? profileData.name : username || undefined,
           accessToken,
           isActive: true,
+          profileData,
         });
         return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
       }

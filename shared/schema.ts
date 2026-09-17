@@ -416,20 +416,26 @@ export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
 export type GeneratedImage = typeof generatedImages.$inferSelect;
 export type InsertGeneratedImage = z.infer<typeof insertGeneratedImageSchema>;
 
-export const connectedAccounts = pgTable("connected_accounts", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id"),
-  platform: varchar("platform", { length: 30 }).notNull(),
-  username: varchar("username", { length: 200 }),
-  displayName: varchar("display_name", { length: 300 }),
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  tokenExpiresAt: timestamp("token_expires_at"),
-  isActive: boolean("is_active").default(true),
-  profileData: jsonb("profile_data"),
-  connectedAt: timestamp("connected_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  lastUsedAt: timestamp("last_used_at"),
-});
+export const connectedAccounts = pgTable(
+  "connected_accounts",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    platform: varchar("platform", { length: 30 }).notNull(),
+    username: varchar("username", { length: 200 }),
+    displayName: varchar("display_name", { length: 300 }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    tokenExpiresAt: timestamp("token_expires_at"),
+    isActive: boolean("is_active").default(true),
+    profileData: jsonb("profile_data"),
+    connectedAt: timestamp("connected_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+  },
+  (table) => [
+    uniqueIndex("connected_accounts_user_platform_uq").on(table.userId, table.platform),
+  ],
+);
 
 export const insertConnectedAccountSchema = createInsertSchema(connectedAccounts).omit({ id: true, connectedAt: true });
 export type ConnectedAccount = typeof connectedAccounts.$inferSelect;

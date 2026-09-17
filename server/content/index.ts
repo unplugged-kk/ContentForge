@@ -211,8 +211,10 @@ export {
 export {
   createXChannelAdapter,
   createLinkedInChannelAdapter,
+  createThreadsChannelAdapter,
   classifyXFailure,
   classifyLinkedInFailure,
+  classifyThreadsFailure,
   channelSupportsFormat,
   getChannelAdapter,
   hasChannelAdapter,

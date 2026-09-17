@@ -92,7 +92,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 20, "all twenty migrations recorded");
+      assert.equal(await migrationCount(pool), 21, "all twenty-one migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -199,12 +199,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0019 without a db:push.
+      // The forward migration must apply 0003-0020 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 20, "0003-0019 recorded after upgrade");
+      assert.equal(await migrationCount(pool), 21, "0003-0020 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -219,6 +219,11 @@ describeDb("migration chain (db)", () => {
           where table_name = 'schedules' and column_name = 'intent_key'`,
       );
       assert.equal(intentCol.rows.length, 1, "0019 adds schedules.intent_key");
+      const threadsIdx = await pool.query<{ indexname: string }>(
+        `select indexname from pg_indexes
+          where tablename = 'connected_accounts' and indexname = 'connected_accounts_user_platform_uq'`,
+      );
+      assert.equal(threadsIdx.rows.length, 1, "0020 adds connected_accounts (user_id, platform) unique");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

@@ -471,6 +471,72 @@ index). Fresh migrate: 50 tables / 20 migrations. No assertions were weakened.
 - Independent schedules / isolated failure / per-Publication reconciliation: **IMPLEMENTED**.
 - New channels / carousel publish / UI / Chrome: **DEFERRED**.
 
+## Phase 17 — Threads Channel Integration (done)
+
+**The problem this closes**: Phase 16 proved `Artifact → Publication[N] → ChannelAdapter`
+for X and LinkedIn. Threads is the first *new* external provider on that architecture —
+text publish, connected-account seam, reconciliation, and Phase 14 metrics — without a
+second publication, analytics, credential, queue, or scheduler system.
+
+```
+Artifact revision (immutable; format + payload)
+        ├─ Publication(X)        → Schedule/Occurrence → X adapter → Result
+        ├─ Publication(LinkedIn) → Schedule/Occurrence → LinkedIn adapter → Result
+        └─ Publication(Threads)  → Schedule/Occurrence → Threads adapter → Result
+                                              ↓
+                                    PerformanceSignal → LearningSignal
+```
+
+**Adapter.** `createThreadsChannelAdapter()` in `server/content/adapters.ts` is registered
+by `registerBuiltinChannelAdapters()`. Transport lives in `server/social/threads.ts`.
+Capabilities actually implemented: `x_post` and `linkedin_post` text (`media_type=TEXT`).
+Carousel, video, replies, discovery are **not** registered.
+
+**Format.** No cosmetic `threads_post`. Artifact format remains content type; channel is
+`threads`. Generation profile exists for `x_post × threads` (500 weighted characters).
+`linkedin_post × threads` is distributable (compatible `{ text }`) but has no generation
+profile, so Generation still refuses it. Over-limit text is a permanent adapter rejection
+(never truncated). Official limit verified 2026-09-17: 500 characters, emojis as UTF-8 bytes
+(Meta Threads Posts docs).
+
+**Auth.** Reuses `connected_accounts`. Additive unique `(user_id, platform)`
+(`0020_threads_connected_accounts.sql`). `getConnectedAccountForOwner` is the SQL filter;
+env `THREADS_ACCESS_TOKEN` + `THREADS_USER_ID` override for fixture/operator use (same
+pattern as LinkedIn). Tokens encrypted at the storage boundary; never on queue payloads.
+OAuth scopes (centralized): `threads_basic`, `threads_content_publish`,
+`threads_manage_insights`. Host/version centralized (`THREADS_API_BASE_URL` default
+`https://graph.threads.net`, `THREADS_API_VERSION` default `v1.0`). No UI consent flow;
+`GET /api/social/threads/status` + `POST /api/accounts/connect` `{platform:"threads"}`
+is the provider-ready seam. `/me` verifies identity when reachable.
+
+**Publish.** POST `/{user-id}/threads` (`media_type=TEXT&text=`) then POST
+`/{user-id}/threads_publish` (`creation_id=`). External id is the published media id.
+**Provider idempotency: none documented** — ContentForge Publication identity + lease.
+
+**Unknown / reconcile.** Timeout after container create or publish, 5xx/429 on publish,
+or missing publish id → `providerCalled=true`, Result `unknown`, hint `{text, attemptedAt,
+creationId?}`. Reconcile: GET media by id; GET container status (`ERROR`/`EXPIRED` can
+prove absence); listing `GET /{user-id}/threads` may confirm a text match but a miss is
+never "definitely not published".
+
+**Metrics.** GET `/{media-id}/insights?metric=views,likes,replies,reposts,quotes,shares`.
+Canonical mapping (`performance.v1`): views→impressions (play/display count; Meta labels
+views in development), likes→likes, replies→replies, shares→shares (else reposts→shares).
+`quotes` has no canonical field; retained on `PerformanceSignal.provenance.unmapped`.
+Identity remains publication+metric+observedAt+provider+normalizationVersion.
+
+**HTTP.** Existing `POST /api/artifacts/:id/publications` `{ targets: [{ channel: "threads" }] }`.
+No `/api/threads/publish`.
+
+**Live provider.** `Real Threads network verification: BLOCKED — credential unavailable`
+(`.env` has commented `THREADS_APP_ID`/`SECRET` only; no live user token). Contract tests
+against a local Graph double: pass.
+
+**Verification:** unit 415/415; real Postgres 199/199; migration 21 / 50 tables.
+
+**Deferred (unchanged):** Instagram, YouTube, TikTok, Bluesky, Threads carousel/video/
+replies/moderation/search, social account UI, automatic learning mutation.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

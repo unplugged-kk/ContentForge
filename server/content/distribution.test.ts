@@ -112,6 +112,7 @@ describe("format vs channel", () => {
   it("generation still refuses x_post×linkedin (no format profile)", () => {
     assert.match(String(formatChannelError("x_post", "linkedin")), /cannot target channel/);
     assert.equal(formatChannelError("x_post", "x"), null);
+    assert.equal(formatChannelError("x_post", "threads"), null);
     assert.equal(formatChannelError("linkedin_post", "linkedin"), null);
   });
 
@@ -120,6 +121,9 @@ describe("format vs channel", () => {
     assert.equal(channelSupportsFormat("x", "linkedin_post"), true);
     assert.equal(channelSupportsFormat("linkedin", "linkedin_post"), true);
     assert.equal(channelSupportsFormat("linkedin", "x_post"), true);
+    assert.equal(channelSupportsFormat("threads", "x_post"), true);
+    assert.equal(channelSupportsFormat("threads", "linkedin_post"), true);
+    assert.equal(channelSupportsFormat("threads", "x_thread"), false);
     assert.equal(channelSupportsFormat("linkedin", "image"), false);
     assert.equal(channelSupportsFormat("linkedin", "x_thread"), false);
     assert.equal(channelSupportsFormat("x", "carousel"), false);
@@ -176,23 +180,19 @@ describe("createSchedule channel override", () => {
 });
 
 describe("publishArtifactToChannels", () => {
-  it("fans one Artifact revision out to X and LinkedIn without cloning it", async () => {
+  it("fans one Artifact revision out to X, LinkedIn, and Threads without cloning it", async () => {
     const artifact = approvedArtifact();
     const store = memoryDistributionStore(artifact);
     const result = await publishArtifactToChannels(
       artifact.id,
-      { targets: [{ channel: "x" }, { channel: "linkedin" }] },
+      { targets: [{ channel: "x" }, { channel: "linkedin" }, { channel: "threads" }] },
       { content: store },
     );
-    assert.equal(result.outcomes.length, 2);
-    assert.equal(result.outcomes[0].status, "created");
-    assert.equal(result.outcomes[1].status, "created");
-    assert.equal(result.outcomes[0].schedule?.artifactId, artifact.id);
-    assert.equal(result.outcomes[1].schedule?.artifactId, artifact.id);
-    assert.equal(result.outcomes[0].schedule?.channel, "x");
-    assert.equal(result.outcomes[1].schedule?.channel, "linkedin");
-    assert.notEqual(result.outcomes[0].schedule?.id, result.outcomes[1].schedule?.id);
-    assert.equal(store.schedules.length, 2);
+    assert.equal(result.outcomes.length, 3);
+    assert.ok(result.outcomes.every((o) => o.status === "created"));
+    assert.deepEqual(result.outcomes.map((o) => o.schedule?.channel).sort(), ["linkedin", "threads", "x"]);
+    assert.equal(new Set(result.outcomes.map((o) => o.schedule?.id)).size, 3);
+    assert.equal(store.schedules.length, 3);
   });
 
   it("collapses duplicate targets in one request and is idempotent across requests", async () => {

@@ -36,6 +36,15 @@ import {
   reconcileLinkedInPost,
   translateLinkedInError,
 } from "../social/linkedin";
+import {
+  fetchThreadsInsights,
+  postTextToThreads,
+  reconcileThreadsPost,
+  ThreadsPublishAmbiguousError,
+  translateThreadsError,
+  unmappedThreadsMetrics,
+  validateThreadsText,
+} from "../social/threads";
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
@@ -74,6 +83,11 @@ export interface PublishRequest {
    * interface level; only the adapter that produced it knows how to read it.
    */
   reconciliationHint?: JsonRecord | null;
+  /**
+   * Publication owner, used by adapters that look up connected-account credentials.
+   * Never a token. Optional so existing adapters stay unchanged.
+   */
+  ownerUserId?: number | null;
 }
 
 export interface PublishOutcome {
@@ -444,6 +458,180 @@ export function createXChannelAdapter(): ChannelAdapter {
 }
 
 /**
+ * Classify a Threads transport failure. Missing credentials are terminal-by-policy.
+ * Timeouts, 5xx, and 429 map to transient. Missing ids after a parsed response are
+ * permanent (the Graph body was decisive).
+ */
+export function classifyThreadsFailure(message: string): AdapterFailureClass {
+  if (/THREADS_CONFIG_MISSING|not connected/i.test(message)) {
+    return "policy_human";
+  }
+  if (/THREADS_CONTAINER_ID_MISSING|THREADS_PUBLISH_ID_MISSING/i.test(message)) {
+    return "permanent";
+  }
+  if (/timeout|ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate limit/i.test(message)) {
+    return "transient";
+  }
+  return "permanent";
+}
+
+/**
+ * Threads adapter — text posts only (media_type=TEXT). Carousel/video/replies
+ * are not registered. Compatible `{ text }` payloads (`x_post`, `linkedin_post`)
+ * are accepted; over-limit LinkedIn-length text is a permanent validation failure
+ * (never truncated). Provider has no documented idempotency key.
+ */
+export function createThreadsChannelAdapter(): ChannelAdapter {
+  const supported = new Set(["x_post", "linkedin_post"]);
+
+  function textFor(format: string, payload: JsonRecord): string | null {
+    if (format !== "x_post" && format !== "linkedin_post") return null;
+    const text = typeof payload.text === "string" ? payload.text : null;
+    return text && text.trim().length > 0 ? text : null;
+  }
+
+  return {
+    channel: "threads",
+    supports: (format) => supported.has(format),
+
+    async publish(request: PublishRequest): Promise<PublishOutcome> {
+      if (!supported.has(request.format)) return unavailable(request.format, "threads");
+      const text = textFor(request.format, request.payload);
+      if (!text) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: `threads payload for ${request.format} is unusable`,
+        };
+      }
+      const limitError = validateThreadsText(text);
+      if (limitError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: limitError,
+        };
+      }
+      try {
+        const result = await postTextToThreads(text, request.ownerUserId);
+        return {
+          ok: true,
+          providerCalled: true,
+          externalId: result.mediaId,
+          externalUrl: result.url,
+          publishedAt: new Date(),
+        };
+      } catch (error) {
+        if (error instanceof ThreadsPublishAmbiguousError) {
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: null,
+            externalUrl: null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: {
+              text: error.hint.text,
+              attemptedAt: error.hint.attemptedAt,
+              ...(error.hint.creationId ? { creationId: error.hint.creationId } : {}),
+            },
+          };
+        }
+        const raw = error instanceof Error ? error.message : String(error);
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: classifyThreadsFailure(raw),
+          errorMessage: translateThreadsError(raw),
+        };
+      }
+    },
+
+    async reconcile(request: PublishRequest): Promise<PublishOutcome | null> {
+      const hint = request.reconciliationHint ?? {};
+      const text = typeof hint.text === "string" ? hint.text : null;
+      const attemptedAt = typeof hint.attemptedAt === "string" ? hint.attemptedAt : null;
+      const creationId = typeof hint.creationId === "string" ? hint.creationId : null;
+      const externalId = request.externalId ?? (typeof hint.externalId === "string" ? hint.externalId : null);
+      if (!text && !creationId && !externalId) return null;
+
+      const status = await reconcileThreadsPost(
+        {
+          text: text ?? undefined,
+          attemptedAt: attemptedAt ?? undefined,
+          creationId: creationId ?? undefined,
+          externalId: externalId ?? undefined,
+        },
+        request.ownerUserId,
+      );
+      if (!status || status.status === "pending") return null;
+      if (status.status === "absent") {
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: status.message,
+        };
+      }
+      return {
+        ok: true,
+        providerCalled: true,
+        externalId: status.mediaId,
+        externalUrl: status.url,
+        publishedAt: new Date(),
+      };
+    },
+
+    async fetchMetrics(request: MetricFetchRequest): Promise<MetricFetchOutcome> {
+      const now = new Date();
+      const window = hourWindow(now);
+      const fetched = await fetchThreadsInsights(request.externalId, request.ownerUserId);
+      if (!fetched.ok) {
+        const errorClass = classifyMetricsHttpFailure(fetched.status, fetched.message);
+        return {
+          ok: false,
+          provider: "threads",
+          retrievedAt: fetched.retrievedAt,
+          observedAt: window.observedAt,
+          measurementWindow: window.window,
+          externalId: request.externalId,
+          normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+          metrics: [],
+          errorClass,
+          errorMessage: fetched.message,
+        };
+      }
+      const source: Record<string, unknown> = { ...fetched.insights };
+      return {
+        ok: true,
+        provider: "threads",
+        retrievedAt: fetched.retrievedAt,
+        observedAt: window.observedAt,
+        measurementWindow: window.window,
+        externalId: request.externalId,
+        normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+        metrics: normalizeProviderMetrics(source, "threads"),
+        unmapped: unmappedThreadsMetrics(fetched.insights),
+      };
+    },
+  };
+}
+
+/**
  * Classify a LinkedIn transport failure. LinkedIn's Posts API is
  * synchronous, so almost every failure is decisive; only a missing
  * configuration is terminal-by-policy and only network-level errors are
@@ -622,8 +810,9 @@ export function resetChannelAdapters(): void {
   registry.clear();
 }
 
-/** Idempotent: registers the Phase-B channel set (X, LinkedIn). */
+/** Idempotent: registers the Phase-B channel set (X, LinkedIn, Threads). */
 export function registerBuiltinChannelAdapters(): void {
   if (!hasChannelAdapter("x")) registerChannelAdapter(createXChannelAdapter());
   if (!hasChannelAdapter("linkedin")) registerChannelAdapter(createLinkedInChannelAdapter());
+  if (!hasChannelAdapter("threads")) registerChannelAdapter(createThreadsChannelAdapter());
 }

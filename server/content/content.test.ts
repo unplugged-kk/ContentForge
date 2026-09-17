@@ -51,8 +51,10 @@ import { publicationIdempotencyKey } from "./scheduling";
 import {
   channelSupportsFormat,
   classifyLinkedInFailure,
+  classifyThreadsFailure,
   classifyXFailure,
   createLinkedInChannelAdapter,
+  createThreadsChannelAdapter,
   createXChannelAdapter,
   registerBuiltinChannelAdapters,
 } from "./adapters";
@@ -253,6 +255,7 @@ describe("opportunity boundary", () => {
     assert.match(String(formatChannelError("video_script", "video_factory")), /no registered adapter/);
     assert.match(String(formatChannelError("x_post", "linkedin")), /cannot target channel/);
     assert.equal(formatChannelError("image", "x"), null, "X now supports the single-image format");
+    assert.equal(formatChannelError("x_post", "threads"), null, "Threads text uses the x_post payload");
     assert.match(String(formatChannelError("carousel", "x")), /cannot target channel/, "carousel delivery is deferred");
 
     const store = memoryStore();
@@ -713,6 +716,17 @@ describe("linkedin channel adapter", () => {
       correlationId: "c",
     });
     assert.equal(outcome, null);
+  });
+});
+
+describe("threads channel adapter", () => {
+  it("declares text formats only and classifies failures", () => {
+    const adapter = createThreadsChannelAdapter();
+    assert.equal(adapter.supports("x_post"), true);
+    assert.equal(adapter.supports("linkedin_post"), true);
+    assert.equal(adapter.supports("carousel"), false);
+    assert.equal(classifyThreadsFailure("THREADS_CONFIG_MISSING"), "policy_human");
+    assert.equal(classifyThreadsFailure("429"), "transient");
   });
 });
 

@@ -18,6 +18,7 @@ export interface MetricFetchRequest {
   externalId: string;
   publicationId: number;
   correlationId: string;
+  ownerUserId?: number | null;
 }
 
 export interface MetricFetchOutcome {
@@ -31,6 +32,11 @@ export interface MetricFetchOutcome {
   metrics: NormalizedMetric[];
   errorClass?: FailureClass;
   errorMessage?: string;
+  /**
+   * Provider metrics with no safe canonical mapping (e.g. Threads `quotes`).
+   * Stored on PerformanceSignal.provenance, never coerced into another metric.
+   */
+  unmapped?: Record<string, number>;
 }
 
 export function notAvailableMetrics(): NormalizedMetric[] {

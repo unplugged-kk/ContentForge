@@ -32,6 +32,9 @@
  *   GET /rest/posts                      LinkedIn Posts API — list by author (reconciliation lookup)
  *   POST /control/linkedin-record-post   {commentary} simulates LinkedIn having actually received a
  *                                        write whose response never reached us (post-hoc discovery)
+ *   POST /control/threads-mode           {mode:"network-fail-publish",matchSubstring} arms the next
+ *                                        POST .../threads_publish whose creation matches the marker
+ *   POST /control/threads-record-media   {id,text} records a published Threads media for listing
  *
  * This file is TEST INFRASTRUCTURE. It is never imported by the application.
  */
@@ -142,17 +145,34 @@ let linkedinUrnSeq = 0;
 /** { commentary, createdAt } — every post LinkedIn "actually received". */
 const linkedinPosts = [];
 
+let threadsMode = "immediate";
+let threadsFailMarker = null;
+let threadsSeq = 0;
+const threadsContainers = new Map();
+const threadsMedia = new Map();
+const threadsListed = [];
+
 /** Read a JSON request body (bounded). */
 function readBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
-      } catch {
-        resolve({});
+      const raw = Buffer.concat(chunks).toString("utf8") || "";
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          resolve(JSON.parse(trimmed || "{}"));
+          return;
+        } catch {
+          /* fall through */
+        }
       }
+      if (raw.includes("=")) {
+        resolve(Object.fromEntries(new URLSearchParams(raw).entries()));
+        return;
+      }
+      resolve({});
     });
   });
 }
@@ -434,6 +454,58 @@ async function handlePost(req, res, url) {
     return res.end();
   }
 
+  if (url.pathname === "/control/threads-mode") {
+    const body = await readBody(req);
+    threadsMode = body.mode === "network-fail-publish" ? "network-fail-publish" : "immediate";
+    threadsFailMarker = threadsMode === "network-fail-publish" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: threadsMode, matchSubstring: threadsFailMarker });
+  }
+
+  if (url.pathname === "/control/threads-record-media") {
+    const body = await readBody(req);
+    threadsListed.push({
+      id: body.id,
+      text: body.text,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.threads.net/post/${body.id}`,
+    });
+    threadsMedia.set(body.id, { text: body.text });
+    return send(200, { ok: true });
+  }
+
+  if (req.method === "POST" && /\/threads$/.test(url.pathname) && !url.pathname.endsWith("/threads_publish")) {
+    const body = await readBody(req);
+    threadsSeq += 1;
+    const id = `c-${RUN}-${threadsSeq}`;
+    threadsContainers.set(id, { text: body.text ?? "", status: "FINISHED" });
+    return send(200, { id });
+  }
+
+  if (url.pathname.endsWith("/threads_publish")) {
+    const body = await readBody(req);
+    const creationId = body.creation_id;
+    const text = threadsContainers.get(creationId)?.text ?? "";
+    const matchesArm =
+      threadsMode === "network-fail-publish" && threadsFailMarker && text.includes(threadsFailMarker);
+    if (matchesArm) {
+      threadsMode = "immediate";
+      threadsFailMarker = null;
+      req.destroy();
+      return;
+    }
+    threadsSeq += 1;
+    const mediaId = `m-${RUN}-${threadsSeq}`;
+    threadsMedia.set(mediaId, { text });
+    threadsListed.push({
+      id: mediaId,
+      text,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.threads.net/post/${mediaId}`,
+    });
+    if (threadsContainers.has(creationId)) threadsContainers.get(creationId).status = "PUBLISHED";
+    return send(200, { id: mediaId });
+  }
+
   return send(404, { error: "not found" });
 }
 
@@ -596,6 +668,51 @@ const server = http.createServer(async (req, res) => {
       createdAt: p.createdAt,
     }));
     return send(200, JSON.stringify({ elements }), "application/json; charset=utf-8");
+  }
+
+  if (url.pathname.endsWith("/insights")) {
+    const parts = url.pathname.split("/").filter(Boolean);
+    const id = parts[parts.length - 2];
+    return send(
+      200,
+      JSON.stringify({
+        data: [
+          { name: "views", values: [{ value: 40 }] },
+          { name: "likes", values: [{ value: 5 }] },
+          { name: "replies", values: [{ value: 2 }] },
+          { name: "reposts", values: [{ value: 1 }] },
+          { name: "quotes", values: [{ value: 3 }] },
+          { name: "shares", values: [{ value: 4 }] },
+        ],
+        id,
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  if (/\/v1\.0\/[^/]+\/threads$/.test(url.pathname)) {
+    return send(200, JSON.stringify({ data: threadsListed }), "application/json; charset=utf-8");
+  }
+
+  if (url.pathname === "/v1.0/me" || url.pathname.endsWith("/me")) {
+    return send(200, JSON.stringify({ id: "cf_e2e_threads", username: "cf_e2e" }), "application/json; charset=utf-8");
+  }
+
+  const threadsNode = url.pathname.match(/^\/v1\.0\/([^/]+)$/);
+  if (threadsNode) {
+    const id = threadsNode[1];
+    if (threadsContainers.has(id)) {
+      const c = threadsContainers.get(id);
+      return send(200, JSON.stringify({ id, status: c.status }), "application/json; charset=utf-8");
+    }
+    if (threadsMedia.has(id)) {
+      const m = threadsMedia.get(id);
+      return send(
+        200,
+        JSON.stringify({ id, text: m.text, permalink: `https://www.threads.net/post/${id}` }),
+        "application/json; charset=utf-8",
+      );
+    }
   }
 
   const writeActionMatch = url.pathname.match(/^\/x\/write-actions\/(.+)$/);

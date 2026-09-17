@@ -57,6 +57,14 @@ const PROFILES: readonly FormatProfile[] = [
     constraints: { maxCharacters: 280, minUnits: 2, maxUnits: 8, sequential: true, hookFirst: true, cta: true },
   },
   {
+    format: "x_post",
+    channel: "threads",
+    guidance:
+      "One compact Threads text post. Lead with a specific hook. No carousel, no video. " +
+      "Stay inside 500 characters (emojis count as UTF-8 bytes). One idea; a concrete takeaway.",
+    constraints: { maxCharacters: 500, maxUnits: 1, cta: false },
+  },
+  {
     format: "linkedin_post",
     channel: "linkedin",
     guidance:

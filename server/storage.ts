@@ -142,6 +142,7 @@ export interface IStorage {
 
   getConnectedAccounts(): Promise<ConnectedAccount[]>;
   getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined>;
+  getConnectedAccountForOwner(platform: string, ownerId: number): Promise<ConnectedAccount | undefined>;
   upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount>;
   deleteConnectedAccount(id: number): Promise<void>;
 }
@@ -581,6 +582,14 @@ export class DatabaseStorage implements IStorage {
     return result ? decryptConnectedAccount(result) : undefined;
   }
 
+  async getConnectedAccountForOwner(platform: string, ownerId: number): Promise<ConnectedAccount | undefined> {
+    const [result] = await db
+      .select()
+      .from(connectedAccounts)
+      .where(and(eq(connectedAccounts.platform, platform), eq(connectedAccounts.userId, ownerId)));
+    return result ? decryptConnectedAccount(result) : undefined;
+  }
+
   async upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount> {
     const encrypted: InsertConnectedAccount = {
       ...account,
@@ -589,11 +598,18 @@ export class DatabaseStorage implements IStorage {
       accessToken: ensureEncrypted(account.accessToken) ?? undefined,
       refreshToken: ensureEncrypted(account.refreshToken) ?? undefined,
     };
-    const existing = await db
-      .select({ id: connectedAccounts.id })
-      .from(connectedAccounts)
-      .where(eq(connectedAccounts.platform, encrypted.platform))
-      .limit(1);
+    const existing =
+      encrypted.userId != null
+        ? await db
+            .select({ id: connectedAccounts.id })
+            .from(connectedAccounts)
+            .where(and(eq(connectedAccounts.platform, encrypted.platform), eq(connectedAccounts.userId, encrypted.userId)))
+            .limit(1)
+        : await db
+            .select({ id: connectedAccounts.id })
+            .from(connectedAccounts)
+            .where(eq(connectedAccounts.platform, encrypted.platform))
+            .limit(1);
     if (existing.length > 0) {
       const [result] = await db
         .update(connectedAccounts)

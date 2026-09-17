@@ -251,6 +251,7 @@ export async function runPublication(
     correlationId: leased.correlationId,
     externalId: leased.externalId,
     media,
+    ownerUserId: leased.userId ?? null,
   });
 
   if (outcome.ok) {
@@ -510,6 +511,7 @@ export async function reconcileUnknownPublications(
       correlationId: leased.correlationId,
       externalId: leased.externalId,
       reconciliationHint,
+      ownerUserId: leased.userId ?? null,
     });
 
     if (outcome === null) {
