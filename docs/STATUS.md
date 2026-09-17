@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-16 (Phase 13) · Branch reviewed: `replit` (implementation landed)
+Last updated: 2026-09-17 (Phase 14) · Branch reviewed: `replit` @ `77132a5` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,18 +13,83 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **376 passed / 0 failed** (86 suites) |
-| `npm test` | **376 passed** |
-| `npm run test:db` (real PostgreSQL) | **161 passed / 0 failed / 0 skipped** (22 suites) |
-| `npm run test:e2e:live` (real running app) | **109 passed / 0 failed** — the FULL suite green in a single run, including all 12 new Phase 13 checks (Paths A–E). Earlier runs in the same session showed the known pre-existing host-timing flakes (Phase 6 LinkedIn reconciliation, Phase 10 post-restart context, Phase B restart recovery) failing on a *different* check each time, with measured **host freezes of 951 s / 915 s / 102 s** inside the waiting windows — those runs are what identified the freezes; the final clean run confirms they were environmental, not regressions. Phase 13's own checks were green on every run |
+| `npm run test:unit` | **388 passed / 0 failed** (90 suites) |
+| `npm test` | **388 passed** |
+| `npm run test:db` (real PostgreSQL) | **172 passed / 0 failed / 0 skipped** (23 suites) |
+| `npm run test:e2e:live` (real running app) | **116 passed / 0 failed** (116 checks) on the verification run after a Phase 14 list-window fix. An earlier same-session run was **113/116**: Path A missed a publication signal because `GET /api/learning/signals` returned only the 50 newest rows (fixed: owner-scoped `publicationId` filter). The other two failures were Phase 10 generation `rate-limited after retries` then a cascade `opportunityId: Required` — they did not reproduce on the clean 116/116 run and match previously documented host/rate-limit noise; assertions were not weakened. Phase 14 Paths A–G including SIGKILL mid-`analytics.refresh` were green on the clean run |
 | `npm run test:e2e:visual` (real running app, visual red arrows) | **14 passed / 0 failed**, unchanged regression |
-| `npm run dev` (tsx/ESM dev runtime — what `.replit` runs) | **boots and serves** (0 errors): migrations apply, job runtime + content scheduler start, real HTTP API responds. See "Dev runtime" below |
-| `npm run build && node dist/index.cjs` (production CJS bundle) | **boots and serves**, unchanged; build emits **0 new warnings** |
-| Fresh DB migration | **17 migrations / 48 tables** from zero (+1: additive `automation_policies` + `automation_runs` + nullable `stories.automation_run_id` + unique index) |
+| `npm run build` (production CJS bundle) | **succeeds**; live E2E boots `dist/index.cjs` |
+| Fresh DB migration | **18 migrations / 50 tables** from zero (+2: additive `performance_signals` + `learning_signals`) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 338 unit / 147 DB / 14-of-14 visual E2E.
+Baseline before this phase: 376 unit / 161 DB / 109 live E2E / 14 visual E2E / 17 migrations / 48 tables.
+
+---
+
+## Analytics + P-8 learning-signal foundation (new in this phase — Phase 14)
+
+**IMPLEMENTED — analytics and learning-signal foundation. Not a fully self-learning system.**
+
+```
+Artifact / lifecycle event / Result
+        │
+        ▼
+typed Signal (edit | approval | publication | performance | derived)
+        │
+        ▼
+LearningSignalStore  (performance_signals + learning_signals)
+        │
+        └── optional bounded counts → ContextAssembly (DATA only, snapshot-frozen)
+```
+
+The pipeline can now observe what happened to content and persist those
+observations. Nothing in this layer autonomously rewrites voice, style,
+ranking, topic selection, or GenerationPolicy. Live analytics never mutate
+`user_profile`, Phase 11 style observations, `memoryJson`, or `brandingJson`.
+
+**Audit.** Legacy `analytics`, `viral_scores`, `getAnalyticsSummary`,
+`syncPostAnalyticsFromX`, and `/api/analytics/*` remain a closed posts-table
+island. They were not wired into Story → Artifact → Publication. Phase 14
+does not generalize them. Publication truth remains `Publication` + `Result`.
+
+**Signals.** Edit (`edit.v1`: length/hook/CTA/formatting deltas, no full-text
+copy), approval (`approval.v1`: rejected / approved_without_edit /
+edited_then_approved / approved_after_multiple_revisions — rejection is a
+user decision, not "bad content"), publication (`publication.v1`: exact
+revision, channel, Publication id, external id), performance (`performance.v1`:
+one snapshot row per metric × observedAt × provider × schema version),
+derived (`learning.v1`: `edit_required`, `approval_clean`,
+`publication_success`, `performance_observed` — evidence, not a quality
+score). Lineage columns walk Artifact → GenerationJob → GenerationPolicy →
+Opportunity → Story (and AutomationRun when present).
+
+**Performance.** Canonical metrics: impressions, likes, comments, shares,
+clicks, saves, replies, followers_gained, engagement_rate. Missing data is
+`availability=not_available` with `value=NULL`, never zero. Snapshots at T1
+and T2 coexist. Identity uniqueness
+`publicationId + metric + observedAt + provider + normalizationVersion` is
+the concurrency arbiter (`onConflictDoNothing`). X maps `public_metrics`
+through `ChannelAdapter.fetchMetrics`; LinkedIn returns `not_available` for
+every metric (no analytics API). Transient 429/5xx/timeout retries via
+pg-boss `analytics.refresh` on the existing scheduler; permanent 401/404
+does not fabricate metrics.
+
+**Analytics.** Descriptive `GET /api/learning/summary` only: published count,
+success/approval rates, edits-before-approval, by channel / format / Story.
+No best-time, no ranking, no causality. HTTP (no UI):
+`/api/learning/signals` (optional `publicationId` / `artifactId` /
+`signalType`), `/signals/:id`, `/publications/:id/performance`,
+`POST …/refresh`, `POST …/observations`, `GET /summary`. Owner-scoped SQL;
+foreign ids 404.
+
+**Context.** Optional bounded signal counts may enter ContextAssembly last,
+labeled DATA, and freeze into `GenerationJob.policySnapshot` like Phase
+10/11. A later metric cannot change a queued job.
+
+**Automation.** Phase 13 is unchanged. Trusted approval and publication use
+the same recorder; `automation_run_id` is lineage, not a separate type.
+Repurposed siblings remain independently measurable.
 
 ---
 
@@ -797,6 +862,10 @@ generated output — immutable revisions via a DB trigger), **VisualProduction**
   Schedule → Publication chain, with a frozen policy snapshot per run, a
   database-arbitrated trigger identity, bounded limits, explicit approval
   modes and partial-success representation — as detailed above.
+- **Analytics + P-8 learning-signal foundation** (this phase, Phase 14):
+  typed durable edit/approval/publication/performance/derived signals,
+  timestamped metric snapshots, ChannelAdapter metric seam, descriptive
+  summaries, optional frozen ContextAssembly counts — as detailed above.
 
 ## Architecturally ready (not built)
 
@@ -804,12 +873,12 @@ Carousel/multi-image publishing (contract already N-capable; X's adapter
 deliberately does not declare support), video/audio modality (capability
 type exists, no provider registers it), additional non-X/non-LinkedIn
 channel adapters (Threads, Instagram), URL/web ingestion expansion,
-`edit_image` production, LinkedIn media, real style analysis (Phase 11) and
-feedback/analytics learning (P-8) against the now-real ContextAssembly seam
-— each is a registration/implementation against an existing seam, not a new
-pipeline. Autonomous topic discovery/ranking is the same shape: the Phase 13
-`triggerType` enum is the seam a future `discover_topics` trigger registers
-against — no ranking, embedding or vector search exists today.
+`edit_image` production, LinkedIn media — each is a registration/implementation
+against an existing seam, not a new pipeline. Autonomous topic
+discovery/ranking remains the same shape: the Phase 13 `triggerType` enum
+is the seam a future `discover_topics` trigger registers against — no
+ranking, embedding or vector search exists today. Phase 14 stored the
+evidence corpus; it does not apply it.
 
 ## Deferred (deliberately, unchanged)
 
@@ -817,11 +886,10 @@ against — no ranking, embedding or vector search exists today.
   pre-existing style rows; analyzing new ones is Phase 11); all
   authoring/editing **UI**.
 - Second Brain's full learning/personalization loop — the context
-  *foundation* is implemented (Phase 10); feedback/analytics-driven learning
-  is not.
+  *foundation* is implemented (Phase 10); Phase 14 records learning
+  signals but does **not** automatically apply them to generation.
 - Threads / Instagram and other non-X/non-LinkedIn publishing; LinkedIn
   media/articles/video/comments beyond the single text-post format.
-- Analytics metric mappers.
 - last30days and Agent-Reach (behind the `SourceProvider` seam).
 - Billing, subscriptions, collaboration, notifications, large UI work.
 - Video Factory rendering or integration of any kind.
@@ -831,8 +899,9 @@ against — no ranking, embedding or vector search exists today.
 - **Automation scope** (Phase 13, explicit): autonomous topic discovery and
   opaque ranking/selection; unconstrained "autopilot" and unrestricted
   auto-publishing (the `on_approval` mode exists and is proven, but is never
-  the default and requires a declared trusted approval mode); analytics-driven
-  learning and automatic style drift/re-analysis; model-written Story
+  the   default and requires a declared trusted approval mode); automatic
+  application of learning signals, automatic style drift/re-analysis;
+  model-written Story
   synthesis (the first path is deterministic and bounded on purpose);
   notifications (email/SMS/push); an automation UI; automation of image/
   carousel/video generation and video publishing; additional social channels;
@@ -842,7 +911,22 @@ against — no ranking, embedding or vector search exists today.
 
 ## Live E2E red arrows observed (real app, real Postgres, real pg-boss)
 
-- **Automation / autopilot foundation** (new, Phase 13 — `test:e2e:live`,
+- **Analytics + P-8 learning loop** (new, Phase 14 — `test:e2e:live`, 7/7
+  Paths A–G on the clean 116/116 run):
+  - **Path A** — published Artifact Result → sync metric refresh against the
+    fixture X analytics endpoint → performance snapshots + publication and
+    performance learning signals for that Publication (queried by
+    `publicationId`).
+  - **Path B** — human edit creates a new Artifact revision and an edit
+    signal.
+  - **Path C** — approve after edit records `edited_then_approved`.
+  - **Path D** — repeated operator observations collapse (`created>0` then
+    `created=0`); `not_available` clicks stay `value=null`.
+  - **Path E** — `GET /api/learning/summary` `publishedCount` matches SQL.
+  - **Path F** — foreign signal/publication ids 404.
+  - **Path G** — enqueue `analytics.refresh`, real SIGKILL, restart, snapshot
+    count does not drop or duplicate the same logical measurement.
+- **Automation / autopilot foundation** (Phase 13 — `test:e2e:live`,
   12/12 new checks green across two consecutive full runs):
   - **Path A/B** — `POST /api/automation/policies` → `…/run` creates ONE durable
     run freezing policy v1, and the real workers carry it through
@@ -949,6 +1033,12 @@ against — no ranking, embedding or vector search exists today.
 
 ## Known limitations
 
+- **Analytics (Phase 14)**: LinkedIn has no analytics API in this
+  environment — every LinkedIn metric is stored as `not_available`, never
+  zero. X metrics are fixture-backed in E2E; live X public_metrics require
+  a configured xQuick analytics endpoint. Derived signals are evidence
+  labels, not quality scores. Descriptive summaries are not causal. Learning
+  signals do not rewrite GenerationPolicy, style, or profile.
 - **Automation (Phase 13)**: a scheduled policy runs its *most recent* due slot
   — missed slots are deliberately not backfilled (a policy is not a backfill
   engine). Story synthesis is deterministic (policy name + research query +
@@ -990,13 +1080,15 @@ against — no ranking, embedding or vector search exists today.
 
 ## Deferred (deliberately, unchanged)
 
-Second Brain's full learning/personalization loop (the context *foundation*
-is implemented as of Phase 10 — see above), voice style analysis of real
-posts, all authoring UI, Threads / Instagram publishing, LinkedIn media/
-articles/video/comments, billing, collaboration, notifications, analytics
-metric mappers, full iCalendar/RRULE recurrence.
+Automatic style mutation / drift / re-analysis, autonomous ranking, topic
+recommendation, best-time intelligence, automatic personalization of profile /
+memoryJson / brandingJson, analytics UI / workspace, Chrome extension,
+additional channels, visual automation, vector search / embeddings,
+unrestricted autopilot, all authoring UI, Threads / Instagram publishing,
+LinkedIn media/articles/video/comments, billing, collaboration, notifications,
+full iCalendar/RRULE recurrence.
 
 ## Next boundary
 
-Not decided here. The next implementation phase is selected externally after
-review of this status.
+Not decided here. Phase 15 is not started. The next implementation phase is
+selected externally after review of this status.
