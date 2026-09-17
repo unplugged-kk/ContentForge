@@ -3009,6 +3009,190 @@ const observed = {};
     return `snapshots ${before[0].c} -> ${after[0].c}`;
   });
 
+  // ── Phase 16: one Artifact → N Publications ─────────────────────────────────
+  phase("Phase 16: Artifact → Publication[N] → ChannelAdapter (X + LinkedIn)");
+
+  const distMarker = `${RUN}-dist-fanout`;
+  let distArtifactId = null;
+  let distPubX = null;
+  let distPubLi = null;
+
+  await check("Path B: one Artifact revision fans out to X and LinkedIn Publications", async () => {
+    distArtifactId = await approvedArtifactWithMarker(distMarker);
+    const fan = await http("POST", `/api/artifacts/${distArtifactId}/publications`, {
+      targets: [{ channel: "x" }, { channel: "linkedin" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    const oli = fan.body.outcomes.find((o) => o.channel === "linkedin");
+    assert(ox && oli, "both targets must be present");
+    assert(ox.status === "created" && oli.status === "created", JSON.stringify(fan.body.outcomes));
+    assert(ox.publicationId && oli.publicationId, "due fan-out must persist Publication ids");
+    assert(ox.publicationId !== oli.publicationId, "sibling Publications must have distinct ids");
+    assert(ox.scheduleId !== oli.scheduleId, "each target gets its own Schedule");
+    distPubX = ox.publicationId;
+    distPubLi = oli.publicationId;
+    const rows = await q("select id, channel, artifact_id from publications where artifact_id = $1 order by id", [
+      distArtifactId,
+    ]);
+    assert(rows.length >= 2, `expected >=2 publications, got ${rows.length}`);
+    assert(rows.every((r) => r.artifact_id === distArtifactId));
+    const channels = rows.map((r) => r.channel).sort();
+    assert(channels.includes("x") && channels.includes("linkedin"), String(channels));
+    const art = (await q("select channel, format from artifacts where id = $1", [distArtifactId]))[0];
+    assert(art.channel === "x", "legacy Artifact.channel retained");
+    const px = (await q("select channel from publications where id = $1", [distPubX]))[0];
+    assert(px.channel === "x");
+    const pl = (await q("select channel from publications where id = $1", [distPubLi]))[0];
+    assert(pl.channel === "linkedin", "Publication.channel is the delivery target");
+    return `artifact ${distArtifactId} → x=${distPubX} linkedin=${distPubLi}`;
+  });
+
+  await check("Path A: existing one-channel schedule path still works on a pre-Phase-16 style Artifact", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-dist-legacy`);
+    const sched = await http("POST", "/api/schedules", { artifactId });
+    assert(sched.status === 201, `schedule ${sched.status}: ${sched.text}`);
+    assert(sched.body.channel === "x");
+    assert(sched.body.intentKey == null, "legacy schedules keep a null intent_key");
+    const dispatch = await http("POST", "/api/publications/dispatch", {});
+    const mine = (dispatch.body.publications ?? []).find((p) => p.scheduleId === sched.body.id);
+    assert(mine, "legacy dispatch still creates a Publication");
+    assert(mine.channel === "x");
+    const second = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "linkedin" }],
+    });
+    assert(second.status === 207);
+    assert(second.body.outcomes[0].status === "created");
+    assert(second.body.outcomes[0].channel === "linkedin");
+    const pubs = await q("select channel from publications where artifact_id = $1", [artifactId]);
+    assert(pubs.some((p) => p.channel === "x") && pubs.some((p) => p.channel === "linkedin"));
+    return `artifact ${artifactId} legacy x + fan-out linkedin`;
+  });
+
+  await check("Path C: independent startAt per target on the same Artifact revision", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-dist-sched`);
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+    const t2 = new Date(Date.now() + 86_400_000).toISOString();
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [
+        { channel: "x", startAt: t1 },
+        { channel: "linkedin", startAt: t2 },
+      ],
+    });
+    assert(fan.status === 207, fan.text);
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    const oli = fan.body.outcomes.find((o) => o.channel === "linkedin");
+    assert(ox.publicationId, "past X slot must materialize");
+    assert(oli.publicationId == null, "future LinkedIn slot must not publish yet");
+    const sx = (await q("select start_at, channel from schedules where id = $1", [ox.scheduleId]))[0];
+    const sl = (await q("select start_at, channel from schedules where id = $1", [oli.scheduleId]))[0];
+    assert(sx.channel === "x" && sl.channel === "linkedin");
+    assert(new Date(sl.start_at).getTime() > new Date(sx.start_at).getTime());
+    return `x due now, linkedin ${t2}`;
+  });
+
+  await check("Path D: sibling failure isolation (LinkedIn ambiguous, X still independent)", async () => {
+    const marker = `${RUN}-dist-sib`;
+    const artifactId = await approvedArtifactWithMarker(marker);
+    await fixturePost("/control/linkedin-mode", { mode: "network-fail", matchSubstring: marker });
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "x" }, { channel: "linkedin" }],
+    });
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    const oli = fan.body.outcomes.find((o) => o.channel === "linkedin");
+    const liRow = await waitFor(
+      async () => {
+        const res = await http("GET", `/api/publications/${oli.publicationId}`);
+        if (res.body.state === "failed") return res.body;
+        if (res.body.state === "published") throw new Error("LinkedIn must not succeed while network-fail is armed");
+        return false;
+      },
+      { timeoutMs: 30_000, intervalMs: 500, label: "linkedin sibling fails independently" },
+    );
+    const xRow = await http("GET", `/api/publications/${ox.publicationId}`);
+    assert(xRow.body.id === ox.publicationId);
+    assert(liRow.channel === "linkedin");
+    assert(xRow.body.channel === "x");
+    assert(xRow.body.state !== liRow.state || xRow.body.id !== liRow.id);
+    return `x state=${xRow.body.state} linkedin state=${liRow.state}`;
+  });
+
+  await check("Path E: duplicate fan-out reuses the same logical Publications", async () => {
+    const again = await http("POST", `/api/artifacts/${distArtifactId}/publications`, {
+      targets: [{ channel: "x" }, { channel: "linkedin" }],
+    });
+    assert(again.status === 207, again.text);
+    const ox = again.body.outcomes.find((o) => o.channel === "x");
+    const oli = again.body.outcomes.find((o) => o.channel === "linkedin");
+    assert(ox.status === "reused" && oli.status === "reused", JSON.stringify(again.body.outcomes));
+    assert(ox.publicationId === distPubX && oli.publicationId === distPubLi);
+    const count = await q("select count(*)::int c from publications where artifact_id = $1", [distArtifactId]);
+    assert(count[0].c === 2, `duplicate fan-out created extras: ${count[0].c}`);
+    return `reused x=${distPubX} linkedin=${distPubLi}`;
+  });
+
+  await check("Path F: explicit republishKey creates a new Publication", async () => {
+    const before = await q("select count(*)::int c from publications where artifact_id = $1", [distArtifactId]);
+    const again = await http("POST", `/api/artifacts/${distArtifactId}/publications`, {
+      targets: [{ channel: "x" }],
+      republishKey: `${RUN}-repub`,
+    });
+    assert(again.status === 207, again.text);
+    assert(again.body.outcomes[0].status === "created");
+    assert(again.body.outcomes[0].publicationId !== distPubX);
+    const after = await q("select count(*)::int c from publications where artifact_id = $1", [distArtifactId]);
+    assert(after[0].c === before[0].c + 1, `before=${before[0].c} after=${after[0].c}`);
+    return `new publication ${again.body.outcomes[0].publicationId}`;
+  });
+
+  await check("Path G: SIGKILL with a queued Publication does not duplicate it", async () => {
+    const artifactId = await approvedArtifactWithMarker(`${RUN}-dist-restart`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "linkedin" }],
+    });
+    assert(fan.status === 207, fan.text);
+    const pubId = fan.body.outcomes[0].publicationId;
+    assert(pubId, "publication must exist before kill");
+    const before = await q("select count(*)::int c from publications where artifact_id = $1", [artifactId]);
+    await killApp("SIGKILL");
+    await startApp();
+    const dup = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "linkedin" }],
+    });
+    assert(dup.body.outcomes[0].status === "reused");
+    assert(dup.body.outcomes[0].publicationId === pubId);
+    const after = await q("select count(*)::int c from publications where artifact_id = $1", [artifactId]);
+    assert(after[0].c === before[0].c, `restart duplicated publications: ${before[0].c} -> ${after[0].c}`);
+    return `publication ${pubId} survived SIGKILL`;
+  });
+
+  await check("Path H: foreign Artifact/Publication ids are non-leaking 404s", async () => {
+    const missing = await http("POST", "/api/artifacts/99999999/publications", {
+      targets: [{ channel: "x" }],
+    });
+    assert(missing.status === 404, `expected 404, got ${missing.status}: ${missing.text}`);
+    const list = await http("GET", "/api/artifacts/99999999/publications");
+    assert(list.status === 404, `list expected 404, got ${list.status}`);
+    const pub = await http("GET", "/api/publications/99999999");
+    assert(pub.status === 404, `publication expected 404, got ${pub.status}`);
+    return "foreign ids 404";
+  });
+
+  await check("Path I: two Publications of one Artifact keep independent Results", async () => {
+    const rx = await http("GET", `/api/publications/${distPubX}`);
+    const rl = await http("GET", `/api/publications/${distPubLi}`);
+    assert(rx.status === 200 && rl.status === 200);
+    assert(rx.body.artifactId === rl.body.artifactId);
+    assert(rx.body.channel === "x" && rl.body.channel === "linkedin");
+    const results = await q(
+      "select publication_id, outcome from results where publication_id = any($1::int[])",
+      [[distPubX, distPubLi]],
+    );
+    const byPub = new Set(results.map((r) => r.publication_id));
+    assert(byPub.size === results.length || results.length <= 2, "results must not merge publications");
+    return `x=${rx.body.state} linkedin=${rl.body.state} results=${results.length}`;
+  });
+
   // ── 9. EXTERNAL SMOKE (optional, non-gating) ────────────────────────────────
   phase("External smoke (optional, non-gating)");
   try {

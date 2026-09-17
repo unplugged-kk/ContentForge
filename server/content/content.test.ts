@@ -609,7 +609,11 @@ describe("x channel adapter", () => {
     assert.equal(adapter.supports("image"), true, "Phase 7: single-image delivery");
     assert.equal(adapter.supports("thumbnail"), true, "thumbnail shares the single-image mechanic");
     assert.equal(adapter.supports("carousel"), false, "multi-media delivery is deferred");
-    assert.equal(adapter.supports("linkedin_post"), false);
+    assert.equal(
+      adapter.supports("linkedin_post"),
+      true,
+      "compatible { text } payload can be delivered on X without cloning the Artifact",
+    );
   });
 
   it("refuses a visual format with no resolved media without invoking the transport", async () => {
@@ -629,7 +633,7 @@ describe("x channel adapter", () => {
   it("refuses an unsupported format without invoking the transport", async () => {
     const adapter = createXChannelAdapter();
     const outcome = await adapter.publish({
-      format: "linkedin_post",
+      format: "carousel",
       channel: "x",
       payload: {},
       correlationId: "c",
@@ -655,13 +659,19 @@ describe("linkedin channel adapter", () => {
   it("declares exactly the formats it can publish", () => {
     const adapter = createLinkedInChannelAdapter();
     assert.equal(adapter.supports("linkedin_post"), true);
-    assert.equal(adapter.supports("x_post"), false);
+    assert.equal(
+      adapter.supports("x_post"),
+      true,
+      "compatible { text } payload can be delivered on LinkedIn without cloning the Artifact",
+    );
+    assert.equal(adapter.supports("x_thread"), false);
+    assert.equal(adapter.supports("image"), false);
   });
 
   it("refuses an unsupported format without invoking the transport", async () => {
     const adapter = createLinkedInChannelAdapter();
     const outcome = await adapter.publish({
-      format: "x_post",
+      format: "x_thread",
       channel: "linkedin",
       payload: {},
       correlationId: "c",
@@ -781,6 +791,33 @@ describe("publication boundary", () => {
     assert.equal(record.externalId, "tweet-1");
     assert.equal(results.length, 1);
     assert.equal(results[0].outcome, "published");
+  });
+
+  it("selects the adapter from Publication.channel, not Artifact.channel", async () => {
+    const { record, deps } = publicationStore({ channel: "linkedin" });
+    const seen: string[] = [];
+    deps.adapterFor = (channel) => {
+      seen.push(channel);
+      return {
+        channel,
+        supports: () => true,
+        publish: async (request) => {
+          seen.push(`payload:${request.channel}`);
+          return {
+            ok: true,
+            providerCalled: true,
+            externalId: "urn:li:share:1",
+            externalUrl: null,
+            publishedAt: new Date(),
+          };
+        },
+        reconcile: async () => null,
+      };
+    };
+    const result = await runPublication(record.id, deps);
+    assert.equal(result.status, "published");
+    assert.equal(seen[0], "linkedin");
+    assert.equal(seen[1], "payload:linkedin");
   });
 
   it("is idempotent: an already-published publication is a no-op", async () => {

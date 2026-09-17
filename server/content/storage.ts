@@ -110,6 +110,7 @@ export interface InsertScheduleRow {
   userId?: number | null;
   artifactId: number;
   channel: string;
+  intentKey?: string | null;
   recurrence: string | null;
   timezone: string;
   count: number;
@@ -334,6 +335,7 @@ export interface ContentStoragePort {
 
   insertArtifact(row: InsertArtifactRow): Promise<Artifact>;
   getArtifact(id: number): Promise<Artifact | undefined>;
+  getArtifactForOwner(id: number, ownerId: number): Promise<Artifact | undefined>;
   getArtifactByGenerationJob(generationJobId: number): Promise<Artifact | undefined>;
   listArtifactsByOpportunity(opportunityId: number): Promise<Artifact[]>;
   setArtifactReadiness(
@@ -347,7 +349,9 @@ export interface ContentStoragePort {
   ): Promise<Artifact[]>;
 
   insertSchedule(row: InsertScheduleRow): Promise<Schedule>;
+  claimSchedule(row: InsertScheduleRow): Promise<{ schedule: Schedule; created: boolean }>;
   getSchedule(id: number): Promise<Schedule | undefined>;
+  getScheduleByIntentKey(intentKey: string): Promise<Schedule | undefined>;
   listSchedulesByArtifact(artifactId: number): Promise<Schedule[]>;
   listActiveSchedules(now: Date, limit: number): Promise<Schedule[]>;
   setScheduleStatus(id: number, status: string): Promise<void>;
@@ -364,6 +368,8 @@ export interface ContentStoragePort {
 
   claimPublication(row: InsertPublicationRow): Promise<ClaimPublicationResult>;
   getPublication(id: number): Promise<Publication | undefined>;
+  getPublicationForOwner(id: number, ownerId: number): Promise<Publication | undefined>;
+  listPublicationsByArtifact(artifactId: number): Promise<Publication[]>;
   acquirePublicationLease(
     id: number,
     owner: string,
@@ -987,6 +993,15 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return row;
   }
 
+  async getArtifactForOwner(id: number, ownerId: number): Promise<Artifact | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(artifacts)
+      .where(and(eq(artifacts.id, id), eq(artifacts.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
   async getArtifactByGenerationJob(generationJobId: number): Promise<Artifact | undefined> {
     const [row] = await this.database
       .select()
@@ -1030,8 +1045,56 @@ export class DatabaseContentStorage implements ContentStoragePort {
 
   // ── Schedule / Occurrence ───────────────────────────────────────────────────
   async insertSchedule(row: InsertScheduleRow): Promise<Schedule> {
-    const [inserted] = await this.database.insert(schedules).values(row).returning();
+    const [inserted] = await this.database
+      .insert(schedules)
+      .values({
+        userId: row.userId ?? null,
+        artifactId: row.artifactId,
+        channel: row.channel,
+        intentKey: row.intentKey ?? null,
+        recurrence: row.recurrence,
+        timezone: row.timezone,
+        count: row.count,
+        startAt: row.startAt,
+      })
+      .returning();
     return inserted;
+  }
+
+  async claimSchedule(row: InsertScheduleRow): Promise<{ schedule: Schedule; created: boolean }> {
+    if (!row.intentKey) {
+      return { schedule: await this.insertSchedule(row), created: true };
+    }
+    const inserted = await this.database
+      .insert(schedules)
+      .values({
+        userId: row.userId ?? null,
+        artifactId: row.artifactId,
+        channel: row.channel,
+        intentKey: row.intentKey,
+        recurrence: row.recurrence,
+        timezone: row.timezone,
+        count: row.count,
+        startAt: row.startAt,
+      })
+      .onConflictDoNothing({ target: schedules.intentKey })
+      .returning();
+    if (inserted.length > 0) return { schedule: inserted[0], created: true };
+    const [existing] = await this.database
+      .select()
+      .from(schedules)
+      .where(eq(schedules.intentKey, row.intentKey))
+      .limit(1);
+    return { schedule: existing, created: false };
+  }
+
+  async getScheduleByIntentKey(intentKey: string): Promise<Schedule | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(schedules)
+      .where(eq(schedules.intentKey, intentKey))
+      .limit(1);
+    return row;
   }
 
   async getSchedule(id: number): Promise<Schedule | undefined> {
@@ -1186,6 +1249,23 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(eq(publications.id, id))
       .limit(1);
     return row;
+  }
+
+  async getPublicationForOwner(id: number, ownerId: number): Promise<Publication | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(publications)
+      .where(and(eq(publications.id, id), eq(publications.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
+  async listPublicationsByArtifact(artifactId: number): Promise<Publication[]> {
+    return this.database
+      .select()
+      .from(publications)
+      .where(eq(publications.artifactId, artifactId))
+      .orderBy(asc(publications.id));
   }
 
   /**

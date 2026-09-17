@@ -370,6 +370,107 @@ Assertions were not weakened.
 - Real vendor network image generation: **PARTIALLY IMPLEMENTED** (provider code + double tests; live OpenRouter model 404).
 - Video/audio generation, visual autopilot, UI: **DEFERRED**.
 
+## Phase 16 — multi-channel distribution generalization (done)
+
+**The problem this closes**: Artifact still *looked* like the publication
+target. `createSchedule` copied `artifact.channel` onto the Schedule, so one
+revision could not be delivered to both X and LinkedIn without cloning the
+Artifact. Generation already distinguished format×channel, but distribution
+did not. This phase separates **content revision** from **delivery intent**
+without a second publication system.
+
+```
+Artifact revision (immutable; format + payload)
+        ├──────────→ Publication(X)  → Schedule/Occurrence → X ChannelAdapter → Result
+        └──────────→ Publication(LinkedIn) → Schedule/Occurrence → LinkedIn ChannelAdapter → Result
+```
+
+Lifecycle remains:
+
+`Artifact → approval → Schedule → Occurrence → Publication → Result`
+
+**Artifact vs Publication.** Artifact identity is the authored revision.
+Publication identity is (exact Artifact revision × Schedule/Occurrence ×
+channel). `Publication.channel` is the authoritative delivery target at
+`runPublication` / reconciliation (`adapterFor(leased.channel)`).
+`Artifact.channel` is retained as historical generation origin and is never
+consulted for dispatch.
+
+**Format vs channel.** Format = what the content is (`x_post`, `linkedin_post`,
+`x_thread`, `image`, …). Channel = where it is published (`x`, `linkedin`).
+No new cosmetic format was added. Compatible `{ text }` payloads
+(`x_post` / `linkedin_post`) are delivered by both adapters. Generation still
+requires a format profile (`formatChannelError` = `hasFormatProfile` AND
+`channelSupportsFormat`). Distribution uses `channelSupportsFormat` only.
+Incompatible pairs (e.g. `x_thread` → LinkedIn, `image` → LinkedIn, carousel)
+are rejected at the target boundary. Registry remains the only matrix.
+
+**Fan-out.** `publishArtifactToChannels(artifactRevisionId, targets[])` creates
+one independent Schedule per target (and a due Publication via the existing
+dispatcher). No `DistributionBatch` / `CrossPostArtifact`. HTTP:
+`POST /api/artifacts/:id/publications` `{ targets: [{ channel }], republishKey? }`
+returns per-target `scheduleId` / `publicationId`. Never publishes inline.
+
+**Idempotency.** Logical identity is
+`dist:{artifactId}:{channel}:{startAt|asap}:{count}:{recurrence|once}:{nonce}`.
+`schedules.intent_key` UNIQUE is the concurrency arbiter (`claimSchedule`
+`ON CONFLICT DO NOTHING`). Duplicate fan-out reuses the Schedule/Publication.
+`republishKey` (or per-target `republishKey`) is explicit republish → new
+intent. Legacy `POST /api/schedules` omits `intent_key` and always inserts
+(pre-Phase-16 one-channel path).
+
+**Delivery snapshot.** Publication already pins `artifactId` (exact revision)
++ `channel` + `idempotencyKey`. Adapters transform payload in memory (X 280
+slicing, LinkedIn commentary); they never mutate the Artifact. No extra
+payload blob on Publication rows; media remains VisualAsset ids.
+
+**Scheduling.** One Schedule/Occurrence chain per Publication target.
+Independent `startAt`. Sibling status is not shared.
+
+**Approval.** Artifact readiness remains canonical. A Publication may only be
+created for an `approved` revision. There is no per-channel approval state.
+
+**Reconciliation / analytics.** Unchanged Phase 5/14 mechanics, keyed by
+Publication id. X unknown vs LinkedIn queued is isolated. Results and
+performance signals stay publication-specific.
+
+**X / LinkedIn matrix (this phase).**
+
+| Format | X | LinkedIn |
+|---|---|---|
+| `x_post` | yes | yes (compatible text) |
+| `linkedin_post` | yes (compatible text) | yes |
+| `x_thread` | yes | no |
+| `image` / `thumbnail` | yes | no |
+| `carousel` | no | no |
+
+No Threads, Instagram, YouTube, TikTok, Bluesky.
+
+**Automation / repurposing.** Phase 13 still calls `createSchedule` (legacy
+one-channel). An automation-produced Artifact can then be fanned out through
+the same `publishArtifactToChannels`. Phase 12 Opportunities remain a
+different axis (different content, not different channels of one revision).
+
+**Ownership.** `getArtifactForOwner` SQL filter. Foreign Artifact fan-out is
+the same 404 as missing. Publication GET is owner-scoped.
+
+**HTTP (no UI):** `POST /api/artifacts/:id/publications`,
+`GET /api/artifacts/:id/publications`, optional `channel` on `POST /api/schedules`.
+`GET /api/channels` lists the adapter registry (`linkedin` + `x`).
+
+**Verification:** unit 403/403; real Postgres 189/189; visual live E2E 19/19;
+live HTTP E2E **125/125** (Phase 16 Paths A–I all green, including SIGKILL);
+migration `0019_distribution_fanout.sql` (additive `schedules.intent_key` + unique
+index). Fresh migrate: 50 tables / 20 migrations. No assertions were weakened.
+
+**Status labels**:
+- Artifact vs Publication distinct semantics: **IMPLEMENTED**.
+- One Artifact revision → N Publications (X + LinkedIn): **IMPLEMENTED**.
+- Publication.channel authoritative at execution: **IMPLEMENTED**.
+- Idempotent fan-out + explicit republish: **IMPLEMENTED**.
+- Independent schedules / isolated failure / per-Publication reconciliation: **IMPLEMENTED**.
+- New channels / carousel publish / UI / Chrome: **DEFERRED**.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

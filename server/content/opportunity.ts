@@ -15,6 +15,7 @@ import type { Opportunity, Story } from "@shared/schema";
 import type { OpportunityStatus } from "@shared/schema";
 import type { ContentStoragePort } from "./storage";
 import { channelSupportsFormat, hasChannelAdapter } from "./adapters";
+import { hasFormatProfile } from "./formatProfiles";
 
 /** Read/write surface this boundary needs from the Story domain. */
 export interface StoryPort {
@@ -29,16 +30,16 @@ export interface OpportunityDeps {
 }
 
 /**
- * Validity for known format × channel pairs. The REGISTERED channel adapter is
- * the single source of truth: a pair is valid only if an adapter is registered
- * for the channel and it declares support for the format. There is no separate
- * hand-maintained allowlist to drift.
+ * Generation pairs require a format profile AND a registered adapter that can
+ * deliver the format. Distribution of an existing Artifact to another channel
+ * is a Publication concern (`channelSupportsFormat` only) and does not require
+ * a generation profile. There is no hand-maintained allowlist.
  */
 export function formatChannelError(format: string, channel: string): string | null {
   if (!hasChannelAdapter(channel)) {
     return `channel "${channel}" has no registered adapter`;
   }
-  if (!channelSupportsFormat(channel, format)) {
+  if (!hasFormatProfile(format, channel) || !channelSupportsFormat(channel, format)) {
     return `format "${format}" cannot target channel "${channel}" (the ${channel} adapter does not support it)`;
   }
   return null;

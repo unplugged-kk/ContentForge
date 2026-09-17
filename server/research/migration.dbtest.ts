@@ -92,7 +92,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 19, "all nineteen migrations recorded");
+      assert.equal(await migrationCount(pool), 20, "all twenty migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -199,12 +199,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0018 without a db:push.
+      // The forward migration must apply 0003-0019 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 19, "0003-0018 recorded after upgrade");
+      assert.equal(await migrationCount(pool), 20, "0003-0019 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -213,6 +213,12 @@ describeDb("migration chain (db)", () => {
       assert.ok(tables.includes("automation_runs"), "0016 table created on the upgrade path");
       assert.ok(tables.includes("learning_signals"), "0017 table created on the upgrade path");
       assert.ok(tables.includes("performance_signals"), "0017 table created on the upgrade path");
+
+      const intentCol = await pool.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+          where table_name = 'schedules' and column_name = 'intent_key'`,
+      );
+      assert.equal(intentCol.rows.length, 1, "0019 adds schedules.intent_key");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

@@ -140,11 +140,13 @@ export function classifyXFailure(message: string): AdapterFailureClass {
  */
 export function createXChannelAdapter(): ChannelAdapter {
   // image/thumbnail are single-image formats; carousel (multi-media) is
-  // deliberately NOT supported by this transport yet.
-  const supported = new Set(["x_post", "x_thread", "image", "thumbnail"]);
+  // deliberately NOT supported by this transport yet. `linkedin_post` shares
+  // the `{ text }` payload with `x_post` so an existing Artifact can be
+  // delivered on X without cloning the revision.
+  const supported = new Set(["x_post", "x_thread", "image", "thumbnail", "linkedin_post"]);
 
   function unitsFor(format: string, payload: JsonRecord): string[] | null {
-    if (format === "x_post") {
+    if (format === "x_post" || format === "linkedin_post") {
       const text = typeof payload.text === "string" ? payload.text : null;
       return text ? [text] : null;
     }
@@ -473,10 +475,11 @@ export function classifyLinkedInFailure(message: string): AdapterFailureClass {
  *     terminal safety net), never blindly retried forever.
  */
 export function createLinkedInChannelAdapter(): ChannelAdapter {
-  const supported = new Set(["linkedin_post"]);
+  // `x_post` is the same `{ text }` payload family as `linkedin_post`.
+  const supported = new Set(["linkedin_post", "x_post"]);
 
   function textFor(format: string, payload: JsonRecord): string | null {
-    if (format !== "linkedin_post") return null;
+    if (format !== "linkedin_post" && format !== "x_post") return null;
     const text = typeof payload.text === "string" ? payload.text : null;
     return text && text.trim().length > 0 ? text : null;
   }
@@ -600,9 +603,9 @@ export function getChannelAdapter(channel: string): ChannelAdapter {
 }
 
 /**
- * The single authoritative `(format, channel)` distributability decision. Both
- * Opportunity validity and Schedule creation consult this — never a second,
- * hand-maintained allowlist that can drift from the adapter's real capability.
+ * The single authoritative `(format, channel)` distributability decision.
+ * Generation still also requires a format profile (`formatChannelError`).
+ * Distribution of an existing Artifact uses this function only.
  */
 export function channelSupportsFormat(channel: string, format: string): boolean {
   const adapter = registry.get(channel);

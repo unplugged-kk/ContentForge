@@ -181,6 +181,19 @@ export {
 } from "./scheduling";
 
 export {
+  distributionIntentKey,
+  publishArtifactToChannels,
+  publishArtifactToChannelsSchema,
+  publicationTargetSchema,
+  DistributionInputError,
+  type DistributionDeps,
+  type DistributionResult,
+  type DistributionTargetOutcome,
+  type PublishArtifactToChannelsInput,
+  type PublicationTargetInput,
+} from "./distribution";
+
+export {
   MAX_RECONCILE_ATTEMPTS,
   MediaResolutionError,
   reconcileStalePublications,

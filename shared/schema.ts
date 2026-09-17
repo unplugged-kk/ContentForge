@@ -1001,6 +1001,12 @@ export const schedules = pgTable(
     /** Pinned to an exact immutable Artifact revision. */
     artifactId: integer("artifact_id").notNull().references(() => artifacts.id),
     channel: varchar("channel", { length: 50 }).notNull(),
+    /**
+     * Durable fan-out identity (Phase 16). Null on pre-Phase-16 / legacy
+     * one-channel schedules. UNIQUE is the concurrency arbiter for
+     * Artifact×channel distribution intents.
+     */
+    intentKey: varchar("intent_key", { length: 300 }),
     /** RRULE/cron string. A one-shot may use a plain ISO timestamp in `startAt`. */
     recurrence: varchar("recurrence", { length: 200 }),
     timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
@@ -1018,6 +1024,7 @@ export const schedules = pgTable(
     index("schedules_status_idx").on(table.status),
     /** Drives the scheduler's due-schedule scan (status + start_at). */
     index("schedules_due_idx").on(table.status, table.startAt),
+    uniqueIndex("schedules_intent_key_uq").on(table.intentKey),
   ],
 );
 

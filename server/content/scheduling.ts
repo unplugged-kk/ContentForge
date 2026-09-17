@@ -73,6 +73,17 @@ export const createScheduleSchema = z.object({
   timezone: z.string().trim().min(1).max(64).default("UTC"),
   count: z.number().int().positive().max(1000).default(1),
   recurrence: z.string().trim().min(1).max(200).optional(),
+  /**
+   * Delivery channel for this Schedule. When omitted, legacy one-channel
+   * behaviour copies Artifact.channel. Publication.channel (copied from the
+   * Schedule at dispatch) is the authoritative publish target.
+   */
+  channel: z.string().trim().min(1).max(50).optional(),
+  /**
+   * Durable fan-out identity. When set, `claimSchedule` uniqueness is the
+   * concurrency arbiter. Legacy POST /schedules omits this and always inserts.
+   */
+  intentKey: z.string().trim().min(1).max(300).optional(),
 });
 
 export type CreateScheduleInput = z.input<typeof createScheduleSchema>;
@@ -159,26 +170,32 @@ export async function createSchedule(
     throw new ArtifactNotSchedulableError(artifactId, artifact.readiness);
   }
 
-  // A scheduled pipeline must be distributable: reject a pair no registered
-  // adapter can actually publish BEFORE creating a Schedule/Occurrence/
-  // Publication that could only ever fail. The adapter registry is the single
-  // authority (see `channelSupportsFormat`).
-  if (!channelSupportsFormat(artifact.channel, artifact.format)) {
+  // Delivery target is the Schedule/Publication channel, not Artifact.channel.
+  // Artifact.channel remains historical (generation origin). Adapter registry
+  // is the single distributability authority (`channelSupportsFormat`).
+  const channel = body.channel ?? artifact.channel;
+  if (!channelSupportsFormat(channel, artifact.format)) {
     throw new ScheduleInputError([
-      `format "${artifact.format}" cannot be distributed on channel "${artifact.channel}" — no registered adapter supports it`,
+      `format "${artifact.format}" cannot be distributed on channel "${channel}" — no registered adapter supports it`,
     ]);
   }
 
   const startAt = body.startAt ? new Date(body.startAt) : new Date();
-  return deps.content.insertSchedule({
+  const row = {
     userId: artifact.userId ?? null,
     artifactId: artifact.id,
-    channel: artifact.channel,
+    channel,
+    intentKey: body.intentKey ?? null,
     recurrence: body.recurrence ?? null,
     timezone: body.timezone,
     count: body.count,
     startAt,
-  });
+  };
+  if (body.intentKey) {
+    const claimed = await deps.content.claimSchedule(row);
+    return claimed.schedule;
+  }
+  return deps.content.insertSchedule(row);
 }
 
 /**

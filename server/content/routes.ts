@@ -72,10 +72,11 @@ import {
   ArtifactNotSchedulableError,
   ScheduleInputError,
 } from "./scheduling";
+import { publishArtifactToChannels, DistributionInputError } from "./distribution";
 import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
 import { requestStyleAnalysis, ReferenceNotFoundError, StyleServiceInputError } from "./styleService";
-import { getChannelAdapter } from "./adapters";
+import { listChannelAdapters } from "./adapters";
 import {
   createVisualGeneration,
   VisualServiceInputError,
@@ -265,6 +266,7 @@ const serializeSchedule = (s: Schedule) => ({
   id: s.id,
   artifactId: s.artifactId,
   channel: s.channel,
+  intentKey: s.intentKey,
   recurrence: s.recurrence,
   timezone: s.timezone,
   count: s.count,
@@ -388,6 +390,25 @@ const createScheduleBody = z.object({
   timezone: z.string().trim().min(1).max(64).optional(),
   count: z.number().int().positive().max(1000).optional(),
   recurrence: z.string().trim().min(1).max(200).optional(),
+  /** Optional channel override; omitted → Artifact.channel (legacy). Never an intentKey. */
+  channel: z.string().trim().min(1).max(50).optional(),
+});
+
+const publishArtifactBody = z.object({
+  targets: z
+    .array(
+      z.object({
+        channel: z.string().trim().min(1).max(50),
+        startAt: z.string().datetime().optional(),
+        timezone: z.string().trim().min(1).max(64).optional(),
+        count: z.number().int().positive().max(1000).optional(),
+        recurrence: z.string().trim().min(1).max(200).optional(),
+        republishKey: z.string().trim().min(1).max(100).optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
+  republishKey: z.string().trim().min(1).max(100).optional(),
 });
 
 function parseId(value: unknown): number | null {
@@ -693,6 +714,61 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  /**
+   * One Artifact revision → N independent Publications (Phase 16).
+   * Creates durable Schedule (+ due Publication) intent per target; never
+   * publishes inline. Duplicate deliveries reuse logical identity; pass
+   * `republishKey` for an explicit new Publication.
+   */
+  router.post("/artifacts/:id/publications", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const body = publishArtifactBody.parse(req.body ?? {});
+      const result = await publishArtifactToChannels(
+        id,
+        body,
+        {
+          content: deps.content,
+          enqueuePublication: deps.enqueuePublication,
+        },
+        getUserId(req) ?? 1,
+      );
+      return res.status(207).json({
+        artifactId: result.artifactId,
+        outcomes: result.outcomes.map((o) => ({
+          channel: o.channel,
+          status: o.status,
+          scheduleId: o.schedule?.id ?? null,
+          publicationId: o.publication?.id ?? null,
+          created: o.created ?? false,
+          error: o.error ?? null,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof DistributionInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof ArtifactNotSchedulableError) return res.status(409).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/artifacts/:id/publications", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const artifact = await deps.content.getArtifactForOwner(id, ownerId);
+      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      const rows = await deps.content.listPublicationsByArtifact(id);
+      const owned = rows.filter((p) => p.userId === null || p.userId === ownerId);
+      return res.json(owned.map(serializePublication));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   // ── Schedules ───────────────────────────────────────────────────────────────
   router.post("/schedules", async (req, res, next) => {
     try {
@@ -753,8 +829,11 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
+      const ownerId = getUserId(req) ?? 1;
       const publication = await deps.content.getPublication(id);
-      if (!publication) return res.status(404).json({ message: "Publication not found" });
+      if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
+        return res.status(404).json({ message: "Publication not found" });
+      }
       const result = await deps.content.getResultByPublication(id);
       return res.json({ ...serializePublication(publication), result: result ?? null });
     } catch (error) {
@@ -776,15 +855,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
   /** Registered channels (so the API can explain what can actually publish). */
   router.get("/channels", (_req, res) => {
-    const channels = ["x"].filter((channel) => {
-      try {
-        getChannelAdapter(channel);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    return res.json({ channels });
+    return res.json({ channels: listChannelAdapters().map((a) => a.channel).sort() });
   });
 
   // ── Voices ──────────────────────────────────────────────────────────────────
