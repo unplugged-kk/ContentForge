@@ -240,11 +240,16 @@ export type CarouselPayload = z.infer<typeof carouselPayloadSchema>;
 export type ThumbnailPayload = z.infer<typeof thumbnailPayloadSchema>;
 
 /**
- * Video payload (Phase 19). Same reference shape as `image`: a durable
- * VisualAsset (kind=video) id. Binary media never enters the payload JSON.
+ * Video payload (Phase 19 / 28.1). Same VisualAsset reference as `image`, plus
+ * optional YouTube publish metadata (stripped keys would force defaults).
  */
-export const videoPayloadSchema = imagePayloadSchema;
-export type VideoPayload = ImagePayload;
+export const videoPayloadSchema = imagePayloadSchema.extend({
+  title: z.string().trim().max(100).optional(),
+  description: z.string().trim().max(5000).optional(),
+  privacyStatus: z.enum(["private", "unlisted", "public"]).optional(),
+  certificationKey: z.string().trim().max(120).optional(),
+});
+export type VideoPayload = z.infer<typeof videoPayloadSchema>;
 export const audioPayloadSchema = imagePayloadSchema;
 export type AudioPayload = ImagePayload;
 

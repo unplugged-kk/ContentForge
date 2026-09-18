@@ -10,9 +10,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles, Eye } from "lucide-react";
-import { SiX, SiThreads, SiLinkedin } from "react-icons/si";
+import { SiX, SiThreads, SiLinkedin, SiYoutube } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
+
+type YouTubeStatus = {
+  ready?: boolean;
+  publicationReady?: boolean;
+  accountConnected?: boolean;
+  channelTitle?: string | null;
+  channelId?: string | null;
+  clientConfigured?: boolean;
+  refreshCredentialPresent?: boolean;
+  channelDiscovered?: boolean;
+};
 
 export default function SettingsPage() {
   const { toast } = useToast();
@@ -94,10 +105,38 @@ export default function SettingsPage() {
   });
 
   const { data: accounts = [], isLoading: accountsLoading } = useQuery<ConnectedAccount[]>({ queryKey: ["/api/accounts"] });
+  const { data: youtubeStatus } = useQuery<YouTubeStatus>({ queryKey: ["/api/social/youtube/status"] });
 
   const xAccount = accounts.find((a) => a.platform === "x");
   const threadsAccount = accounts.find((a) => a.platform === "threads");
   const linkedinAccount = accounts.find((a) => a.platform === "linkedin");
+  const youtubeAccount = accounts.find((a) => a.platform === "youtube");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const youtube = params.get("youtube");
+    if (!youtube) return;
+    if (youtube === "connected") {
+      const channel = params.get("channel");
+      toast({
+        title: "YouTube connected",
+        description: channel ? `YouTube connected — ${channel}` : "YouTube account connected",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/social/youtube/status"] });
+    } else if (youtube === "error") {
+      toast({
+        title: "YouTube connection failed",
+        description: params.get("reason") || "OAuth error",
+        variant: "destructive",
+      });
+    }
+    params.delete("youtube");
+    params.delete("channel");
+    params.delete("reason");
+    const next = params.toString();
+    window.history.replaceState({}, "", next ? `${window.location.pathname}?${next}` : window.location.pathname);
+  }, [toast]);
 
   const connectMutation = useMutation({
     mutationFn: async ({ platform, username, accessToken }: { platform: string; username: string; accessToken: string }) => {
@@ -320,6 +359,81 @@ export default function SettingsPage() {
                   helpUrl="https://www.linkedin.com/developers/apps"
                   helpText="You need an OAuth access token from the LinkedIn Developer Portal. Create an app, add the Share on LinkedIn product, and generate a token with w_member_social scope."
                 />
+                <Card className="p-4 space-y-3" data-testid="card-youtube-account">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-foreground/5 flex items-center justify-center">
+                        <SiYoutube className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-medium">YouTube</h3>
+                        <p className="text-xs text-muted-foreground">
+                          Connect via Google OAuth (offline) to publish videos
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {youtubeAccount || youtubeStatus?.accountConnected ? (
+                        <Badge className="bg-green-500/10 text-green-500 border-green-500/20" data-testid="badge-youtube-connected">
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          {youtubeStatus?.channelTitle
+                            ? `YouTube connected — ${youtubeStatus.channelTitle}`
+                            : youtubeAccount?.displayName
+                              ? `YouTube connected — ${youtubeAccount.displayName}`
+                              : "Connected"}
+                        </Badge>
+                      ) : (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          asChild
+                          data-testid="button-connect-youtube"
+                        >
+                          <a href="/api/social/youtube/connect">Connect YouTube</a>
+                        </Button>
+                      )}
+                      {youtubeAccount && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => disconnectMutation.mutate(youtubeAccount.id)}
+                          data-testid="button-disconnect-youtube"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="bg-muted/50 rounded-md p-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">OAuth client</span>
+                      <span className="font-medium">{youtubeStatus?.clientConfigured ? "Configured" : "Missing"}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Refresh credential</span>
+                      <span className="font-medium">{youtubeStatus?.refreshCredentialPresent ? "Present" : "Absent"}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Channel</span>
+                      <span className="font-medium" data-testid="text-youtube-channel">
+                        {youtubeStatus?.channelDiscovered
+                          ? (youtubeStatus.channelTitle || youtubeStatus.channelId || "Discovered")
+                          : "Not discovered"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Publishing ready</span>
+                      <span className="font-medium" data-testid="text-youtube-ready">
+                        {youtubeStatus?.publicationReady || youtubeStatus?.ready ? "Ready" : "Not ready"}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Requires Google Cloud OAuth client with redirect{" "}
+                    <code className="text-[10px]">/api/social/youtube/callback</code>
+                    {" "}and scopes youtube.upload + youtube.readonly. Tokens are never shown here.
+                  </p>
+                </Card>
               </>
             )}
           </TabsContent>

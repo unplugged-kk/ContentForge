@@ -16,6 +16,9 @@ import {
   validateYouTubeTitle,
   validateYouTubeVideoMedia,
   youtubeAuthorizationUrl,
+  getYouTubeRedirectUri,
+  youtubeUrlRequiresRealPublishGate,
+  exchangeYouTubeAuthorizationCode,
   YouTubePublishAmbiguousError,
 } from "../social/youtube";
 import { fixtureMp4Bytes } from "./visualFixture";
@@ -81,7 +84,73 @@ describe("YouTube validation and adapter", () => {
     });
     assert.ok(url?.includes("client_id=cid"));
     assert.ok(url?.includes("youtube.upload"));
+    assert.ok(url?.includes("youtube.readonly"));
     assert.ok(url?.includes("access_type=offline"));
+    assert.ok(url?.includes("prompt=consent"));
+    assert.ok(url?.includes("state=s"));
+  });
+
+  it("derives redirect URI from Google login callback origin", () => {
+    assert.equal(
+      getYouTubeRedirectUri({
+        GOOGLE_CALLBACK_URL: "http://localhost:5000/api/auth/google/callback",
+      }),
+      "http://localhost:5000/api/social/youtube/callback",
+    );
+    assert.equal(
+      getYouTubeRedirectUri({
+        YOUTUBE_CALLBACK_URL: "https://app.example/api/social/youtube/callback",
+        GOOGLE_CALLBACK_URL: "http://localhost:5000/api/auth/google/callback",
+      }),
+      "https://app.example/api/social/youtube/callback",
+    );
+  });
+
+  it("gates only upload URLs for real publish", () => {
+    assert.equal(
+      youtubeUrlRequiresRealPublishGate(
+        "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+      ),
+      true,
+    );
+    assert.equal(
+      youtubeUrlRequiresRealPublishGate("https://oauth2.googleapis.com/token"),
+      false,
+    );
+    assert.equal(
+      youtubeUrlRequiresRealPublishGate("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true"),
+      false,
+    );
+  });
+
+  it("exchanges authorization code without requiring real-publish gate", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(String(input));
+      assert.equal(init?.method, "POST");
+      const body = String(init?.body ?? "");
+      assert.ok(body.includes("grant_type=authorization_code"));
+      assert.ok(!body.includes("ya29.access"), "must not leak unrelated secrets");
+      return new Response(JSON.stringify({
+        access_token: "ya29.access-new",
+        refresh_token: "1//refresh-new",
+        expires_in: 3600,
+        scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const tokens = await exchangeYouTubeAuthorizationCode("auth-code", {
+      env: {
+        GOOGLE_CLIENT_ID: "cid",
+        GOOGLE_CLIENT_SECRET: "csec",
+        YOUTUBE_CALLBACK_URL: "http://localhost:5000/api/social/youtube/callback",
+        YOUTUBE_TOKEN_URI: "http://127.0.0.1:9/token",
+      },
+      fetchImpl,
+    });
+    assert.equal(tokens.accessToken, "ya29.access-new");
+    assert.equal(tokens.refreshToken, "1//refresh-new");
+    assert.equal(calls.length, 1);
   });
 });
 

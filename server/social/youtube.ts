@@ -5,11 +5,15 @@
  *   https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
  *   https://developers.google.com/youtube/v3/docs/videos/insert
  *
- * OAuth scopes: youtube.upload + youtube.readonly (reconcile).
+ * OAuth (server-side web apps, offline):
+ *   https://developers.google.com/youtube/v3/guides/auth/server-side-web-apps
+ * Scopes: youtube.upload + youtube.readonly (reconcile / channel discovery).
  * Provider-side idempotency: none for videos.insert — ContentForge Publication
  * identity is authoritative.
  *
- * Tokens never log. Real googleapis.com calls require CONTENTFORGE_REAL_PUBLISH_E2E=1.
+ * Tokens never log. Real *upload* calls to googleapis.com require
+ * CONTENTFORGE_REAL_PUBLISH_E2E=1. OAuth code exchange, token refresh, and
+ * channels.list do not require that gate.
  */
 
 import { storage } from "../storage";
@@ -26,6 +30,8 @@ export const YOUTUBE_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
 ] as const;
+
+export const YOUTUBE_DEFAULT_CALLBACK_PATH = "/api/social/youtube/callback";
 
 export const YOUTUBE_MAX_BYTES = 256 * 1024 * 1024; // Phase 28.1 soft cap (API allows more)
 export const YOUTUBE_MIN_DURATION_MS = 1_000;
@@ -91,12 +97,46 @@ export function youtubeClientSecret(env: NodeJS.ProcessEnv = process.env): strin
   return env.YOUTUBE_CLIENT_SECRET?.trim() || env.GOOGLE_CLIENT_SECRET?.trim() || null;
 }
 
+/**
+ * Exact redirect URI registered in Google Cloud Console.
+ * Never accepted from request query/body — only env or derived from known
+ * public base / Google login callback origin.
+ */
+export function getYouTubeRedirectUri(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = env.YOUTUBE_CALLBACK_URL?.trim() || env.YOUTUBE_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+  const base = env.APP_URL?.trim()
+    || env.PUBLIC_URL?.trim()
+    || env.CONTENTFORGE_PUBLIC_URL?.trim()
+    || env.CONTENTFORGE_PUBLIC_BASE_URL?.trim();
+  if (base) return `${base.replace(/\/+$/, "")}${YOUTUBE_DEFAULT_CALLBACK_PATH}`;
+  const googleCb = env.GOOGLE_CALLBACK_URL?.trim();
+  if (googleCb) {
+    try {
+      return `${new URL(googleCb).origin}${YOUTUBE_DEFAULT_CALLBACK_PATH}`;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+export function googleOAuthClientConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(youtubeClientId(env) && youtubeClientSecret(env));
+}
+
 export function redactYouTubeSecrets(text: string): string {
   return text
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/access_token=[^&\s]+/gi, "access_token=[redacted]")
     .replace(/refresh_token=[^&\s]+/gi, "refresh_token=[redacted]")
     .replace(/client_secret=[^&\s]+/gi, "client_secret=[redacted]");
+}
+
+function scopesCoverRequired(scopes: unknown): boolean {
+  if (!Array.isArray(scopes)) return false;
+  const set = new Set(scopes.filter((s): s is string => typeof s === "string"));
+  return YOUTUBE_OAUTH_SCOPES.every((required) => set.has(required));
 }
 
 export function translateYouTubeError(body: string): string {
@@ -119,9 +159,7 @@ export function translateYouTubeError(body: string): string {
 
 export function youtubeAuthorizationUrl(state?: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const clientId = youtubeClientId(env);
-  const redirectUri = env.YOUTUBE_CALLBACK_URL?.trim()
-    || env.YOUTUBE_REDIRECT_URI?.trim()
-    || null;
+  const redirectUri = getYouTubeRedirectUri(env);
   if (!clientId || !redirectUri) return null;
   const params = new URLSearchParams({
     client_id: clientId,
@@ -129,26 +167,98 @@ export function youtubeAuthorizationUrl(state?: string, env: NodeJS.ProcessEnv =
     response_type: "code",
     access_type: "offline",
     prompt: "consent",
+    include_granted_scopes: "true",
     scope: YOUTUBE_OAUTH_SCOPES.join(" "),
   });
   if (state) params.set("state", state);
   return `${getYouTubeAuthorizeUrl(env)}?${params.toString()}`;
 }
 
+export type YouTubeStatusSummary = {
+  apiBase: string;
+  uploadBase: string;
+  scopes: readonly string[];
+  redirectUri: string | null;
+  clientConfigured: boolean;
+  authorizationUrlReady: boolean;
+  accountConnected: boolean;
+  refreshCredentialPresent: boolean;
+  accessCredentialPresent: boolean;
+  requiredScopesPresent: boolean;
+  tokenRefreshPossible: boolean;
+  channelDiscovered: boolean;
+  channelId: string | null;
+  channelTitle: string | null;
+  connectedUsername: string | null;
+  connectedUserId: number | null;
+  envTokenConfigured: boolean;
+  publicationReady: boolean;
+  ready: boolean;
+  providerIdempotency: false;
+  supportedFormats: string[];
+  defaultPrivacy: string;
+  realPublishGate: string;
+};
+
 export async function getYouTubeConfigSummary(
+  ownerUserId?: number | null,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<Record<string, unknown>> {
-  const envToken = Boolean(env.YOUTUBE_ACCESS_TOKEN?.trim() || env.YOUTUBE_REFRESH_TOKEN?.trim());
-  const account = await storage.getConnectedAccount("youtube");
+): Promise<YouTubeStatusSummary> {
+  const envAccess = Boolean(env.YOUTUBE_ACCESS_TOKEN?.trim());
+  const envRefresh = Boolean(env.YOUTUBE_REFRESH_TOKEN?.trim());
+  const account = ownerUserId != null
+    ? await storage.getConnectedAccountForOwner("youtube", ownerUserId)
+    : await storage.getConnectedAccount("youtube");
+
+  const profile = (account?.profileData && typeof account.profileData === "object")
+    ? account.profileData as Record<string, unknown>
+    : {};
+  const channelId = typeof profile.channelId === "string"
+    ? profile.channelId
+    : (account?.username?.startsWith("UC") ? account.username : null);
+  const channelTitle = typeof profile.title === "string"
+    ? profile.title
+    : (account?.displayName ?? null);
+  const requiredScopesPresent = scopesCoverRequired(profile.scopes);
+
+  const refreshCredentialPresent = Boolean(account?.refreshToken?.trim() || envRefresh);
+  const accessCredentialPresent = Boolean(account?.accessToken?.trim() || envAccess);
+  const clientConfigured = googleOAuthClientConfigured(env);
+  const redirectUri = getYouTubeRedirectUri(env);
+  const accountConnected = Boolean(
+    account
+    && account.isActive !== false
+    && (account.accessToken || account.refreshToken),
+  );
+  const channelDiscovered = Boolean(channelId);
+  const tokenRefreshPossible = refreshCredentialPresent && clientConfigured;
+  const publicationReady = clientConfigured
+    && (accountConnected || envAccess || envRefresh)
+    && refreshCredentialPresent
+    && requiredScopesPresent
+    && channelDiscovered
+    && tokenRefreshPossible;
+
   return {
     apiBase: getYouTubeApiBase(env),
     uploadBase: getYouTubeUploadBase(env),
     scopes: [...YOUTUBE_OAUTH_SCOPES],
-    envTokenConfigured: envToken,
-    clientConfigured: Boolean(youtubeClientId(env) && youtubeClientSecret(env)),
+    redirectUri,
+    clientConfigured,
+    authorizationUrlReady: Boolean(youtubeAuthorizationUrl("probe", env)),
+    accountConnected,
+    refreshCredentialPresent,
+    accessCredentialPresent,
+    requiredScopesPresent,
+    tokenRefreshPossible,
+    channelDiscovered,
+    channelId,
+    channelTitle,
     connectedUsername: account?.username ?? null,
     connectedUserId: account?.userId ?? null,
-    authorizationUrlReady: Boolean(youtubeAuthorizationUrl(undefined, env)),
+    envTokenConfigured: envAccess || envRefresh,
+    publicationReady,
+    ready: publicationReady,
     providerIdempotency: false,
     supportedFormats: ["video"],
     defaultPrivacy: env.YOUTUBE_DEFAULT_PRIVACY?.trim() || "private",
@@ -166,6 +276,25 @@ export async function getYouTubeConfig(
   const apiBase = getYouTubeApiBase(env);
   const uploadBase = getYouTubeUploadBase(env);
 
+  // Canonical runtime path: connected_accounts for the owner.
+  if (ownerUserId != null) {
+    const account = await storage.getConnectedAccountForOwner("youtube", ownerUserId);
+    const accessToken = account?.accessToken?.trim() || "";
+    const refreshToken = account?.refreshToken?.trim() || null;
+    if (accessToken || refreshToken) {
+      return {
+        accessToken,
+        refreshToken,
+        clientId,
+        clientSecret,
+        tokenUri,
+        apiBase,
+        uploadBase,
+      };
+    }
+  }
+
+  // Ops / certification fallback: process env tokens.
   const envAccess = env.YOUTUBE_ACCESS_TOKEN?.trim() || null;
   const envRefresh = env.YOUTUBE_REFRESH_TOKEN?.trim() || null;
   if (envAccess || envRefresh) {
@@ -180,21 +309,24 @@ export async function getYouTubeConfig(
     };
   }
 
-  const account = ownerUserId != null
-    ? await storage.getConnectedAccountForOwner("youtube", ownerUserId)
-    : await storage.getConnectedAccount("youtube");
-  const accessToken = account?.accessToken?.trim() || "";
-  const refreshToken = account?.refreshToken?.trim() || null;
-  if (!accessToken && !refreshToken) return null;
-  return {
-    accessToken,
-    refreshToken,
-    clientId,
-    clientSecret,
-    tokenUri,
-    apiBase,
-    uploadBase,
-  };
+  // Unscoped connected account (legacy single-tenant).
+  if (ownerUserId == null) {
+    const account = await storage.getConnectedAccount("youtube");
+    const accessToken = account?.accessToken?.trim() || "";
+    const refreshToken = account?.refreshToken?.trim() || null;
+    if (!accessToken && !refreshToken) return null;
+    return {
+      accessToken,
+      refreshToken,
+      clientId,
+      clientSecret,
+      tokenUri,
+      apiBase,
+      uploadBase,
+    };
+  }
+
+  return null;
 }
 
 export function validateYouTubeTitle(title: string): string | null {
@@ -254,15 +386,29 @@ function isGoogleHost(url: string): boolean {
   }
 }
 
+/** Only media upload paths require the real-publish gate — not OAuth/token/channel GETs. */
+export function youtubeUrlRequiresRealPublishGate(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (!isGoogleHost(url)) return false;
+    if (u.pathname.includes("/upload/youtube")) return true;
+    if (u.pathname.includes("/youtube/v3/videos") && u.searchParams.get("uploadType") === "resumable") {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function refreshAccessToken(
   config: YouTubeConfig,
   fetchImpl: FetchLike,
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
 ): Promise<string> {
   if (!config.refreshToken || !config.clientId || !config.clientSecret) {
     throw new Error("YOUTUBE_CONFIG_MISSING: refresh requires refresh_token + client id/secret");
   }
-  if (isGoogleHost(config.tokenUri)) assertRealPublishAllowed("youtube", env);
 
   const body = new URLSearchParams({
     client_id: config.clientId,
@@ -298,7 +444,9 @@ async function authorizedFetch(
   fetchImpl: FetchLike,
   env: NodeJS.ProcessEnv,
 ): Promise<Response> {
-  if (isGoogleHost(url)) assertRealPublishAllowed("youtube", env);
+  if (youtubeUrlRequiresRealPublishGate(url)) {
+    assertRealPublishAllowed("youtube", env);
+  }
 
   let token = config.accessToken;
   if (!token && config.refreshToken) {
@@ -527,17 +675,16 @@ export async function exchangeYouTubeAuthorizationCode(
     env?: NodeJS.ProcessEnv;
     fetchImpl?: FetchLike;
   } = {},
-): Promise<{ accessToken: string; refreshToken: string | null; expiresIn: number | null }> {
+): Promise<{ accessToken: string; refreshToken: string | null; expiresIn: number | null; scope: string | null }> {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
   const clientId = youtubeClientId(env);
   const clientSecret = youtubeClientSecret(env);
-  const redirectUri = env.YOUTUBE_CALLBACK_URL?.trim() || env.YOUTUBE_REDIRECT_URI?.trim();
+  const redirectUri = getYouTubeRedirectUri(env);
   if (!clientId || !clientSecret || !redirectUri) {
     throw new Error("YOUTUBE_CONFIG_MISSING: client id/secret/callback required for code exchange");
   }
   const tokenUri = getYouTubeTokenUri(env);
-  if (isGoogleHost(tokenUri)) assertRealPublishAllowed("youtube", env);
 
   const body = new URLSearchParams({
     code,
@@ -563,5 +710,133 @@ export async function exchangeYouTubeAuthorizationCode(
     accessToken,
     refreshToken: typeof json.refresh_token === "string" ? json.refresh_token : null,
     expiresIn: typeof json.expires_in === "number" ? json.expires_in : null,
+    scope: typeof json.scope === "string" ? json.scope : null,
+  };
+}
+
+export type YouTubeChannelIdentity = {
+  channelId: string;
+  title: string | null;
+  customUrl: string | null;
+};
+
+export async function discoverYouTubeChannel(
+  config: YouTubeConfig,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<YouTubeChannelIdentity> {
+  const env = options.env ?? process.env;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const url = `${config.apiBase}/channels?part=snippet&mine=true`;
+  const res = await authorizedFetch(config, url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  }, fetchImpl, env);
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`YouTube channel discovery failed (${res.status}): ${redactYouTubeSecrets(text)}`);
+  }
+  const json = JSON.parse(text) as {
+    items?: Array<{ id?: string; snippet?: { title?: string; customUrl?: string } }>;
+  };
+  const item = json.items?.[0];
+  const channelId = item?.id;
+  if (!channelId) {
+    throw new Error("YouTube channel discovery returned no channel — ensure the Google account has a YouTube channel");
+  }
+  return {
+    channelId,
+    title: item?.snippet?.title ?? null,
+    customUrl: item?.snippet?.customUrl ?? null,
+  };
+}
+
+export type YouTubeOAuthConnectionResult = {
+  accountId: number;
+  channelId: string;
+  channelTitle: string | null;
+  refreshTokenPersisted: boolean;
+  scopes: string[];
+};
+
+/**
+ * Exchange OAuth code, persist encrypted credentials on connected_accounts,
+ * discover the YouTube channel. Preserves an existing refresh token when Google
+ * omits a new one on re-authorization.
+ */
+export async function completeYouTubeOAuthConnection(
+  input: {
+    code: string;
+    ownerUserId?: number | null;
+  },
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<YouTubeOAuthConnectionResult> {
+  const env = options.env ?? process.env;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  if (!googleOAuthClientConfigured(env) || !getYouTubeRedirectUri(env)) {
+    throw new Error("BLOCKED — Google OAuth client credentials unavailable");
+  }
+
+  const tokens = await exchangeYouTubeAuthorizationCode(input.code, { env, fetchImpl });
+  const existing = input.ownerUserId != null
+    ? await storage.getConnectedAccountForOwner("youtube", input.ownerUserId)
+    : await storage.getConnectedAccount("youtube");
+
+  const refreshToken = tokens.refreshToken ?? existing?.refreshToken ?? null;
+  if (!refreshToken) {
+    throw new Error(
+      "YouTube OAuth did not return a refresh token and none was stored. "
+        + "Re-authorize with access_type=offline and prompt=consent, or revoke prior access and retry.",
+    );
+  }
+
+  const config: YouTubeConfig = {
+    accessToken: tokens.accessToken,
+    refreshToken,
+    clientId: youtubeClientId(env),
+    clientSecret: youtubeClientSecret(env),
+    tokenUri: getYouTubeTokenUri(env),
+    apiBase: getYouTubeApiBase(env),
+    uploadBase: getYouTubeUploadBase(env),
+  };
+  const channel = await discoverYouTubeChannel(config, { env, fetchImpl });
+
+  const grantedScopes = tokens.scope
+    ? tokens.scope.split(/\s+/).filter(Boolean)
+    : [...YOUTUBE_OAUTH_SCOPES];
+
+  const account = await storage.upsertConnectedAccount({
+    platform: "youtube",
+    userId: input.ownerUserId ?? existing?.userId ?? undefined,
+    username: channel.channelId,
+    displayName: channel.title ?? channel.customUrl ?? channel.channelId,
+    accessToken: tokens.accessToken,
+    refreshToken,
+    tokenExpiresAt: tokens.expiresIn
+      ? new Date(Date.now() + tokens.expiresIn * 1000)
+      : undefined,
+    isActive: true,
+    profileData: {
+      provider: "youtube",
+      platform: "youtube",
+      channelId: channel.channelId,
+      title: channel.title,
+      customUrl: channel.customUrl,
+      scopes: grantedScopes,
+    },
+  });
+
+  return {
+    accountId: account.id,
+    channelId: channel.channelId,
+    channelTitle: channel.title,
+    refreshTokenPersisted: true,
+    scopes: grantedScopes,
   };
 }

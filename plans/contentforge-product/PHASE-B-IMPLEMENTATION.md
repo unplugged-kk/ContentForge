@@ -1105,22 +1105,33 @@ Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
 **Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
 VideoTemplate revisions; editor; auto-publish.
 
-## Phase 28.1 — YouTube publishing adapter (partial)
+## Phase 28.1 / 28.1B — YouTube publishing + OAuth
 
-**Status:** PARTIALLY IMPLEMENTED. Adapter + unit doubles IMPLEMENTED.
-Live E2E **BLOCKED — YouTube upload credential unavailable** (no refresh token
-with `youtube.upload`; Google login OAuth alone is insufficient).
+**Status:** OAuth onboarding + adapter IMPLEMENTED. Live E2E **BLOCKED —
+`redirect_uri_mismatch`**: register
+`http://localhost:5050/api/social/youtube/callback` (and/or `:5000` variant)
+on the Google OAuth Web client. Real YouTube uploads this slice: **0**.
+Cert key reserved: `phase28.1-youtube-certification-v1`.
 
 **Architecture.** Same `Artifact → Publication → ChannelAdapter → Result`.
 `createYouTubeChannelAdapter()` supports `video` only. Transport in
 `server/social/youtube.ts` (resumable upload, refresh, reconcile via
 `videos.list`). Provider idempotency unavailable — ContentForge Publication
-identity wins. Real Google hosts require `CONTENTFORGE_REAL_PUBLISH_E2E=1`.
+identity wins. Real **uploads** require `CONTENTFORGE_REAL_PUBLISH_E2E=1`;
+OAuth/token/channel discovery do not.
+
+**OAuth (28.1B).** Server-side web-app flow with `access_type=offline`,
+session CSRF `state`, scopes `youtube.upload` + `youtube.readonly` only.
+Routes: `GET /api/social/youtube/connect`, `GET /api/social/youtube/callback`.
+Refresh token encrypted on `connected_accounts`; preserved when Google omits
+a new refresh on re-auth. Channel discovery via `channels.list?mine=true`.
+Status: `publicationReady` only when client + refresh + scopes + channel.
 
 **Audit.** Threads and Instagram adapters already existed; YouTube publishing
-did not. TikTok not started. No fal/ElevenLabs spend.
+did not. TikTok not started. No fal/ElevenLabs generation spend (cert may
+GET-rehydrate existing fal bytes only).
 
-**Deferred:** live cert until OAuth upload token; TikTok; Threads live cert;
+**Deferred:** live cert after Console redirect URI; TikTok; Threads live cert;
 YouTube analytics.
 
 ## Phase 27.3 — Pluggable Media Provider Platform (done)

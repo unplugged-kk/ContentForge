@@ -1830,15 +1830,89 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
-  app.get("/api/social/youtube/status", async (_req, res) => {
+  app.get("/api/social/youtube/status", async (req, res) => {
     try {
       const { getYouTubeConfigSummary } = await import("./social/youtube");
+      const ownerId = getUserId(req);
       res.json({
-        ...(await getYouTubeConfigSummary()),
-        hint: "Publishing uses YouTube Data API v3 resumable upload (video only). Connect via POST /api/accounts/connect { platform: \"youtube\", accessToken, refreshToken } or set YOUTUBE_REFRESH_TOKEN with YOUTUBE_CLIENT_ID/SECRET (or GOOGLE_CLIENT_ID/SECRET). Real publishes require CONTENTFORGE_REAL_PUBLISH_E2E=1. Prefer private/unlisted for certification.",
+        ...(await getYouTubeConfigSummary(ownerId)),
+        hint: "Connect via GET /api/social/youtube/connect (Google OAuth offline). Real publishes require CONTENTFORGE_REAL_PUBLISH_E2E=1. Prefer private/unlisted for certification.",
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/social/youtube/connect", async (req, res) => {
+    try {
+      const {
+        googleOAuthClientConfigured,
+        getYouTubeRedirectUri,
+        youtubeAuthorizationUrl,
+      } = await import("./social/youtube");
+      if (!googleOAuthClientConfigured() || !getYouTubeRedirectUri()) {
+        return res.status(503).json({ message: "BLOCKED — Google OAuth client credentials unavailable" });
+      }
+      const { randomBytes } = await import("node:crypto");
+      const state = randomBytes(24).toString("hex");
+      if (!req.session) {
+        return res.status(500).json({ message: "Session required for YouTube OAuth" });
+      }
+      req.session.youtubeOAuth = {
+        state,
+        ownerUserId: getUserId(req),
+        createdAt: Date.now(),
+      };
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => (err ? reject(err) : resolve()));
+      });
+      const url = youtubeAuthorizationUrl(state);
+      if (!url) {
+        return res.status(503).json({ message: "BLOCKED — Google OAuth client credentials unavailable" });
+      }
+      return res.redirect(url);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/social/youtube/callback", async (req, res) => {
+    const fail = (reason: string) => {
+      res.redirect(`/settings?tab=accounts&youtube=error&reason=${encodeURIComponent(reason)}`);
+    };
+    try {
+      const oauthError = typeof req.query.error === "string" ? req.query.error : null;
+      if (oauthError) {
+        return fail(oauthError === "access_denied" ? "access_denied" : "oauth_error");
+      }
+      const code = typeof req.query.code === "string" ? req.query.code : null;
+      const state = typeof req.query.state === "string" ? req.query.state : null;
+      const pending = req.session?.youtubeOAuth;
+      if (req.session) delete req.session.youtubeOAuth;
+      if (!pending || !state || state !== pending.state) {
+        return fail("invalid_state");
+      }
+      if (Date.now() - pending.createdAt > 15 * 60 * 1000) {
+        return fail("state_expired");
+      }
+      if (!code) return fail("missing_code");
+
+      const { completeYouTubeOAuthConnection } = await import("./social/youtube");
+      const result = await completeYouTubeOAuthConnection({
+        code,
+        ownerUserId: pending.ownerUserId ?? getUserId(req) ?? null,
+      });
+      const label = result.channelTitle || result.channelId;
+      return res.redirect(
+        `/settings?tab=accounts&youtube=connected&channel=${encodeURIComponent(label)}`,
+      );
+    } catch (err: any) {
+      const message = typeof err?.message === "string" ? err.message : "exchange_failed";
+      if (message.includes("BLOCKED — Google OAuth")) {
+        return fail("client_unavailable");
+      }
+      if (/refresh token/i.test(message)) return fail("missing_refresh_token");
+      return fail("exchange_failed");
     }
   });
 

@@ -3,15 +3,32 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
-## Phase 28.1 — YouTube ChannelAdapter
+## Phase 28.1 / 28.1B — YouTube ChannelAdapter + OAuth
 
-**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED — credential unavailable.
+**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED — Google OAuth
+`redirect_uri_mismatch`.
 
-Google login OAuth (`GOOGLE_CLIENT_ID` / `SECRET`) is present for account login,
-but no YouTube **upload** refresh token (`youtube.upload` scope) is configured.
-The ChannelAdapter, validation, resumable-upload transport, reconcile seam,
-real-publish gate, and unit coverage are implemented. A real private/unlisted
-upload has **not** been executed.
+OAuth onboarding code is complete (offline scopes, CSRF state, encrypted
+refresh on `connected_accounts`, channel discovery, status readiness,
+Settings Connect YouTube, cert script). Live consent failed because the
+authorized redirect URI is not registered for the Google OAuth client:
+
+`http://localhost:5050/api/social/youtube/callback`
+
+(App cannot bind macOS-reserved `:5000`; use `:5050` or free `:5000` and
+register the matching URI.) Also register
+`http://localhost:5000/api/social/youtube/callback` if serving on 5000.
+
+Until that Console prerequisite is fixed, no refresh token and **zero** real
+YouTube uploads. Do not fake certification.
+
+Google OAuth client (`GOOGLE_CLIENT_ID` / `SECRET`) is configured. Phase 28.1B
+adds server-side offline OAuth (`access_type=offline`, CSRF `state`), encrypted
+refresh persistence on `connected_accounts`, channel discovery
+(`channels.list?mine=true`), enhanced
+`GET /api/social/youtube/status`, Settings **Connect YouTube**, and a one-shot
+cert script (`script/publish-certify-youtube.ts`, key
+`phase28.1-youtube-certification-v1`).
 
 ### Implemented
 
@@ -19,22 +36,35 @@ upload has **not** been executed.
   Instagram. Supports format `video` only.
 - Transport: `server/social/youtube.ts` — YouTube Data API v3 resumable upload;
   token refresh; secret redaction; ambiguous upload → reconcile hint.
-- Credentials: env (`YOUTUBE_ACCESS_TOKEN` / `YOUTUBE_REFRESH_TOKEN` + client)
-  or `connected_accounts` platform `youtube`. Reuses `GOOGLE_CLIENT_*` when
-  `YOUTUBE_CLIENT_*` unset.
-- Real publish blocked unless `CONTENTFORGE_REAL_PUBLISH_E2E=1` (Google hosts).
-  Optional certification budget via `CONTENTFORGE_PUBLISH_CERTIFICATION=1`.
-- Status: `GET /api/social/youtube/status` (no secrets).
+- OAuth: `GET /api/social/youtube/connect` → Google →
+  `GET /api/social/youtube/callback` → code exchange → encrypted refresh →
+  channel identity. Scopes: `youtube.upload` + `youtube.readonly` only.
+- Credentials: `connected_accounts` is canonical for owners; env tokens remain
+  an ops fallback. Reuses `GOOGLE_CLIENT_*` when `YOUTUBE_CLIENT_*` unset.
+- Real **upload** blocked unless `CONTENTFORGE_REAL_PUBLISH_E2E=1`. OAuth /
+  token refresh / `channels.list` do not require that gate.
+- Status distinguishes client / account / refresh / scopes / channel /
+  `publicationReady` (never `ready` from client id alone).
 - Agent remains `publish_now` (channel-neutral). No `publish_youtube` tool.
 - Docs: `docs/channel-onboarding.md`.
 
-### Not done this slice
+### Live certification
 
-- Live HTTP publish (needs YouTube upload OAuth token).
+- Gate: `CONTENTFORGE_REAL_PUBLISH_E2E=1` + `CONTENTFORGE_PUBLISH_CERTIFICATION=1`
+- Asset: existing VideoAsset (prefer Phase 27.3 fal id `688`) — no new media
+- Exactly one private upload; idempotent cert key
+  `phase28.1-youtube-certification-v1`
+- Evidence: `.scratch/publish-cert-youtube-evidence.json`
+- **Real uploads performed this phase: 0** (blocked on redirect URI)
+
+### Not done / deferred
+
+- Live publish until Google Console redirect URI is registered.
 - TikTok adapter.
-- Threads live re-certification (adapter already existed; credentials still absent).
+- Threads live re-certification.
 - YouTube analytics / playlists / Shorts-specific UX.
-- Media generation (fal / ElevenLabs / OpenShorts / Video Factory untouched).
+- Media generation (fal / ElevenLabs / OpenShorts / Video Factory untouched
+  except optional GET rehydrate of already-paid fal bytes).
 
 ### Audit notes (existing distribution)
 

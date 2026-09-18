@@ -84,5 +84,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 declare module "express-session" {
   interface SessionData {
     userId?: number;
+    youtubeOAuth?: {
+      state: string;
+      ownerUserId?: number;
+      createdAt: number;
+    };
   }
 }

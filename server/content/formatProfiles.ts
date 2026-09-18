@@ -139,6 +139,14 @@ const PROFILES: readonly FormatProfile[] = [
       "Caption is optional and must not invent data. Cover/thumbnail selection is omitted.",
     constraints: { maxCharacters: 2200, maxUnits: 1, visual: "required", visualSpecId: "instagram_reel" },
   },
+  {
+    format: "video",
+    channel: "youtube",
+    guidance:
+      "A YouTube video upload (Phase 28.1): MP4 referencing one VisualAsset revision. " +
+      "Title/description/privacy live in optional payload fields; default privacy is private.",
+    constraints: { maxUnits: 1, visual: "required", visualSpecId: "generic_social_video" },
+  },
 ];
 
 const byKey = new Map(PROFILES.map((p) => [`${p.format}:${p.channel}`, p]));
