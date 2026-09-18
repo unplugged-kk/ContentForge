@@ -251,6 +251,9 @@ function appEnv(extra = {}) {
     XQUICK_TIMEOUT_MS: "5000",
     RESEARCH_ALLOWED_HOSTS: "localhost",
     VIDEO_FACTORY_ROOT: vfRoot,
+    MACOS_SAY_ENABLED: "true",
+    MACOS_SAY_VOICES: "Samantha,Daniel",
+    AUDIO_PROVIDER_ID: "macos-say",
     AGENT_BACKEND_ID: "fixture",
     ...extra,
   };
@@ -372,6 +375,8 @@ async function execTool(runId, tool, args, extra = {}) {
       "generate_artifact",
       "generate_image",
       "generate_video",
+      "generate_audio",
+      "get_generation_status",
       "get_video_generation",
       "repurpose_video",
       "get_video_repurposing_status",
@@ -564,6 +569,38 @@ async function execTool(runId, tool, args, extra = {}) {
     const listed = await execTool(runId, "list_video_derivatives", { videoRepurposingJobId: jobId });
     assert(listed.body.result.refs.videoAssetIds.length === 3, "list_video_derivatives missing assets");
     return `job ${jobId} → 3 clips`;
+  });
+
+  phase("Path E2 — provider-neutral audio");
+  await check("generate_audio produces a real local AudioAsset", async () => {
+    const res = await execTool(runId, "generate_audio", {
+      text: `${RUN} provider neutral audio`,
+      providerId: "macos-say",
+      modelId: "macos-say/v1",
+      voiceId: "Samantha",
+    });
+    assert([200, 201].includes(res.status), `audio ${res.status}: ${res.text}`);
+    const generationId = res.body.result.refs.audioGenerationId;
+    const row = await waitFor(async () => {
+      const [generation] = await q(
+        "select status, error_message from visual_generations where id = $1",
+        [generationId],
+      );
+      if (generation?.status === "ready") return generation;
+      if (generation?.status === "failed") throw new Error(generation.error_message);
+      return false;
+    }, { timeoutMs: 90_000, label: "audio ready" });
+    assert(row.status === "ready", "audio generation not ready");
+    const [asset] = await q(
+      "select id, mime, byte_size, duration_ms, metadata from visual_assets where visual_generation_id = $1",
+      [generationId],
+    );
+    assert(asset?.mime === "audio/wav", "audio MIME mismatch");
+    assert(asset.byte_size > 1000 && asset.duration_ms > 0, "audio media metadata missing");
+    assert(asset.metadata?.sampleRate === 24000 && asset.metadata?.channels === 1, "audio stream metadata missing");
+    const status = await execTool(runId, "get_generation_status", { generationId });
+    assert(status.body.result.refs.audioAssetId === asset.id, "generic status lost AudioAsset identity");
+    return `audio ${generationId} asset ${asset.id}`;
   });
 
   phase("Path F — approval policy");

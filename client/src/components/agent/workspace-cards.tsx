@@ -154,6 +154,23 @@ export function VideoAssetCard({ asset }: { asset: Record<string, unknown> }) {
   );
 }
 
+export function AudioAssetCard({ asset }: { asset: Record<string, unknown> }) {
+  return (
+    <Card data-testid={`card-audio-${asset.id}`}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">AudioAsset {String(asset.id)}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground space-y-1">
+        <p>Status: {textField(asset.status)}</p>
+        {asset.visualGenerationId != null ? <p>Generation {String(asset.visualGenerationId)}</p> : null}
+        {asset.durationMs != null ? <p>Duration {String(asset.durationMs)}ms</p> : null}
+        {asset.sampleRate != null ? <p>{String(asset.sampleRate)}Hz · {String(asset.channels ?? "—")}ch</p> : null}
+        <p>Identity only — no binary or credentials in agent messages.</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function VideoGenerationCard({ generation }: { generation: Record<string, unknown> }) {
   return (
     <Card data-testid={`card-video-generation-${generation.id}`}>

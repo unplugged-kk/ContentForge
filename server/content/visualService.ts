@@ -24,11 +24,13 @@ import {
   validateMediaOutput,
   visualGenerationIdempotencyKey,
   InvalidVisualInputError,
+  normalizeProviderError,
   VisualCapabilityUnsupportedError,
   type AssetStoragePort,
   type VisualCapability,
   type VisualGenerationOutput,
   type VisualProviderPort,
+  type ProviderFailureClass,
   type VisualSourceImage,
 } from "./visual";
 import {
@@ -64,7 +66,7 @@ export interface VisualServiceDeps {
 export const createVisualGenerationSchema = z.object({
   opportunityId: z.number().int().positive().optional(),
   generationJobId: z.number().int().positive().optional(),
-  kind: z.enum(["image", "carousel_slide", "thumbnail", "carousel", "video"]),
+  kind: z.enum(["image", "carousel_slide", "thumbnail", "carousel", "video", "audio"]),
   providerId: z.string().trim().min(1).max(80).optional(),
   capability: z
     .enum([
@@ -75,6 +77,7 @@ export const createVisualGenerationSchema = z.object({
       "generate_slide",
       "generate_video",
       "refine_video",
+      "generate_audio",
     ])
     .optional(),
   intent: z.record(z.unknown()),
@@ -93,16 +96,8 @@ export const createVisualGenerationSchema = z.object({
 
 export type CreateVisualGenerationInput = z.input<typeof createVisualGenerationSchema>;
 
-function classifyVisualError(error: unknown): "transient" | "permanent" {
-  if (error instanceof JobFailure) {
-    return error.failureClass === "transient" || error.failureClass === "rate_limited"
-      ? "transient"
-      : "permanent";
-  }
-  const message = describeError(error);
-  return /timeout|ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate.?limit/i.test(message)
-    ? "transient"
-    : "permanent";
+function classifyVisualError(error: unknown): ProviderFailureClass {
+  return normalizeProviderError(error);
 }
 
 export async function createVisualGeneration(
@@ -119,6 +114,7 @@ export async function createVisualGeneration(
   const body = parsed.data;
 
   const isVideo = body.kind === "video";
+  const isAudio = body.kind === "audio";
   const isCarousel = body.kind === "carousel";
   const forbiddenIntentKeys = ["command", "shell", "ffmpegArgs", "renderArgs", "outputPath", "callbackUrl"];
   const forbiddenHits = forbiddenIntentKeys.filter((key) => key in body.intent);
@@ -134,8 +130,8 @@ export async function createVisualGeneration(
     body.variationCount ??
     (isCarousel ? slideCount! : typeof body.intent.variationCount === "number" ? body.intent.variationCount : 1);
 
-  if (isVideo && variationCount !== 1) {
-    throw new VisualServiceInputError(["video variation generation is deferred; variationCount must be 1"]);
+  if ((isVideo || isAudio) && variationCount !== 1) {
+    throw new VisualServiceInputError([`${body.kind} variation generation is deferred; variationCount must be 1`]);
   }
 
   if (isCarousel) {
@@ -160,6 +156,9 @@ export async function createVisualGeneration(
     if (!isVideo && source.mime.startsWith("video/")) {
       throw new VisualServiceInputError(["image refinement cannot use a video source asset"]);
     }
+    if (isAudio) {
+      throw new VisualServiceInputError(["audio refinement is not implemented"]);
+    }
   } else if (body.capability === "refine_image" || body.capability === "refine_video") {
     throw new VisualServiceInputError([`${body.capability} requires sourceVisualAssetId`]);
   }
@@ -174,13 +173,22 @@ export async function createVisualGeneration(
         ? "generate_slide"
         : isVideo
           ? "generate_video"
+          : isAudio
+            ? "generate_audio"
           : variationCount > 1
             ? "generate_image_variations"
             : "generate_image");
 
   const preferredFromIntent =
     typeof body.intent.preferredProvider === "string" ? body.intent.preferredProvider : undefined;
-  const providerId = body.providerId ?? preferredFromIntent ?? (isVideo ? "local-video-fixture" : "local-fixture");
+  const providerId =
+    body.providerId
+    ?? preferredFromIntent
+    ?? (isVideo
+      ? "local-video-fixture"
+      : isAudio
+        ? process.env.AUDIO_PROVIDER_ID?.trim() || "macos-say"
+        : "local-fixture");
 
   let provider: VisualProviderPort;
   try {
@@ -218,21 +226,32 @@ export async function createVisualGeneration(
     }
   }
   const profile = format && channel ? getFormatProfile(format, channel) : undefined;
-  let spec;
-  try {
-    spec = resolveVisualSpec({
-      specId: body.specId ?? (typeof body.intent.specId === "string" ? body.intent.specId : profile?.constraints.visualSpecId),
-      format,
-      channel,
-      aspectRatio: body.intent.aspectRatio,
-    });
-  } catch (error) {
-    throw new VisualServiceInputError([describeError(error)]);
+  let spec: JsonRecord;
+  if (isAudio) {
+    spec = {
+      id: "audio_speech",
+      modality: "audio",
+      usage: "speech",
+      mime: "audio/wav",
+      maxBytes: 25 * 1024 * 1024,
+      maxDurationMs: 30 * 60 * 1000,
+    };
+  } else {
+    try {
+      spec = resolveVisualSpec({
+        specId: body.specId ?? (typeof body.intent.specId === "string" ? body.intent.specId : profile?.constraints.visualSpecId),
+        format,
+        channel,
+        aspectRatio: body.intent.aspectRatio,
+      }) as unknown as JsonRecord;
+    } catch (error) {
+      throw new VisualServiceInputError([describeError(error)]);
+    }
   }
 
   const requestedDuration =
     body.durationMs ?? (typeof body.intent.durationMs === "number" ? body.intent.durationMs : undefined);
-  if (isVideo && requestedDuration != null && spec.maxDurationMs && requestedDuration > spec.maxDurationMs) {
+  if ((isVideo || isAudio) && requestedDuration != null && typeof spec.maxDurationMs === "number" && requestedDuration > spec.maxDurationMs) {
     throw new VisualServiceInputError([`duration exceeds spec "${spec.id}" max of ${spec.maxDurationMs} ms`]);
   }
 
@@ -244,8 +263,8 @@ export async function createVisualGeneration(
 
   const intent: JsonRecord = {
     ...body.intent,
-    aspectRatio: spec.aspectRatio,
-    specId: spec.id,
+    ...(typeof spec.aspectRatio === "string" ? { aspectRatio: spec.aspectRatio } : {}),
+    specId: typeof spec.id === "string" ? spec.id : null,
     variationCount,
     ...(isCarousel ? { slideCount: variationCount } : {}),
     ...(body.role ? { role: body.role } : {}),
@@ -253,7 +272,7 @@ export async function createVisualGeneration(
     ...(body.model ? { modelPreference: body.model } : {}),
     ...(instruction ? { instruction } : {}),
     ...(body.sourceVisualAssetId ? { sourceVisualAssetId: body.sourceVisualAssetId } : {}),
-    ...(isVideo && requestedDuration ? { durationMs: requestedDuration } : {}),
+    ...((isVideo || isAudio) && requestedDuration ? { durationMs: requestedDuration } : {}),
   };
 
   const regenerationNonce = body.regenerate
@@ -261,6 +280,7 @@ export async function createVisualGeneration(
     : null;
 
   const idempotencyKey = visualGenerationIdempotencyKey({
+    userId,
     opportunityId: body.opportunityId ?? null,
     kind: body.kind,
     intent,
@@ -309,6 +329,17 @@ export async function createVisualGeneration(
             durationMs: requestedDuration ?? null,
           }
         : null,
+      audioIntent: isAudio
+        ? {
+            text: typeof body.intent.text === "string" ? body.intent.text : body.intent.subject,
+            language: typeof body.intent.language === "string" ? body.intent.language : null,
+            voice: body.intent.voice ?? null,
+            speakingRate: typeof body.intent.speakingRate === "number" ? body.intent.speakingRate : null,
+            pitch: typeof body.intent.pitch === "number" ? body.intent.pitch : null,
+            style: body.intent.style ?? null,
+            format: "wav",
+          }
+        : null,
       providerChoice: provider.providerId,
     },
     idempotencyKey,
@@ -317,7 +348,7 @@ export async function createVisualGeneration(
     correlationId: `${hashIntent({ k: idempotencyKey })}-${Date.now().toString(36)}`.slice(0, 100),
     variationCount,
     sourceVisualAssetId: body.sourceVisualAssetId ?? null,
-    specId: spec.id,
+    specId: typeof spec.id === "string" ? spec.id : null,
   });
 }
 
@@ -331,10 +362,11 @@ export interface VisualRunResult {
   failureMessage?: string;
 }
 
-function providerKind(kind: string): "image" | "carousel_slide" | "thumbnail" | "video" {
+function providerKind(kind: string): "image" | "carousel_slide" | "thumbnail" | "video" | "audio" {
   if (kind === "carousel" || kind === "carousel_slide") return "carousel_slide";
   if (kind === "thumbnail") return "thumbnail";
   if (kind === "video") return "video";
+  if (kind === "audio") return "audio";
   return "image";
 }
 
@@ -375,7 +407,9 @@ export async function runVisualGeneration(
   let lastModel: string | null = generation.model;
   let lastCost: string | null = generation.cost;
   let lastTransient: string | null = null;
+  let lastTransientClass: "transient" | "rate_limited" = "transient";
   let lastPermanent: string | null = null;
+  let lastPermanentClass: ProviderFailureClass = "permanent";
 
   try {
     const provider = getVisualProvider(generation.providerId ?? "");
@@ -452,6 +486,14 @@ export async function runVisualGeneration(
             providerVersion: output.providerVersion,
             model: output.model,
             variationIndex: position,
+            ...(typeof output.sampleRate === "number" ? { sampleRate: output.sampleRate } : {}),
+            ...(typeof output.channels === "number" ? { channels: output.channels } : {}),
+            ...(typeof output.usage.characters === "number" ? { usageUnits: { kind: "characters", value: output.usage.characters } } : {}),
+            ...(typeof output.usage.processingMs === "number" ? { processingMs: output.usage.processingMs } : {}),
+            ...(typeof output.usage.queueMs === "number" ? { queueMs: output.usage.queueMs } : {}),
+            ...(typeof output.usage.downloadMs === "number" ? { downloadMs: output.usage.downloadMs } : {}),
+            ...(typeof output.usage.providerVoiceId === "string" ? { providerVoiceId: output.usage.providerVoiceId } : {}),
+            ...(typeof output.usage.locale === "string" ? { locale: output.usage.locale } : {}),
             ...(typeof output.usage.contractVersion === "string"
               ? { contractVersion: output.usage.contractVersion }
               : {}),
@@ -477,8 +519,14 @@ export async function runVisualGeneration(
         }
         const failureClass = classifyVisualError(error);
         const message = describeError(error);
-        if (failureClass === "transient") lastTransient = message;
-        else lastPermanent = message;
+        if (failureClass === "transient" || failureClass === "rate_limited") {
+          lastTransient = message;
+          lastTransientClass = failureClass;
+        }
+        else {
+          lastPermanent = message;
+          lastPermanentClass = failureClass;
+        }
       }
     }
 
@@ -515,7 +563,7 @@ export async function runVisualGeneration(
           reused: false,
           visualAssetId: ids[0],
           visualAssetIds: ids,
-          failureClass: "transient",
+          failureClass: lastTransientClass,
           failureMessage: lastTransient,
         };
       }
@@ -525,12 +573,12 @@ export async function runVisualGeneration(
         reused: false,
         visualAssetId: ids[0],
         visualAssetIds: ids,
-        failureClass: "permanent",
+        failureClass: lastPermanentClass,
         failureMessage: lastPermanent ?? "partial visual generation",
       };
     }
 
-    const failureClass = lastTransient ? "transient" : "permanent";
+    const failureClass = lastTransient ? lastTransientClass : lastPermanentClass;
     const message = lastTransient ?? lastPermanent ?? "visual generation failed";
     await deps.content.markVisualGenerationFailed(generation.id, failureClass, message, generation.attempt);
     return {

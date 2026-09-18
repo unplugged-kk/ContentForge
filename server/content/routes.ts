@@ -102,6 +102,7 @@ import {
 import { reportVideoCapabilities } from "./videoCapabilities";
 import {
   createLocalAssetStorage,
+  discoverMediaProviders,
   InvalidVisualInputError,
   VisualCapabilityUnsupportedError,
   VisualModelUnsupportedError,
@@ -222,6 +223,9 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   container: a.container,
   codec: a.codec,
   frameRate: a.frameRate,
+  sampleRate: typeof a.metadata?.sampleRate === "number" ? a.metadata.sampleRate : null,
+  channels: typeof a.metadata?.channels === "number" ? a.metadata.channels : null,
+  providerVoiceId: typeof a.metadata?.providerVoiceId === "string" ? a.metadata.providerVoiceId : null,
   contentHash: a.contentHash,
   altText: a.altText,
   caption: a.caption,
@@ -1620,6 +1624,107 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.get("/video/capabilities", async (_req, res, next) => {
     try {
       return res.json(await reportVideoCapabilities());
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  const mediaModalityQuery = z.object({
+    modality: z.enum(["image", "video", "audio"]).optional(),
+  });
+
+  router.get("/media/providers", async (req, res, next) => {
+    try {
+      const parsed = mediaModalityQuery.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid media modality" });
+      return res.json({ providers: await discoverMediaProviders(parsed.data.modality) });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/audio/providers", async (_req, res, next) => {
+    try {
+      return res.json({ providers: await discoverMediaProviders("audio") });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/video/providers", async (_req, res, next) => {
+    try {
+      return res.json({ providers: await discoverMediaProviders("video") });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/audio/generations", async (req, res, next) => {
+    try {
+      const { generation, created } = await createVisualGeneration(
+        getUserId(req) ?? 1,
+        { ...(req.body ?? {}), kind: "audio", capability: "generate_audio" },
+        { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
+      );
+      if (generation.status === "requested") {
+        try {
+          await deps.enqueueVisual(generation);
+        } catch (error) {
+          return res.status(503).json({
+            message: "Media queue unavailable",
+            id: generation.id,
+            correlationId: generation.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      return res.status(created ? 201 : 200).json(serializeVisualGeneration(generation));
+    } catch (error) {
+      if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof VisualCapabilityUnsupportedError || error instanceof VisualModelUnsupportedError) {
+        return res.status(409).json({ message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  router.get("/audio/generations/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid audio generation id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const generation = await deps.content.getVisualGeneration(id);
+      if (
+        !generation
+        || generation.kind !== "audio"
+        || (generation.userId !== null && generation.userId !== ownerId)
+      ) {
+        return res.status(404).json({ message: "Audio generation not found" });
+      }
+      const assets = (await deps.content.listVisualAssetsForGeneration(generation.id))
+        .filter((asset) => asset.userId === null || asset.userId === ownerId);
+      return res.json({
+        ...serializeVisualGeneration(generation),
+        audioAssetId: assets[0]?.id ?? null,
+        assets: assets.map(serializeVisualAsset),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/audio/assets/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid audio asset id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const asset = await deps.content.getVisualAsset(id);
+      if (!asset || asset.kind !== "audio" || (asset.userId !== null && asset.userId !== ownerId)) {
+        return res.status(404).json({ message: "Audio asset not found" });
+      }
+      return res.json(serializeVisualAsset(asset));
     } catch (error) {
       return next(error);
     }

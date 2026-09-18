@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { MediaProviderSelector } from "./media-provider-selector";
 
 type GenerationView = {
   id: number;
@@ -31,6 +32,8 @@ export function VideoPanel({
   onGeneration?: (id: number) => void;
 }) {
   const [subject, setSubject] = useState("Short explainer");
+  const [providerId, setProviderId] = useState("");
+  const [modelId, setModelId] = useState<string>();
   const [activeId, setActiveId] = useState<number | null>(generationId ?? null);
   const [repurposeId, setRepurposeId] = useState<number | null>(null);
 
@@ -72,7 +75,8 @@ export function VideoPanel({
       if (!trimmed) throw new Error("Enter a subject");
       const res = await apiRequest("POST", "/api/video-generations", {
         kind: "video",
-        providerId: "local-video-fixture",
+        providerId,
+        ...(modelId ? { model: modelId } : {}),
         intent: { subject: trimmed, title: trimmed, aspectRatio: "9:16" },
         durationMs: 3000,
       });
@@ -110,6 +114,13 @@ export function VideoPanel({
         <CardTitle className="text-sm">Video production</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
+        <MediaProviderSelector
+          modality="video"
+          providerId={providerId}
+          modelId={modelId}
+          onProvider={setProviderId}
+          onModel={setModelId}
+        />
         <Input
           value={subject}
           onChange={(event) => setSubject(event.target.value)}
@@ -119,7 +130,7 @@ export function VideoPanel({
         <Button
           size="sm"
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending}
+          disabled={createMutation.isPending || !providerId}
           data-testid="button-video-generate"
         >
           Create video

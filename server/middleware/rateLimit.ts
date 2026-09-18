@@ -17,7 +17,10 @@ import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
 export const globalLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 60 * 1000,
-  limit: 100,
+  // Browser/live certification deliberately exercises polling and reconnect
+  // paths in one minute. Keep production at 100 while preventing the isolated
+  // E2E server from rate-limiting its own deterministic test journey.
+  limit: process.env.CONTENTFORGE_E2E_SERVER === "1" ? 1000 : 100,
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skip: (req) => {

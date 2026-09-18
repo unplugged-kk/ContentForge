@@ -1319,7 +1319,7 @@ export const visualGenerations = pgTable(
      * requirements, slide count, role relative to the Artifact.
      */
     intent: jsonb("intent").$type<Record<string, unknown>>().notNull(),
-    /** image | carousel_slide | thumbnail | carousel | video */
+    /** image | carousel_slide | thumbnail | carousel | video | audio */
     kind: varchar("kind", { length: 30 }).notNull(),
     /** Provider + capability that produced (or will produce) the asset. */
     providerId: varchar("provider_id", { length: 80 }),
@@ -1367,15 +1367,15 @@ export const visualAssets = pgTable(
     id: serial("id").primaryKey(),
     userId: integer("user_id"),
     visualGenerationId: integer("visual_generation_id").references(() => visualGenerations.id),
-    /** image | carousel_slide | thumbnail | video */
+    /** image | carousel_slide | thumbnail | video | audio */
     kind: varchar("kind", { length: 30 }).notNull(),
     /** Provider-agnostic storage reference (e.g. `local:<sha>`); never a filesystem path. */
     storageKey: varchar("storage_key", { length: 500 }).notNull(),
-    /** Validated MIME (image/* or video/mp4, video/webm). Binary bytes never live here. */
+    /** Validated image/video/audio MIME. Binary bytes never live here. */
     mime: varchar("mime", { length: 60 }).notNull(),
     width: integer("width"),
     height: integer("height"),
-    /** Duration in milliseconds — video assets only; null for still images. */
+    /** Duration in milliseconds — video/audio assets; null for still images. */
     durationMs: integer("duration_ms"),
     /** Container label (mp4, webm) — video assets only. */
     container: varchar("container", { length: 32 }),
@@ -1451,6 +1451,9 @@ export type VisualGeneration = typeof visualGenerations.$inferSelect;
 export type InsertVisualGeneration = z.infer<typeof insertVisualGenerationSchema>;
 export type VisualAsset = typeof visualAssets.$inferSelect;
 export type InsertVisualAsset = z.infer<typeof insertVisualAssetSchema>;
+/** Provider-neutral audio views over the existing media generation/asset tables. */
+export type AudioGeneration = VisualGeneration & { kind: "audio" };
+export type AudioAsset = VisualAsset & { kind: "audio" };
 export type VisualAssetRef = typeof visualAssetRefs.$inferSelect;
 export type InsertVisualAssetRef = z.infer<typeof insertVisualAssetRefSchema>;
 

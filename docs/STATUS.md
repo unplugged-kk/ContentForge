@@ -3,6 +3,59 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 27.3 — Pluggable Media Provider Platform
+
+**Status:** PARTIALLY IMPLEMENTED. The provider-neutral platform and real local
+audio proof are implemented. A new cloud audio provider and an additional
+video-generation provider are blocked because no usable credentials are
+configured. HyperFrames Cloud remains deferred.
+
+### Implemented
+
+- `VisualProviderPort` remains the single image/video/audio boundary. Provider
+  and model identity are separate registry data; no provider-specific domain
+  models, tables, queues, or AI gateways were added.
+- Discovery: `GET /api/media/providers?modality=...`,
+  `GET /api/video/providers`, and `GET /api/audio/providers` return sanitized
+  capability/model/voice and configured/reachable/capable/processing-ready
+  state.
+- Audio generation uses `kind=audio` views over `visual_generations` and
+  `visual_assets`, the existing `visual.run` pg-boss job, and
+  `AssetStoragePort`. WAV import validates container, duration, codec, sample
+  rate, channels, byte size, and content hash.
+- `macos-say` invokes `/usr/bin/say` without a shell, restricts voices to
+  configured IDs, normalizes with ffmpeg, and records objective provenance and
+  latency/usage metadata.
+- Generic agent tools are `generate_audio`, model-aware `generate_video`, and
+  `get_generation_status`. The workspace uses capability-driven provider,
+  model, and voice selectors. AudioAsset references can enter the existing
+  Artifact review/approval lifecycle; no publishing channel was added.
+- The six-step onboarding and certification contract is in
+  `docs/media-provider-onboarding.md`.
+
+### Evidence
+
+Real local HTTP restart proof: AudioGeneration `592` survived SIGKILL and was
+completed by pg-boss as AudioAsset `669`: WAV, 377656 bytes, 7.866s, PCM,
+24000 Hz mono, SHA-256
+`3590a0128f47468dfa7fe56f59c7e377fc76df68d8b18353a2782789aafec619`.
+An identical request reused generation `592`.
+
+Verification: TypeScript 0; build PASS; unit 539/539; PostgreSQL 263/263;
+provider contract 6/6 (including real local speech); audio DB 4/4; agent E2E
+22/22 (including `generate_audio` + generic status); workspace/browser E2E
+19/19; focused Playwright workspace render 2/2.
+
+Video regression evidence remains valid and was re-probed: Video Factory
+`cfvg-9000271.mp4` is H.264 1080×1920, 2.000s, 126848 bytes, SHA-256
+`fa78ff28c00be603b8e55c9ac974197b15fb8f3626002b91fdabc6ce731dfa4b`.
+OpenShorts health is 200 and real job
+`10090da1-28cb-4045-8606-34410cdb4fd4` remains completed with three clips
+from Ollama `llama3.1:8b-16k`. Neither provider implementation was changed.
+
+No API key, base URL, upload URL, binary, or unrestricted voice-cloning input
+is exposed in discovery, agent payloads, events, or artifacts.
+
 ## Phase 27.2 — Real OpenShorts Local Processing
 
 **Status:** IMPLEMENTED (Video Factory real E2E unchanged; OpenShorts Docker

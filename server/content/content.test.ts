@@ -609,6 +609,62 @@ describe("image artifact authoring", () => {
   });
 });
 
+describe("audio artifact compatibility", () => {
+  it("pins a ready owned AudioAsset while leaving publication support unchanged", async () => {
+    const store = memoryStore() as unknown as ContentStoragePort & { refs: unknown[] };
+    (store as any).getVisualAsset = async (id: number) => ({
+      id,
+      userId: 1,
+      kind: "audio",
+      status: "ready",
+      mime: "audio/wav",
+      width: null,
+      height: null,
+      storageKey: `local:${"a".repeat(64)}`,
+    }) as never;
+    (store as any).refs = [];
+    (store as any).insertVisualAssetRef = async (row: Record<string, unknown>) => {
+      (store as any).refs.push(row);
+      return { id: 1, ...row } as never;
+    };
+    const artifact = await createArtifact({
+      userId: 1,
+      generationJobId: null,
+      opportunityId: 1,
+      format: "audio",
+      channel: "none",
+      payload: { visualAssetId: 77, role: "narration" },
+      attributionReason: "locally generated speech",
+    }, { artifacts: store });
+    assert.equal((artifact.payload as { visualAssetId: number }).visualAssetId, 77);
+    assert.deepEqual((store as any).refs.map((ref: any) => ref.visualAssetId), [77]);
+    assert.equal(artifact.readiness, "draft");
+  });
+
+  it("rejects a video asset masquerading as audio", async () => {
+    const store = memoryStore();
+    (store as any).getVisualAsset = async (id: number) => ({
+      id,
+      userId: 1,
+      kind: "video",
+      status: "ready",
+      mime: "video/mp4",
+    }) as never;
+    await assert.rejects(
+      () => createArtifact({
+        userId: 1,
+        generationJobId: null,
+        opportunityId: 1,
+        format: "audio",
+        channel: "none",
+        payload: { visualAssetId: 77 },
+        attributionReason: "test",
+      }, { artifacts: store }),
+      ArtifactMediaReferenceError,
+    );
+  });
+});
+
 // ── X adapter ─────────────────────────────────────────────────────────────────
 describe("x channel adapter", () => {
   it("declares exactly the formats it can publish", () => {

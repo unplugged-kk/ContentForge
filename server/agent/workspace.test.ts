@@ -60,6 +60,7 @@ describe("workspace intent compiler", () => {
   it("compiles image and video intents", () => {
     assert.ok(compileWorkspaceIntent("Create an image for this post.").some((s) => s.tool === "generate_image"));
     assert.ok(compileWorkspaceIntent("Create a video for this story.").some((s) => s.tool === "generate_video"));
+    assert.ok(compileWorkspaceIntent("Create an audio narration for this story.").some((s) => s.tool === "generate_audio"));
     assert.ok(compileWorkspaceIntent("Give me three short clips from this video.").some((s) => s.tool === "repurpose_video"));
   });
 });

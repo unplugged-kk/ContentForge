@@ -47,6 +47,7 @@ import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
+import { createMacosSayProvider } from "./visualProviders/macosSay";
 import { createConfiguredVideoFactoryProvider } from "./videoFactoryProvider";
 import { registerOptionalHyperframesCloudProvider } from "./videoProviders";
 import { runVisualGeneration } from "./visualService";
@@ -107,6 +108,9 @@ export function registerBuiltinVisualProviders(): void {
   // registration — selected explicitly via providerId `video-factory`. Default
   // video generation remains `local-video-fixture` so existing callers are unchanged.
   registerVisualProvider(createConfiguredVideoFactoryProvider());
+  // Real local TTS adapter. Registration is stable; health/configuration
+  // decides whether it is selectable as processing-ready.
+  registerVisualProvider(createMacosSayProvider());
   registerOptionalHyperframesCloudProvider();
 }
 

@@ -11,6 +11,7 @@ import {
 describe("payload schema registry", () => {
   it("registers the X formats, the LinkedIn format, and the Phase 3 visual formats", () => {
     assert.deepEqual(payloadSchemaRegistry.formats(), [
+      "audio",
       "carousel",
       "image",
       "linkedin_post",

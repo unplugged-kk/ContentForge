@@ -53,7 +53,7 @@ export interface VisualSourceImage {
 }
 
 export interface VisualGenerationRequest {
-  kind: "image" | "carousel_slide" | "thumbnail" | "video";
+  kind: "image" | "carousel_slide" | "thumbnail" | "video" | "audio";
   capability: VisualCapability;
   /** Frozen provider request (params + prompt). No business-table access. */
   snapshot: JsonRecord;
@@ -85,12 +85,74 @@ export interface VisualGenerationOutput {
   container?: string | null;
   codec?: string | null;
   frameRate?: number | null;
+  sampleRate?: number | null;
+  channels?: number | null;
   altText: string | null;
   provider: string;
   providerVersion: string;
   model: string | null;
   cost: string | null;
   usage: Record<string, unknown>;
+}
+
+export type ProviderFailureClass =
+  | "transient"
+  | "rate_limited"
+  | "permanent"
+  | "configuration"
+  | "quota"
+  | "unknown";
+
+export function normalizeProviderError(error: unknown): ProviderFailureClass {
+  const candidate = error as { failureClass?: unknown; status?: unknown; code?: unknown };
+  if (
+    candidate?.failureClass === "transient"
+    || candidate?.failureClass === "rate_limited"
+    || candidate?.failureClass === "permanent"
+  ) {
+    return candidate.failureClass;
+  }
+  const status = Number(candidate?.status);
+  const text = error instanceof Error ? error.message : String(error);
+  if (status === 429 || /rate.?limit/i.test(text)) return "rate_limited";
+  if (status === 402 || /quota|credit|billing/i.test(text)) return "quota";
+  if (/not configured|missing .*key|credential|unauthori[sz]ed|forbidden/i.test(text)) return "configuration";
+  if (status >= 500 || /timeout|ECONN|ENOTFOUND|fetch failed|socket/i.test(text)) return "transient";
+  if (status >= 400 && status < 500) return "permanent";
+  return "unknown";
+}
+
+export interface MediaModelDescriptor {
+  id: string;
+  displayName?: string;
+  modalities: readonly MediaModality[];
+  capabilities: readonly VisualCapability[];
+  limits?: Readonly<Record<string, number | string | boolean>>;
+  defaults?: Readonly<Record<string, unknown>>;
+}
+
+export interface MediaVoiceDescriptor {
+  providerVoiceId: string;
+  displayName: string;
+  locale?: string;
+  language?: string;
+  style?: Readonly<Record<string, string | number | boolean>>;
+}
+
+export interface MediaCapabilityDeclaration {
+  textToVideo?: boolean;
+  imageToVideo?: boolean;
+  videoToVideo?: boolean;
+  audioGeneration?: boolean;
+  aspectRatios?: readonly string[];
+  formats?: readonly string[];
+  maxDurationMs?: number;
+  supportsAsync?: boolean;
+  supportsWebhook?: boolean;
+  supportsPolling?: boolean;
+  supportsStreaming?: boolean;
+  supportsSSML?: boolean;
+  supportsVoiceCloning?: boolean;
 }
 
 export interface VisualProviderPort {
@@ -107,6 +169,9 @@ export interface VisualProviderPort {
   readonly modalities?: readonly MediaModality[];
   /** Models this provider can be asked for by name (`model` on the request). */
   readonly models?: readonly string[];
+  readonly modelCatalog?: readonly MediaModelDescriptor[];
+  readonly voices?: readonly MediaVoiceDescriptor[];
+  readonly capabilityDeclaration?: Readonly<MediaCapabilityDeclaration>;
   /** Whether `generate()` returns the final output synchronously (default true). */
   readonly synchronous?: boolean;
   /** Optional registry health. Configuration is not proof of a live generation. */
@@ -123,6 +188,8 @@ export interface VisualProviderHealth {
   transportConfigured?: boolean;
   /** Reachability of the configured transport — not "a generation is healthy". */
   reachable?: boolean;
+  /** Static capability is implemented by the adapter, independent of transport state. */
+  capable?: boolean;
   /** True only when the worker can actually process a job (runner up, routes real, quota/credentials present). */
   processingReady?: boolean;
   /** Why processingReady is false, or null when ready. */
@@ -209,6 +276,7 @@ export async function visualProviderHealth(provider: VisualProviderPort): Promis
     capabilities: provider.capabilities,
     modalities: providerModalities(provider),
     synchronous: provider.synchronous !== false,
+    capable: provider.capabilities.length > 0,
   };
   if (!provider.health) return base;
   const extra = await provider.health();
@@ -221,13 +289,63 @@ export async function visualProviderHealth(provider: VisualProviderPort): Promis
   };
 }
 
+export interface MediaProviderDiscovery {
+  id: string;
+  modalities: readonly MediaModality[];
+  configured: boolean;
+  reachable: boolean;
+  capable: boolean;
+  processing_ready: boolean;
+  reason: string | null;
+  synchronous: boolean;
+  capabilities: readonly VisualCapability[];
+  capabilityDeclaration: Readonly<MediaCapabilityDeclaration>;
+  models: readonly MediaModelDescriptor[];
+  voices: readonly MediaVoiceDescriptor[];
+}
+
+export async function discoverMediaProviders(
+  modality?: MediaModality,
+): Promise<MediaProviderDiscovery[]> {
+  const providers = listVisualProviders().filter((provider) =>
+    modality ? providerModalities(provider).includes(modality) : true,
+  );
+  return Promise.all(providers.map(async (provider) => {
+    const health = await visualProviderHealth(provider);
+    const configured = health.transportConfigured ?? true;
+    const reachable = health.reachable ?? configured;
+    const capable = health.capable ?? provider.capabilities.length > 0;
+    return {
+      id: provider.providerId,
+      modalities: providerModalities(provider),
+      configured,
+      reachable,
+      capable,
+      processing_ready: Boolean(health.processingReady),
+      reason: health.reason ?? (health.processingReady ? null : "provider has not verified processing readiness"),
+      synchronous: provider.synchronous !== false,
+      capabilities: provider.capabilities,
+      capabilityDeclaration: provider.capabilityDeclaration ?? {},
+      models: provider.modelCatalog ?? (provider.models ?? []).map((id) => ({
+        id,
+        modalities: providerModalities(provider),
+        capabilities: provider.capabilities,
+      })),
+      voices: provider.voices ?? [],
+    };
+  }));
+}
+
 // ── Asset security (validate before anything durable) ─────────────────────────
 export const ALLOWED_VISUAL_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
 export const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"] as const;
+export const ALLOWED_AUDIO_MIMES = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"] as const;
 export const MAX_VISUAL_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export const MAX_VISUAL_DIMENSION = 8192;
 export const MAX_VIDEO_DURATION_MS = 180_000;
+export const MAX_AUDIO_DURATION_MS = 30 * 60 * 1000;
 
 export class InvalidVisualInputError extends Error {
   readonly issues: string[];
@@ -277,6 +395,19 @@ export function looksLikeWebm(bytes: Buffer): boolean {
   return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
 }
 
+export function looksLikeWav(bytes: Buffer): boolean {
+  return bytes.length >= 12
+    && bytes.subarray(0, 4).toString("ascii") === "RIFF"
+    && bytes.subarray(8, 12).toString("ascii") === "WAVE";
+}
+
+export function looksLikeMp3(bytes: Buffer): boolean {
+  return bytes.length >= 3 && (
+    bytes.subarray(0, 3).toString("ascii") === "ID3"
+    || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)
+  );
+}
+
 export function validateVideoOutput(output: {
   bytes: Buffer;
   mime: string;
@@ -324,6 +455,46 @@ export function validateVideoOutput(output: {
   if (issues.length > 0) throw new InvalidVisualInputError(issues);
 }
 
+export function validateAudioOutput(output: {
+  bytes: Buffer;
+  mime: string;
+  durationMs?: number | null;
+  sampleRate?: number | null;
+  channels?: number | null;
+  maxBytes?: number;
+  maxDurationMs?: number;
+}): void {
+  const issues: string[] = [];
+  if (!(ALLOWED_AUDIO_MIMES as readonly string[]).includes(output.mime)) {
+    issues.push(`mime "${output.mime}" is not allowed for audio`);
+  }
+  if (!Buffer.isBuffer(output.bytes) || output.bytes.length === 0) {
+    issues.push("empty audio bytes");
+  } else {
+    const ceiling = output.maxBytes ?? MAX_AUDIO_BYTES;
+    if (output.bytes.length > ceiling) issues.push(`audio exceeds the ${ceiling} byte limit`);
+    if (output.mime === "audio/wav" && !looksLikeWav(output.bytes)) {
+      issues.push("audio/wav is missing a RIFF/WAVE header");
+    }
+    if (output.mime === "audio/mpeg" && !looksLikeMp3(output.bytes)) {
+      issues.push("audio/mpeg is missing an MP3 header");
+    }
+  }
+  const duration = output.durationMs ?? null;
+  if (duration === null || !Number.isInteger(duration) || duration <= 0) {
+    issues.push("duration is required and must be a positive integer");
+  } else if (duration > (output.maxDurationMs ?? MAX_AUDIO_DURATION_MS)) {
+    issues.push(`duration exceeds the ${output.maxDurationMs ?? MAX_AUDIO_DURATION_MS} ms limit`);
+  }
+  if (!Number.isInteger(output.sampleRate) || (output.sampleRate ?? 0) < 8_000 || (output.sampleRate ?? 0) > 192_000) {
+    issues.push("sampleRate is required and must be between 8000 and 192000");
+  }
+  if (!Number.isInteger(output.channels) || (output.channels ?? 0) < 1 || (output.channels ?? 0) > 8) {
+    issues.push("channels is required and must be between 1 and 8");
+  }
+  if (issues.length > 0) throw new InvalidVisualInputError(issues);
+}
+
 /** Dispatch still-image vs video validation. Channel adapters do not reimplement this. */
 export function validateMediaOutput(
   output: {
@@ -332,9 +503,15 @@ export function validateMediaOutput(
     width: number | null;
     height: number | null;
     durationMs?: number | null;
+    sampleRate?: number | null;
+    channels?: number | null;
   },
   limits?: { maxBytes?: number; maxDurationMs?: number },
 ): void {
+  if ((ALLOWED_AUDIO_MIMES as readonly string[]).includes(output.mime) || output.mime.startsWith("audio/")) {
+    validateAudioOutput({ ...output, ...limits });
+    return;
+  }
   if ((ALLOWED_VIDEO_MIMES as readonly string[]).includes(output.mime) || output.mime.startsWith("video/")) {
     validateVideoOutput({ ...output, ...limits });
     return;
@@ -369,15 +546,16 @@ export function hashIntent(intent: Record<string, unknown>): string {
   return createHash("sha256").update(`{${entries.join(",")}}`, "utf8").digest("hex");
 }
 
-export type VisualKind = "image" | "carousel_slide" | "thumbnail" | "carousel" | "video";
+export type VisualKind = "image" | "carousel_slide" | "thumbnail" | "carousel" | "video" | "audio";
 
 export function visualGenerationIdempotencyKey(input: {
+  userId?: number | null;
   opportunityId?: number | null;
   kind: VisualKind;
   intent: Record<string, unknown>;
   regenerationNonce?: string | null;
 }): string {
-  const base = `visual:${input.opportunityId ?? "direct"}:${input.kind}:${hashIntent(input.intent).slice(0, 40)}`;
+  const base = `visual:${input.userId ?? "ownerless"}:${input.opportunityId ?? "direct"}:${input.kind}:${hashIntent(input.intent).slice(0, 40)}`;
   return input.regenerationNonce ? `${base}:regen:${input.regenerationNonce}` : base;
 }
 

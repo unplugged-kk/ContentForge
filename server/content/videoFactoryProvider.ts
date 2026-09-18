@@ -76,6 +76,8 @@ function buildRequest(request: VisualGenerationRequest): VideoFactoryJobRequest 
 async function importDone(
   transport: VideoFactoryTransport,
   job: VideoFactoryJobRequest,
+  providerId: string,
+  modelId: string,
 ): Promise<VisualGenerationOutput> {
   const output = await transport.getOutput(job.jobId);
   if (!output) {
@@ -94,9 +96,9 @@ async function importDone(
     codec: null,
     frameRate: null,
     altText: job.title,
-    provider: VIDEO_FACTORY_PROVIDER_ID,
+    provider: providerId,
     providerVersion: VIDEO_FACTORY_CONTRACT_VERSION,
-    model: null,
+    model: modelId,
     cost: null,
     usage: {
       contractVersion: VIDEO_FACTORY_CONTRACT_VERSION,
@@ -119,6 +121,26 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
     providerVersion: VIDEO_FACTORY_CONTRACT_VERSION,
     capabilities: ["generate_video"],
     modalities: ["video"],
+    models: ["local/default"],
+    modelCatalog: [{
+      id: "local/default",
+      displayName: "Video Factory local renderer",
+      modalities: ["video"],
+      capabilities: ["generate_video"],
+      limits: { maxDurationMs: 180_000, maxWidth: 8192, maxHeight: 8192 },
+    }],
+    capabilityDeclaration: {
+      textToVideo: true,
+      imageToVideo: false,
+      videoToVideo: false,
+      audioGeneration: true,
+      aspectRatios: ["1:1", "16:9", "9:16"],
+      formats: ["mp4"],
+      maxDurationMs: 180_000,
+      supportsAsync: true,
+      supportsWebhook: false,
+      supportsPolling: true,
+    },
     synchronous: false,
     async health(): Promise<VisualProviderHealth> {
       const reachable = transport.configured ? await transport.reachable() : false;
@@ -192,7 +214,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
       for (;;) {
         status = await transport.getStatus(job.jobId);
         const classified = classifyVideoFactoryState(status.state);
-        if (classified === "completed") return importDone(transport, job);
+        if (classified === "completed") return importDone(transport, job, providerId, request.model ?? "local/default");
         if (classified === "permanent") {
           throw JobFailure.permanent(status.error || `Video Factory job ${job.jobId} failed`);
         }
@@ -204,7 +226,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
       }
 
       const last = classifyVideoFactoryState(status.state);
-      if (last === "completed") return importDone(transport, job);
+      if (last === "completed") return importDone(transport, job, providerId, request.model ?? "local/default");
       if (last === "permanent") {
         throw JobFailure.permanent(status.error || `Video Factory job ${job.jobId} failed`);
       }

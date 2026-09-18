@@ -16,8 +16,10 @@ import { StyleIntelligencePanel } from "@/components/agent/style-panel";
 import { RepurposePanel } from "@/components/agent/repurpose-panel";
 import { ResearchPanel } from "@/components/agent/research-panel";
 import { VideoPanel } from "@/components/agent/video-panel";
+import { AudioPanel } from "@/components/agent/audio-panel";
 import {
   AgentRunCard,
+  AudioAssetCard,
   OpportunityCard,
   StoryCard,
   ToolCallCard,
@@ -93,6 +95,7 @@ function AgentWorkspaceInner() {
   const [researchJobId, setResearchJobId] = useState<number | null>(null);
   const [visual, setVisual] = useState<Record<string, unknown> | null>(null);
   const [video, setVideo] = useState<Record<string, unknown> | null>(null);
+  const [audio, setAudio] = useState<Record<string, unknown> | null>(null);
   const [videoGenerationId, setVideoGenerationId] = useState<number | null>(null);
   const [untrusted, setUntrusted] = useState<string>("");
   const eventsRef = useRef<AgentUiEvent[]>([]);
@@ -130,8 +133,9 @@ function AgentWorkspaceInner() {
     const researchJobId = Number(refs.researchJobId);
     const artifactId = Number(refs.artifactId);
     const visualId = Number(refs.visualAssetId);
-    const videoId = Number(refs.videoAssetId ?? refs.visualGenerationId);
-    const nextVideoGenerationId = Number(refs.videoGenerationId ?? refs.visualGenerationId);
+    const videoId = Number(refs.videoAssetId);
+    const audioId = Number(refs.audioAssetId);
+    const nextVideoGenerationId = Number(refs.videoGenerationId);
     const nextPlanId = Number(refs.planId);
     if (nextPlanId > 0) setPlanId(nextPlanId);
     if (researchJobId > 0) setResearchJobId(researchJobId);
@@ -163,6 +167,13 @@ function AgentWorkspaceInner() {
       }
     }
     if (videoId > 0) setVideo({ id: videoId });
+    if (audioId > 0) {
+      try {
+        setAudio(asRecord(await readJson(`/api/audio/assets/${audioId}`)));
+      } catch {
+        setAudio({ id: audioId });
+      }
+    }
     if (nextVideoGenerationId > 0) setVideoGenerationId(nextVideoGenerationId);
     const oppIds = Array.isArray(refs.opportunityIds) ? refs.opportunityIds : [];
     if (oppIds.length > 0 && opportunities.length === 0) {
@@ -369,6 +380,7 @@ function AgentWorkspaceInner() {
               ))}
               {visual && <VisualAssetCard asset={visual} />}
               {video && <VideoAssetCard asset={video} />}
+              {audio && <AudioAssetCard asset={audio} />}
               {untrusted && <UntrustedSource text={untrusted} />}
             </div>
           </ScrollArea>
@@ -377,6 +389,7 @@ function AgentWorkspaceInner() {
         <aside className="border-l p-3 overflow-y-auto space-y-3">
           <ResearchPanel jobId={researchJobId} onJob={setResearchJobId} />
           <VideoPanel generationId={videoGenerationId} onGeneration={setVideoGenerationId} />
+          <AudioPanel />
           <RepurposePanel
             storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
             planId={planId}

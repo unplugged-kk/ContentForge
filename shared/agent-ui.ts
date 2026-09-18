@@ -269,6 +269,7 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   const storyId = matchStoryId(objective);
   const wantsImage = /\bimage\b|\bvisual\b/.test(text);
   const wantsVideo = /\bvideo\b/.test(text);
+  const wantsAudio = /\baudio\b|\bnarration\b|\bvoiceover\b|\btext[- ]to[- ]speech\b|\btts\b/.test(text);
   const wantsClips = /\bclips?\b|\bshorts?\b|\brepurpose (this |the )?video\b/.test(text);
   const wantsResearch = /\bresearch\b|\bsources\b|\bthis week\b|\blast 30 days\b/.test(text);
   const wantsContent =
@@ -279,7 +280,7 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
 
   if (storyId && !wantsResearch) {
     steps.push({ tool: "get_story", arguments: { storyId } });
-  } else if (wantsResearch || (wantsContent && !storyId && !wantsImage && !wantsVideo)) {
+  } else if (wantsResearch || (wantsContent && !storyId && !wantsImage && !wantsVideo && !wantsAudio)) {
     const windowPreset = inferWindowPreset(objective);
     const wantsSeo = /\bseo\b|\bkeyword/.test(text);
     steps.push({
@@ -316,6 +317,9 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   }
   if (wantsVideo && !wantsClips) {
     steps.push({ tool: "generate_video", arguments: { subject: objective } });
+  }
+  if (wantsAudio) {
+    steps.push({ tool: "generate_audio", arguments: { text: objective } });
   }
   if (wantsClips) {
     if (!steps.some((step) => step.tool === "generate_video") && /\bvideo\b/.test(text) && !/\bfrom this video\b|\bsource\b/.test(text)) {

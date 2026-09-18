@@ -353,10 +353,12 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
     },
     {
       name: "generate_video",
-      description: "Create a VideoGeneration via provider video-factory and video-factory.contract.v1.",
+      description: "Create a provider-neutral VideoGeneration using an explicitly selected provider/model.",
       inputSchema: z.object({
         subject: z.string().trim().min(1).max(2000),
         opportunityId: positiveId.optional(),
+        providerId: z.string().trim().min(1).max(80).optional(),
+        modelId: z.string().trim().min(1).max(120).optional(),
         regenerate: z.boolean().optional(),
         durationMs: z.number().int().positive().max(600_000).optional(),
       }),
@@ -367,6 +369,39 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
       requiresApproval: false,
       capabilityStatus: "implemented",
       execute: (input, ctx) => generateVideo(deps, input, ctx),
+    },
+    {
+      name: "generate_audio",
+      description: "Create an AudioGeneration through the configured media provider registry.",
+      inputSchema: z.object({
+        text: z.string().trim().min(1).max(5000),
+        opportunityId: positiveId.optional(),
+        providerId: z.string().trim().min(1).max(80).optional(),
+        modelId: z.string().trim().min(1).max(120).optional(),
+        voiceId: z.string().trim().min(1).max(120).optional(),
+        language: z.string().trim().min(2).max(20).optional(),
+        speakingRate: z.number().min(80).max(500).optional(),
+        regenerate: z.boolean().optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => generateAudio(deps, input, ctx),
+    },
+    {
+      name: "get_generation_status",
+      description: "Read any owned media generation and its asset identities.",
+      inputSchema: z.object({ generationId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getGenerationStatus(deps, input, ctx),
     },
     {
       name: "get_video_generation",
@@ -1020,7 +1055,8 @@ async function generateVideo(
       {
         kind: "video",
         capability: "generate_video",
-        providerId: "video-factory",
+        providerId: typeof input.providerId === "string" ? input.providerId : "video-factory",
+        ...(typeof input.modelId === "string" ? { model: input.modelId } : {}),
         intent: {
           subject: String(input.subject),
           aspectRatio: "9:16",
@@ -1042,7 +1078,7 @@ async function generateVideo(
     return envelope({
       tool: "generate_video",
       status: generation.status === "ready" ? "success" : "queued",
-      summary: created ? "VideoGeneration submitted to video-factory" : "VideoGeneration reused",
+      summary: created ? `VideoGeneration submitted to ${generation.providerId}` : "VideoGeneration reused",
       refs: {
         visualGenerationId: generation.id,
         videoGenerationId: generation.id,
@@ -1053,12 +1089,106 @@ async function generateVideo(
         status: generation.status,
         created,
         providerId: generation.providerId,
-        contractVersion: "video-factory.contract.v1",
+        modelId: generation.model,
       },
     });
   } catch (error) {
     return mapDomainError("generate_video", error);
   }
+}
+
+async function generateAudio(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    if (input.opportunityId != null) {
+      const opportunity = owned(await deps.content.getOpportunity(Number(input.opportunityId)), ctx.ownerId);
+      if (!opportunity) return notFound("generate_audio", "opportunity");
+    }
+    const providerId = typeof input.providerId === "string"
+      ? input.providerId
+      : process.env.AUDIO_PROVIDER_ID?.trim() || "macos-say";
+    const voiceId = typeof input.voiceId === "string" ? input.voiceId : "Samantha";
+    const { generation, created } = await createVisualGeneration(
+      ctx.ownerId,
+      {
+        kind: "audio",
+        capability: "generate_audio",
+        providerId,
+        ...(typeof input.modelId === "string" ? { model: input.modelId } : {}),
+        intent: {
+          subject: String(input.text),
+          text: String(input.text),
+          language: typeof input.language === "string" ? input.language : "en",
+          speakingRate: typeof input.speakingRate === "number" ? input.speakingRate : 175,
+          voice: {
+            providerId,
+            providerVoiceId: voiceId,
+            displayName: voiceId,
+          },
+        },
+        ...(input.opportunityId != null ? { opportunityId: Number(input.opportunityId) } : {}),
+        ...(input.regenerate === true ? { regenerate: true } : {}),
+      },
+      {
+        content: deps.content,
+        storage: deps.visualStorage,
+        contextReader: deps.generation.contextReader,
+      },
+    );
+    if (generation.status === "requested") await deps.enqueueVisual(generation);
+    const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+    return envelope({
+      tool: "generate_audio",
+      status: generation.status === "ready" ? "success" : "queued",
+      summary: created ? `AudioGeneration submitted to ${generation.providerId}` : "AudioGeneration reused",
+      refs: {
+        visualGenerationId: generation.id,
+        audioGenerationId: generation.id,
+        audioAssetId: assets[0]?.id ?? null,
+        opportunityId: generation.opportunityId,
+      },
+      data: {
+        status: generation.status,
+        created,
+        providerId: generation.providerId,
+        modelId: generation.model,
+        voiceId,
+      },
+    });
+  } catch (error) {
+    return mapDomainError("generate_audio", error);
+  }
+}
+
+async function getGenerationStatus(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const generation = owned(await deps.content.getVisualGeneration(Number(input.generationId)), ctx.ownerId);
+  if (!generation) return notFound("get_generation_status", "generation");
+  const assets = (await deps.content.listVisualAssetsForGeneration(generation.id))
+    .filter((asset) => asset.userId === null || asset.userId === ctx.ownerId);
+  return envelope({
+    tool: "get_generation_status",
+    status: "success",
+    summary: `${generation.kind} generation ${generation.id} is ${generation.status}`,
+    refs: {
+      visualGenerationId: generation.id,
+      ...(generation.kind === "video" ? { videoGenerationId: generation.id, videoAssetId: assets[0]?.id ?? null } : {}),
+      ...(generation.kind === "audio" ? { audioGenerationId: generation.id, audioAssetId: assets[0]?.id ?? null } : {}),
+    },
+    data: {
+      kind: generation.kind,
+      status: generation.status,
+      providerId: generation.providerId,
+      modelId: generation.model,
+      assetIds: assets.map((asset) => asset.id),
+    },
+  });
 }
 
 async function getVideoGeneration(

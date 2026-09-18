@@ -19,6 +19,7 @@ import {
   getVisualProvider,
   hasVisualProvider,
   resetVisualProviders,
+  validateAudioOutput,
   validateVisualOutput,
   visualGenerationIdempotencyKey,
   InvalidVisualInputError,
@@ -77,6 +78,38 @@ describe("visual output validation (untrusted provider output)", () => {
   });
 });
 
+describe("audio output validation (untrusted provider output)", () => {
+  const wav = Buffer.concat([
+    Buffer.from("RIFF"),
+    Buffer.alloc(4),
+    Buffer.from("WAVEfmt "),
+    Buffer.alloc(32),
+  ]);
+
+  it("accepts bounded WAV speech metadata", () => {
+    validateAudioOutput({
+      bytes: wav,
+      mime: "audio/wav",
+      durationMs: 1000,
+      sampleRate: 24_000,
+      channels: 1,
+    });
+  });
+
+  it("rejects fake containers and missing media metadata", () => {
+    assert.throws(
+      () => validateAudioOutput({
+        bytes: Buffer.from("not-wave"),
+        mime: "audio/wav",
+        durationMs: null,
+        sampleRate: null,
+        channels: null,
+      }),
+      InvalidVisualInputError,
+    );
+  });
+});
+
 describe("visual intent identity", () => {
   it("hashes deterministically and order-independently", () => {
     const a = hashIntent({ subject: "scheduler", aspectRatio: "1:1" });
@@ -92,6 +125,14 @@ describe("visual intent identity", () => {
     assert.notEqual(
       visualGenerationIdempotencyKey(input),
       visualGenerationIdempotencyKey({ ...input, regenerationNonce: "regen-1" }),
+    );
+  });
+
+  it("scopes direct media idempotency to the owner", () => {
+    const input = { kind: "audio" as const, intent: { text: "same" } };
+    assert.notEqual(
+      visualGenerationIdempotencyKey({ ...input, userId: 1 }),
+      visualGenerationIdempotencyKey({ ...input, userId: 2 }),
     );
   });
 });

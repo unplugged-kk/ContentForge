@@ -245,6 +245,8 @@ export type ThumbnailPayload = z.infer<typeof thumbnailPayloadSchema>;
  */
 export const videoPayloadSchema = imagePayloadSchema;
 export type VideoPayload = ImagePayload;
+export const audioPayloadSchema = imagePayloadSchema;
+export type AudioPayload = ImagePayload;
 
 export const payloadSchemaRegistry = new PayloadSchemaRegistry();
 
@@ -322,6 +324,21 @@ payloadSchemaRegistry.register<VideoPayload>({
   version: 1,
   description: "Video referencing an immutable visual asset revision (kind=video)",
   schema: videoPayloadSchema,
+  mediaRefs: (payload) => [
+    {
+      visualAssetId: payload.visualAssetId,
+      role: payload.role ?? null,
+      position: 0,
+      altText: payload.altText ?? null,
+    },
+  ],
+});
+
+payloadSchemaRegistry.register<AudioPayload>({
+  format: "audio",
+  version: 1,
+  description: "Audio referencing an immutable media asset revision (kind=audio)",
+  schema: audioPayloadSchema,
   mediaRefs: (payload) => [
     {
       visualAssetId: payload.visualAssetId,
