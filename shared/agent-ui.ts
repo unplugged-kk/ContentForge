@@ -155,7 +155,7 @@ export function mapCapabilities(
   }>,
 ): CapabilityRow[] {
   const groups: Array<{ group: string; match: (name: string) => boolean }> = [
-    { group: "Research", match: (name) => name.startsWith("research") || name === "get_research_job" },
+    { group: "Research", match: (name) => name.startsWith("research") || name.startsWith("get_research") },
     { group: "Generation", match: (name) => name === "generate_artifact" || name === "repurpose_story" || name === "find_opportunities" },
     { group: "Image", match: (name) => name === "generate_image" },
     { group: "Video", match: (name) => name === "generate_video" },
@@ -188,6 +188,17 @@ export function matchStoryId(objective: string): number | null {
   if (!match) return null;
   const id = Number(match[1]);
   return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+export function inferWindowPreset(
+  objective: string,
+): "today" | "last_24h" | "last_7d" | "last_30d" | undefined {
+  const text = objective.toLowerCase();
+  if (/\btoday\b|\bcurrent\b/.test(text)) return "today";
+  if (/\blast 24h\b|\blast 24 hours\b|\bpast day\b/.test(text)) return "last_24h";
+  if (/\blast 7 days\b|\bthis week\b|\bpast week\b/.test(text)) return "last_7d";
+  if (/\blast 30 days\b|\bpast month\b|\blast month\b/.test(text)) return "last_30d";
+  return undefined;
 }
 
 export function inferTargets(
@@ -252,7 +263,7 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   const storyId = matchStoryId(objective);
   const wantsImage = /\bimage\b|\bvisual\b/.test(text);
   const wantsVideo = /\bvideo\b/.test(text);
-  const wantsResearch = /\bresearch\b|\bsources\b|\bthis week\b/.test(text);
+  const wantsResearch = /\bresearch\b|\bsources\b|\bthis week\b|\blast 30 days\b/.test(text);
   const wantsContent =
     /\bpost\b|\bcontent\b|\bopportunit|\bprepare\b|\bvariant|\bstory\b|\blinkedin\b|\binstagram\b|\bx post\b/.test(
       text,
@@ -262,7 +273,16 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   if (storyId && !wantsResearch) {
     steps.push({ tool: "get_story", arguments: { storyId } });
   } else if (wantsResearch || (wantsContent && !storyId && !wantsImage && !wantsVideo)) {
-    steps.push({ tool: "research_topic", arguments: { query: objective } });
+    const windowPreset = inferWindowPreset(objective);
+    const wantsSeo = /\bseo\b|\bkeyword/.test(text);
+    steps.push({
+      tool: "research_topic",
+      arguments: {
+        query: objective,
+        ...(windowPreset ? { windowPreset } : {}),
+        ...(wantsSeo ? { seo: true } : {}),
+      },
+    });
     steps.push({
       tool: "create_story",
       arguments: {

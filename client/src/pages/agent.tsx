@@ -14,6 +14,7 @@ import { ArtifactReviewCard } from "@/components/agent/artifact-review";
 import { AgentCopilotProvider } from "@/components/agent/copilot-provider";
 import { StyleIntelligencePanel } from "@/components/agent/style-panel";
 import { RepurposePanel } from "@/components/agent/repurpose-panel";
+import { ResearchPanel } from "@/components/agent/research-panel";
 import {
   AgentRunCard,
   OpportunityCard,
@@ -88,6 +89,7 @@ function AgentWorkspaceInner() {
   const [story, setStory] = useState<Record<string, unknown> | null>(null);
   const [opportunities, setOpportunities] = useState<Record<string, unknown>[]>([]);
   const [planId, setPlanId] = useState<number | null>(null);
+  const [researchJobId, setResearchJobId] = useState<number | null>(null);
   const [visual, setVisual] = useState<Record<string, unknown> | null>(null);
   const [video, setVideo] = useState<Record<string, unknown> | null>(null);
   const [untrusted, setUntrusted] = useState<string>("");
@@ -129,6 +131,7 @@ function AgentWorkspaceInner() {
     const videoId = Number(refs.videoAssetId ?? refs.visualGenerationId);
     const nextPlanId = Number(refs.planId);
     if (nextPlanId > 0) setPlanId(nextPlanId);
+    if (researchJobId > 0) setResearchJobId(researchJobId);
     if (storyId > 0) {
       try {
         setStory(asRecord(await readJson(`/api/stories/${storyId}`)));
@@ -368,6 +371,7 @@ function AgentWorkspaceInner() {
         </section>
 
         <aside className="border-l p-3 overflow-y-auto space-y-3">
+          <ResearchPanel jobId={researchJobId} onJob={setResearchJobId} />
           <RepurposePanel
             storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
             planId={planId}

@@ -9,4 +9,5 @@ test("Path A: agent workspace discovers backends and renders", async ({ page }) 
   await expect(page.locator('[data-testid="panel-agent-capabilities"]')).toBeVisible();
   await expect(page.locator('[data-testid="panel-style-intelligence"]')).toBeVisible();
   await expect(page.locator('[data-testid="panel-repurposing"]')).toBeVisible();
+  await expect(page.locator('[data-testid="panel-research"]')).toBeVisible();
 });

@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 54, `expected 54 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 25, "all twenty-five migrations recorded");
+      assert.equal(tables.length, 55, `expected 55 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 26, "all twenty-six migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -121,6 +121,7 @@ describeDb("migration chain (db)", () => {
         "agent_tool_calls",
         "style_observations",
         "repurposing_plans",
+        "research_analyses",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
       }
@@ -203,12 +204,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0024 without a db:push.
+      // The forward migration must apply 0003-0025 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 54, `expected 54 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 25, "0003-0024 recorded after upgrade");
+      assert.equal(tables.length, 55, `expected 55 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 26, "0003-0025 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -242,6 +243,7 @@ describeDb("migration chain (db)", () => {
       assert.ok(tables.includes("agent_tool_calls"), "0022 table created on the upgrade path");
       assert.ok(tables.includes("style_observations"), "0023 table created on the upgrade path");
       assert.ok(tables.includes("repurposing_plans"), "0024 table created on the upgrade path");
+      assert.ok(tables.includes("research_analyses"), "0025 table created on the upgrade path");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

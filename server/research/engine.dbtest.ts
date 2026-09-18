@@ -11,7 +11,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
-import { researchEvidence, researchJobs, researchSources } from "@shared/schema";
+import { researchAnalyses, researchEvidence, researchJobs, researchSources } from "@shared/schema";
 import type { NormalizedSource, ProviderDefinition } from "./contracts";
 import { ResearchEngine } from "./engine";
 import { ProviderExecutor, registerProvider, resetProviderRegistry } from "./registry";
@@ -116,6 +116,7 @@ describeDb("research engine (db)", () => {
       .where(like(researchJobs.correlationId, `${RUN}%`));
     const ids = jobs.map((job) => job.id);
     if (ids.length > 0) {
+      await db.delete(researchAnalyses).where(inArray(researchAnalyses.jobId, ids));
       await db.delete(researchEvidence).where(inArray(researchEvidence.jobId, ids));
       await db.delete(researchSources).where(inArray(researchSources.jobId, ids));
       await db.delete(researchJobs).where(inArray(researchJobs.id, ids));
@@ -332,5 +333,79 @@ describeDb("research engine (db)", () => {
         }),
       /authorStatement/,
     );
+  });
+
+  it("persists a frozen analysis snapshot with clusters and no extra research on reuse", async () => {
+    const second = `${RUN}_peer`;
+    registerProvider(
+      fakeProvider(second, () => [
+        source("s1", "kubernetes pod scheduling deep dive", second),
+        source("alt", "unrelated gardening", second),
+      ]),
+    );
+    const first = await engine.run({
+      kind: "directed",
+      query: "kubernetes scheduling",
+      providerIds: [providerId, second],
+      window: { preset: "last_30d" },
+      depth: "standard",
+      correlationId: `${RUN}-c-intel`,
+      idempotencyKey: `${RUN}-k-intel`,
+      userId: 1,
+    });
+    assert.equal(first.status, "complete");
+    assert.ok(first.analysis);
+    assert.equal(first.analysis?.version, "research-analysis-v1");
+    assert.ok((first.analysis?.clusters.length ?? 0) >= 1);
+    const stored = new DatabaseResearchStorage(db);
+    const row = await stored.getAnalysis(first.jobId);
+    assert.ok(row);
+    const reused = await engine.run({
+      kind: "directed",
+      query: "kubernetes scheduling",
+      providerIds: [providerId, second],
+      correlationId: `${RUN}-c-intel-2`,
+      idempotencyKey: `${RUN}-k-intel`,
+      userId: 1,
+    });
+    assert.equal(reused.reused, true);
+    assert.equal(reused.jobId, first.jobId);
+  });
+
+  it("records conflicts without dropping either sibling source", async () => {
+    const left = `${RUN}_left`;
+    const right = `${RUN}_right`;
+    registerProvider(
+      fakeProvider(left, () => [
+        {
+          ...source("l1", "Widget X released today"),
+          title: "Widget X released today",
+          excerpt: "Widget X released today",
+          canonicalUrl: `https://${RUN}.test/left`,
+          ref: { provider: left, kind: "article", nativeId: "l1", canonicalUrl: `https://${RUN}.test/left` },
+        },
+      ]),
+    );
+    registerProvider(
+      fakeProvider(right, () => [
+        {
+          ...source("r1", "Widget X released last week"),
+          title: "Widget X released last week",
+          excerpt: "Widget X released last week",
+          canonicalUrl: `https://${RUN}.test/right`,
+          ref: { provider: right, kind: "article", nativeId: "r1", canonicalUrl: `https://${RUN}.test/right` },
+        },
+      ]),
+    );
+    const result = await engine.run({
+      kind: "directed",
+      query: "Widget X",
+      providerIds: [left, right],
+      correlationId: `${RUN}-c-conflict`,
+      idempotencyKey: `${RUN}-k-conflict`,
+    });
+    assert.equal(result.status, "complete");
+    assert.equal(result.sourceCount, 2);
+    assert.ok((result.analysis?.conflicts.length ?? 0) >= 1);
   });
 });

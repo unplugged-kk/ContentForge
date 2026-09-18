@@ -65,6 +65,13 @@ export function researchInputForJob(job: ResearchJob | undefined): ResearchRunIn
     limit: typeof initiation.limit === "number" ? initiation.limit : undefined,
     window: (initiation.window ?? undefined) as TimeWindow | undefined,
     budget: (initiation.budget ?? undefined) as ProviderBudget | undefined,
+    depth: initiation.depth === "quick" || initiation.depth === "deep" || initiation.depth === "standard"
+      ? initiation.depth
+      : undefined,
+    seo: initiation.seo === true,
+    expansion: initiation.expansion && typeof initiation.expansion === "object"
+      ? (initiation.expansion as ResearchRunInput["expansion"])
+      : undefined,
     correlationId: job.correlationId,
     idempotencyKey: job.idempotencyKey,
     userId: job.userId,

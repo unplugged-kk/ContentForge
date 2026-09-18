@@ -19,7 +19,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
-import { researchEvidence, researchJobs, researchSources, rssSources } from "@shared/schema";
+import { researchEvidence, researchJobs, researchSources, rssSources, researchAnalyses } from "@shared/schema";
 import { RESEARCH_RUN_JOB_TYPE, registerResearchRunJob } from "./job";
 import { createRssConfigLoader } from "./providers/rssConfig";
 import { createRssProvider } from "./providers/rss";
@@ -146,6 +146,7 @@ describeDb("research vertical slice (db)", () => {
       .where(like(researchJobs.correlationId, `${RUN}%`));
     const ids = jobs.map((job) => job.id);
     for (const id of ids) {
+      await db.delete(researchAnalyses).where(eq(researchAnalyses.jobId, id));
       await db.delete(researchEvidence).where(eq(researchEvidence.jobId, id));
       await db.delete(researchSources).where(eq(researchSources.jobId, id));
       await db.delete(researchJobs).where(eq(researchJobs.id, id));

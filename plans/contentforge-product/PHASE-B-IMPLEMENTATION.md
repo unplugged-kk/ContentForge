@@ -992,11 +992,70 @@ timeout and Phase 24 style-snapshot assertions on the shared `cf_e2e_live`
 database — none of the named failures are Phase 25 paths); agent E2E 18/18;
 workspace/browser E2E 18/18. Visual E2E not re-run (Video Factory untouched).
 
-**Deferred:** Phase 26 research intelligence + SEO; vector duplicate detection;
+**Deferred:** Phase 27 video repurposing; vector duplicate detection;
 batch analytics/learning (Phase 29); HyperFrames / Video Factory composition;
 new channel adapters; hidden batch approve/publish.
 
-## Phase 24 — Real Voice + Style Intelligence (done)
+## Phase 26 — Research Intelligence + SEO (done)
+
+**The problem this closes**: Phase 25 can turn one Story into many outputs.
+Research still stopped at collect → normalize → Evidence → Story. Directed
+work now needs an explicit window, bounded query expansion, parallel
+multi-provider collection, cross-source clustering, ranking, credibility
+*class* (not a truth score), conflict preservation, and an optional SEO
+enrichment seam — all feeding the same Story that Phase 25 already consumes.
+
+```
+Intent (query, window, depth, asOf, seo)
+        ↓
+one ResearchEngine
+        ↓
+SourceProviders in parallel (rss / reddit / youtube / hn / web
+                             + last30days if explicitly enabled)
+        ↓
+NormalizedSource → dedupe → window filter
+        ↓
+research-analysis-v1 snapshot (`research_analyses`)
+        ↓
+Evidence → Story → Phase 25 RepurposingPlan
+```
+
+**One engine.** last30days is a SourceProvider, not a second engine. OpenSEO
+is an optional `SeoProviderPort`. Agent-Reach is a doctor/fallback design
+reference (`accessClass: local-agent-only`) and is never dispatched from
+hosted core. Cookie/session research stays out of the server.
+
+**last30days** is registered only when `LAST30DAYS_ENABLED=1` or
+`LAST30DAYS_SCRIPT` is set. Probe/search use `doctor --json` as capability
+truth and `--no-browser-cookies`. Hosted sources are the cookie-free set
+(reddit, hackernews, web, github, polymarket, arxiv, techmeme, digg). X /
+YouTube / TikTok cookies are never ingested on this path.
+
+**Analysis** is versioned (`research-analysis-v1`, `cluster-v1`,
+`expansion-v1`) and frozen per job. Retries reuse the same expansion.
+Over-limit requests 400. Zero usable sources fail permanently and do not
+fabricate a Story. Partial provider failure degrades (`quality=degraded`)
+when remaining evidence is usable.
+
+**Agent / UI.** `research_topic` accepts window/depth/asOf/seo.
+`get_research_sources`, `get_research_evidence`, `get_research_quality`,
+and `research_keywords` are semantic tools. `/agent` has a research panel
+that shows source/cluster/conflict counts from durable analysis.
+
+**Verification:** TypeScript 0; unit 509/509; Postgres 251/251; live E2E
+175/182 (8 new Phase 26 checks, 0 failed; 7 failures are regression-suite:
+Phase 13 scheduler-tick, Phase 24 style-snapshot, and two Phase 10
+context-generation checks that rate-limited on the dirty live DB);
+agent E2E 20/20; workspace/browser E2E 19/19. Visual E2E not re-run.
+
+**CannerAI:** IN-1/2/3/7/9/10/11/12 IMPLEMENTED; IN-4/5/6/8/13/14
+PARTIALLY IMPLEMENTED. last30days and OpenSEO live smokes BLOCKED /
+ARCHITECTURALLY READY until configured. YouTube transcript is not claimed.
+
+**Deferred:** Phase 27 video repurposing; vector DB; hosted cookie research;
+HyperFrames; automatic publish.
+
+## Phase 25 — Mass Repurposing Engine (done)
 
 
 **The problem this closes**: personalization was still mostly explicit Voice /

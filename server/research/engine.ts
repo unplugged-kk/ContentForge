@@ -30,6 +30,19 @@ import {
   type DroppedSource,
   validateResearch,
 } from "./engine-core";
+import {
+  analyzeResearch,
+  depthBudget,
+  expandQueries,
+  filterByWindow,
+  RESEARCH_LIMITS,
+  resolveTimeWindow,
+  type QueryExpansion,
+  type ResearchAnalysis,
+  type ResearchDepth,
+  type ResolvedWindow,
+} from "./intelligence";
+import type { SeoContext, SeoProviderPort } from "./seo";
 import type { ProviderExecutor } from "./registry";
 import type { ResearchStoragePort, StoredSource } from "./storage";
 
@@ -47,6 +60,10 @@ export interface ResearchRunInput {
   window?: TimeWindow;
   budget?: ProviderBudget;
   timeoutMs?: number;
+  depth?: ResearchDepth;
+  seo?: boolean;
+  /** Frozen expansion from a prior attempt of the same job. */
+  expansion?: QueryExpansion;
   /** Defaults to a generated id; supply to make a run reproducible/idempotent. */
   correlationId?: string;
   idempotencyKey?: string;
@@ -68,6 +85,8 @@ export interface ResearchRunResult {
   droppedCount: number;
   dropped: DroppedSource[];
   diagnostics: ProviderCallDiagnostics[];
+  analysis?: ResearchAnalysis;
+  seo?: SeoContext | null;
   failureClass?: string;
   failureMessage?: string;
 }
@@ -77,6 +96,7 @@ export interface ResearchEngineDeps {
   storage: ResearchStoragePort;
   logSink?: LogSink;
   now?: () => Date;
+  seo?: SeoProviderPort;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -111,8 +131,11 @@ export class ResearchEngine {
         kind: input.kind,
         query: input.query ?? null,
         limit: input.limit ?? null,
-        window: input.window ?? null,
+        window: resolveTimeWindow({ window: input.window, preset: input.window?.preset, asOf: input.window?.asOf }, this.now()),
         budget: input.budget ?? null,
+        depth: input.depth ?? "standard",
+        seo: input.seo ?? false,
+        expansion: input.expansion ?? (input.query ? expandQueries(input.query, depthBudget(input.depth).maxExpandedQueries) : null),
         // The statement itself is stored as evidence, not duplicated here.
         hasAuthorStatement: Boolean(input.authorStatement),
       },
@@ -173,8 +196,16 @@ export class ResearchEngine {
     input: ResearchRunInput,
     correlationId: string,
   ): Promise<ResearchRunResult> {
-    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const budget = depthBudget(input.depth ?? "standard", input.limit);
+    const timeoutMs = input.timeoutMs ?? budget.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = new Date(this.now().getTime() + timeoutMs);
+    const resolvedWindow = resolveTimeWindow(
+      { window: input.window, preset: input.window?.preset, asOf: input.window?.asOf },
+      this.now(),
+    );
+    const expansion =
+      input.expansion
+      ?? (input.query ? expandQueries(input.query, budget.maxExpandedQueries) : null);
 
     await this.deps.storage.markRunning(job.id);
 
@@ -184,22 +215,57 @@ export class ResearchEngine {
     try {
       if (input.kind !== "human_input") {
         const capability = capabilityFor(input.kind);
-        for (const providerId of input.providerIds) {
-          const outcome = await this.collectFromProvider(
-            providerId,
-            capability,
-            input,
-            correlationId,
-            deadline,
+        const providerIds = input.providerIds.slice(0, RESEARCH_LIMITS.maxProviders);
+        const concurrent = Math.min(RESEARCH_LIMITS.maxConcurrentProviders, Math.max(1, providerIds.length));
+        for (let offset = 0; offset < providerIds.length; offset += concurrent) {
+          const batch = providerIds.slice(offset, offset + concurrent);
+          const outcomes = await Promise.all(
+            batch.map((providerId) =>
+              this.collectFromProvider(
+                providerId,
+                capability,
+                { ...input, query: expansion?.original ?? input.query, window: resolvedWindow ?? input.window },
+                correlationId,
+                deadline,
+              ),
+            ),
           );
-          if (outcome) {
+          for (const outcome of outcomes) {
+            if (!outcome) continue;
+            diagnostics.push(outcome.diagnostics);
+            collected.push(...outcome.sources);
+          }
+        }
+
+        const extraQueries = expansion?.expanded.slice(1) ?? [];
+        const searchProviders = providerIds
+          .filter((id) => this.deps.executor.supportsCapability(id, "search"))
+          .slice(0, budget.extraSearchProviders);
+        for (const extra of extraQueries) {
+          if (collected.length >= budget.maxSources) break;
+          if (searchProviders.length === 0) break;
+          const extraOutcomes = await Promise.all(
+            searchProviders.map((providerId) =>
+              this.collectFromProvider(
+                providerId,
+                "search",
+                { ...input, query: extra, window: resolvedWindow ?? input.window, limit: Math.min(5, budget.maxSources) },
+                correlationId,
+                deadline,
+              ),
+            ),
+          );
+          for (const outcome of extraOutcomes) {
+            if (!outcome) continue;
             diagnostics.push(outcome.diagnostics);
             collected.push(...outcome.sources);
           }
         }
       }
 
-      const { kept, dropped } = dedupeSources(collected);
+      const { kept: deduped, dropped } = dedupeSources(collected);
+      const windowed = filterByWindow(deduped, resolvedWindow);
+      const kept = windowed.slice(0, budget.maxSources);
 
       // Zero sources survived: distinguish "every provider failed" (a recoverable
       // job failure that the queue should retry/reschedule) from "providers ran
@@ -271,7 +337,40 @@ export class ResearchEngine {
         };
       }
 
-      const evidenceCount = await this.deps.storage.insertEvidence(job.id, derived, stored);
+      const evidenceCount = await this.deps.storage.insertEvidence(job.id, derived.slice(0, RESEARCH_LIMITS.maxEvidence), stored);
+      const collectionSummary = summarizeCollection(diagnostics);
+      const prior = input.userId
+        ? await this.deps.storage.listJobs(input.userId, 20)
+        : [];
+      const related = prior.filter((row) => row.id !== job.id && row.query === input.query).slice(0, 5);
+      const priorUrls = (
+        await Promise.all(related.slice(0, 3).map((row) => this.deps.storage.listSources(row.id)))
+      ).flat().map((row) => row.canonicalUrl);
+
+      let seo: SeoContext | null = null;
+      if (input.seo && this.deps.seo && input.query) {
+        const health = await this.deps.seo.health();
+        if (health.available) {
+          seo = await this.deps.seo.research(input.query);
+        }
+      }
+
+      const analysis = analyzeResearch({
+        query: input.query ?? "",
+        sources: kept,
+        diagnostics,
+        summary: collectionSummary,
+        window: resolvedWindow,
+        expansion,
+        depth: budget.depth,
+        priorUrls,
+        relatedJobIds: related.map((row) => row.id),
+        now: this.now(),
+      });
+      if (seo) {
+        (analysis as ResearchAnalysis & { seo?: SeoContext }).seo = seo;
+      }
+      await this.deps.storage.saveAnalysis(job.id, input.userId ?? job.userId ?? null, analysis);
       await this.deps.storage.markComplete(job.id, diagnostics);
 
       this.log(
@@ -282,6 +381,7 @@ export class ResearchEngine {
           evidenceCount,
           droppedCount: dropped.length,
           providers: input.providerIds.length,
+          quality: analysis.quality,
         },
         "research completed",
       );
@@ -296,6 +396,8 @@ export class ResearchEngine {
         droppedCount: dropped.length,
         dropped,
         diagnostics,
+        analysis,
+        seo,
       };
     } catch (error) {
       const failureClass = error instanceof JobFailure ? error.failureClass : "transient";

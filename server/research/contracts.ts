@@ -48,6 +48,10 @@ export interface TimeWindow {
   from?: string;
   /** ISO-8601 exclusive upper bound. */
   to?: string;
+  /** Named window, frozen on the ResearchJob snapshot when supplied. */
+  preset?: "today" | "last_24h" | "last_7d" | "last_30d" | "custom";
+  /** Historical as-of instant. Providers that cannot honor it must report unsupported. */
+  asOf?: string;
 }
 
 export interface ProviderBudget {

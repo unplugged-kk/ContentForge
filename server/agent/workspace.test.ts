@@ -46,6 +46,17 @@ describe("workspace intent compiler", () => {
     assert.equal(targets.find((t) => t.format === "linkedin_post")?.count, 2);
   });
 
+  it("passes a last_30d window into research_topic", () => {
+    const plan = compileWorkspaceIntent("Research AI agents from the last 30 days.");
+    assert.equal(plan[0]?.tool, "research_topic");
+    assert.equal((plan[0]?.arguments as { windowPreset?: string }).windowPreset, "last_30d");
+  });
+
+  it("requests SEO enrichment when the objective asks for it", () => {
+    const plan = compileWorkspaceIntent("Research AI agents from the last 30 days and include SEO context.");
+    assert.equal((plan[0]?.arguments as { seo?: boolean }).seo, true);
+  });
+
   it("compiles image and video intents", () => {
     assert.ok(compileWorkspaceIntent("Create an image for this post.").some((s) => s.tool === "generate_image"));
     assert.ok(compileWorkspaceIntent("Create a video for this story.").some((s) => s.tool === "generate_video"));

@@ -9,9 +9,11 @@ import { and, desc, eq, isNull, ne, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
+  researchAnalyses,
   researchEvidence,
   researchJobs,
   researchSources,
+  type ResearchAnalysisRow,
   type ResearchEvidence,
   type ResearchJob,
   type ResearchSource,
@@ -23,6 +25,8 @@ import { db as defaultDb } from "../db";
 export type ResearchDatabase = NodePgDatabase<typeof schema>;
 import type { NormalizedSource, ProviderCallDiagnostics } from "./contracts";
 import type { DerivedEvidence } from "./engine-core";
+import type { ResearchAnalysis } from "./intelligence";
+import { RESEARCH_ANALYSIS_VERSION } from "./intelligence";
 
 export interface ClaimJobInput {
   correlationId: string;
@@ -57,6 +61,14 @@ export interface ResearchStoragePort {
     diagnostics: readonly ProviderCallDiagnostics[],
   ): Promise<void>;
   getEvidenceForJob(jobId: number): Promise<Array<{ id: number; excerpt: string; kind: string }>>;
+  listJobs(userId: number | null, limit?: number): Promise<ResearchJob[]>;
+  listSources(jobId: number): Promise<ResearchSource[]>;
+  saveAnalysis(
+    jobId: number,
+    userId: number | null,
+    analysis: ResearchAnalysis,
+  ): Promise<ResearchAnalysisRow>;
+  getAnalysis(jobId: number, version?: string): Promise<ResearchAnalysisRow | undefined>;
 }
 
 /**
@@ -297,6 +309,41 @@ export class DatabaseResearchStorage implements ResearchStoragePort {
       .from(researchEvidence)
       .where(eq(researchEvidence.jobId, jobId))
       .orderBy(researchEvidence.id);
+  }
+
+  async saveAnalysis(
+    jobId: number,
+    userId: number | null,
+    analysis: ResearchAnalysis,
+  ): Promise<ResearchAnalysisRow> {
+    const inserted = await this.database
+      .insert(researchAnalyses)
+      .values({
+        jobId,
+        userId,
+        analysisVersion: analysis.version,
+        snapshot: analysis,
+      })
+      .onConflictDoNothing({
+        target: [researchAnalyses.jobId, researchAnalyses.analysisVersion],
+      })
+      .returning();
+    if (inserted[0]) return inserted[0];
+    const existing = await this.getAnalysis(jobId, analysis.version);
+    if (!existing) throw new Error(`research analysis missing for job ${jobId}`);
+    return existing;
+  }
+
+  async getAnalysis(
+    jobId: number,
+    version = RESEARCH_ANALYSIS_VERSION,
+  ): Promise<ResearchAnalysisRow | undefined> {
+    const rows = await this.database
+      .select()
+      .from(researchAnalyses)
+      .where(and(eq(researchAnalyses.jobId, jobId), eq(researchAnalyses.analysisVersion, version)))
+      .limit(1);
+    return rows[0];
   }
 
   /** Evidence identities only — used by downstream provenance links (Story). */

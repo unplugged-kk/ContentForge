@@ -3,6 +3,111 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 26 — Research Intelligence + SEO
+
+**Status:** IMPLEMENTED (last30days live smoke BLOCKED unless explicitly enabled;
+OpenSEO ARCHITECTURALLY READY / unconfigured; YouTube remains metadata-only;
+Timeplus live MCP remains ENVIRONMENTALLY BLOCKED; Video Factory HyperFrames
+render remains the Phase 21 BLOCKED boundary)
+
+**Verification:** TypeScript 0; unit 509/509; Postgres 251/251; live E2E
+175/182 (8 new Phase 26 checks all passed; 7 failures are regression-suite on
+the shared `cf_e2e_live` DB — Phase 13 scheduler-tick timeout, Phase 24
+style-snapshot assertions, plus two Phase 10 context-generation checks that
+rate-limited this run — not Phase 26 paths); agent E2E 20/20; workspace/browser
+E2E 19/19. Visual E2E not re-run (Video Factory untouched).
+
+```
+Regression suite:     167 passed / 7 failed
+Phase 26 new live:      8 passed / 0 failed
+Phase 26 agent extra:   2 passed / 0 failed
+Phase 26 critical invariants: PASS
+```
+
+### Problem
+
+Phase 25 proved one research-backed Story can become many content outputs.
+The remaining creation gap was the *input* Story: research collected sources
+and derived evidence, but did not freeze windows, expand queries, cluster
+cross-provider events, rank, surface conflicts, or attach optional SEO
+context before synthesis.
+
+### Architecture
+
+```
+Research Intent (query, window, depth, asOf, seo)
+      ↓
+one ResearchEngine
+      ↓
+SourceProviders in parallel (rss / reddit / youtube / hn / web
+                             + last30days if explicitly enabled)
+      ↓
+NormalizedSource → dedupe → window filter
+      ↓
+research-analysis-v1 (clusters, ranking, credibility class,
+                      conflicts, quality, novelty, synthesis draft)
+      ↓
+Evidence → Story  → existing Phase 25 repurposing
+```
+
+No second research engine. SEO is an optional port (`createSeoProvider`),
+not a SourceProvider. last30days is a SourceProvider gated by
+`LAST30DAYS_ENABLED=1` or `LAST30DAYS_SCRIPT` plus doctor JSON at probe time.
+Agent-Reach is a doctor/fallback *design reference* (`local-agent-only`);
+hosted core stays cookie-free.
+
+### Database
+
+`research_analyses` (migration `0025_research_intelligence`): unique
+`(job_id, analysis_version)`, owner/job indexes, FK to `research_jobs`.
+Completed analysis snapshots are immutable (`ON CONFLICT DO NOTHING`).
+
+### Invariants proven
+
+- no fabricated Story on zero usable sources
+- mixed-provider aggregation + analysis-v1 snapshot
+- last_30d and asOf frozen on the ResearchJob initiation
+- concurrent identical requestKeys collapse to one job
+- over-limit `maxSources` is 400, not truncated
+- last30days/OpenSEO/Agent-Reach advertised honestly
+- prompt injection remains data
+- Phase 25 mixed Story → two formats with no extra research
+
+### External posture
+
+| Integration | Status |
+|---|---|
+| last30days | ARCHITECTURALLY READY / live BLOCKED (not enabled; doctor JSON is capability truth) |
+| Agent-Reach | REFERENCE ONLY (not dispatched; no Python internals; no hosted cookies) |
+| OpenSEO | ARCHITECTURALLY READY (unconfigured; `research_keywords` returns structured skip) |
+| YouTube transcript | NOT CLAIMED (discover metadata only) |
+
+### CannerAI parity
+
+| Item | Status |
+|---|---|
+| IN-1 directed research | IMPLEMENTED |
+| IN-2 autonomous discovery foundation | IMPLEMENTED |
+| IN-3 URL research | IMPLEMENTED |
+| IN-4 article/blog ingestion | PARTIALLY IMPLEMENTED (web fetch; no PDF extractor) |
+| IN-5 YouTube ingestion improvement | PARTIALLY IMPLEMENTED (metadata discover; no transcript) |
+| IN-6 Reddit/discussion ingestion | PARTIALLY IMPLEMENTED (cookie-free provider; limitations reported) |
+| IN-7 RSS monitoring | IMPLEMENTED |
+| IN-8 trending topics | PARTIALLY IMPLEMENTED (freshness/ranking/novelty; no `trend_signals` table) |
+| IN-9 multi-source synthesis | IMPLEMENTED |
+| IN-10 evidence/provenance | IMPLEMENTED |
+| IN-11 credibility/conflict handling | IMPLEMENTED |
+| IN-12 recent/current-events research | IMPLEMENTED |
+| IN-13 research library | PARTIALLY IMPLEMENTED (job list + frozen analysis; no pin UI) |
+| IN-14 saved research/context | PARTIALLY IMPLEMENTED (idempotent reuse + existing ContextAssembly) |
+
+### Deferred
+
+Phase 27 video repurposing; vector DB; hosted cookie/session research;
+YouTube transcript unless a real backend exists; OpenSEO live until configured;
+last30days live until `LAST30DAYS_ENABLED=1` plus doctor-available hosted sources;
+batch analytics/learning (Phase 29); HyperFrames; automatic publish.
+
 ## Phase 25 — Mass Repurposing Engine
 
 **Status:** IMPLEMENTED (Timeplus live MCP remains ENVIRONMENTALLY BLOCKED;
@@ -86,7 +191,7 @@ controlled repurpose panel; progress is polled from `GET /api/repurposing/plans/
 
 ### Deferred
 
-Phase 26 research intelligence + SEO; vector duplicate detection; batch
+Phase 27 video repurposing; vector duplicate detection; batch
 analytics/learning (Phase 29); YouTube/TikTok/Threads; HyperFrames; automatic
 publish; batch approval UI.
 

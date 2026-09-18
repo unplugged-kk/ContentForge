@@ -34,6 +34,7 @@ import {
   researchEvidence,
   researchJobs,
   researchSources,
+  researchAnalyses,
   results,
   scheduleOccurrences,
   schedules,
@@ -127,6 +128,7 @@ describeDb("automation (db)", () => {
     const rjs = await db.select({ id: researchJobs.id }).from(researchJobs).where(inArray(researchJobs.userId, OWNERS));
     const rjIds = rjs.map((r) => r.id);
     if (rjIds.length) {
+      await db.delete(researchAnalyses).where(inArray(researchAnalyses.jobId, rjIds));
       await db.delete(researchEvidence).where(inArray(researchEvidence.jobId, rjIds));
       await db.delete(researchSources).where(inArray(researchSources.jobId, rjIds));
       await db.delete(researchJobs).where(inArray(researchJobs.id, rjIds));

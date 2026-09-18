@@ -12,6 +12,9 @@ import type { ResearchJob, ResearchEvidence, ResearchSource } from "@shared/sche
 import { getUserId } from "../middleware/userContext";
 import { hasProvider, listProviders } from "./registry";
 import type { ClaimJobInput, ClaimJobResult } from "./storage";
+import { RESEARCH_LIMITS, resolveTimeWindow, depthBudget, expandQueries } from "./intelligence";
+import { last30daysConfigured } from "./providers/last30days";
+import { seoConfigured, unconfiguredSeoHealth } from "./seo";
 
 export interface ResearchApiStorage {
   claimJob(input: ClaimJobInput): Promise<ClaimJobResult>;
@@ -19,6 +22,7 @@ export interface ResearchApiStorage {
   listJobs(userId: number | null, limit?: number): Promise<ResearchJob[]>;
   listSources(jobId: number): Promise<ResearchSource[]>;
   listEvidence(jobId: number): Promise<ResearchEvidence[]>;
+  getAnalysis?(jobId: number): Promise<import("@shared/schema").ResearchAnalysisRow | undefined>;
 }
 
 export interface ResearchApiDeps {
@@ -29,6 +33,8 @@ export interface ResearchApiDeps {
 const windowSchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
+  preset: z.enum(["today", "last_24h", "last_7d", "last_30d", "custom"]).optional(),
+  asOf: z.string().datetime().optional(),
 });
 
 const budgetSchema = z.object({
@@ -42,9 +48,13 @@ export const createResearchJobBodySchema = z
     kind: z.enum(["directed", "autonomous", "human_input"]).default("directed"),
     query: z.string().trim().min(1).optional(),
     authorStatement: z.string().trim().min(1).optional(),
-    providerIds: z.array(z.string().trim().min(1)).min(1).default(["rss"]),
-    limit: z.number().int().positive().max(100).optional(),
+    providerIds: z.array(z.string().trim().min(1)).min(1).max(RESEARCH_LIMITS.maxProviders).default(["rss"]),
+    limit: z.number().int().positive().max(RESEARCH_LIMITS.maxSources).optional(),
     window: windowSchema.optional(),
+    windowPreset: z.enum(["today", "last_24h", "last_7d", "last_30d", "custom"]).optional(),
+    asOf: z.string().datetime().optional(),
+    depth: z.enum(["quick", "standard", "deep"]).optional(),
+    seo: z.boolean().optional(),
     budget: budgetSchema.optional(),
     idempotencyKey: z.string().trim().min(1).max(300).optional(),
     /**
@@ -117,6 +127,14 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     const userId = getUserId(req) ?? 1;
     const correlationId = randomUUID();
     const idempotencyKey = body.idempotencyKey ?? `research:${body.kind}:${randomUUID()}`;
+    const window = resolveTimeWindow({
+      window: body.window,
+      preset: body.windowPreset ?? body.window?.preset,
+      asOf: body.asOf ?? body.window?.asOf,
+    });
+    const depth = body.depth ?? "standard";
+    const expansion = body.query ? expandQueries(body.query, depthBudget(depth).maxExpandedQueries) : null;
+    const limit = Math.min(body.limit ?? depthBudget(depth).maxSources, RESEARCH_LIMITS.maxSources);
 
     const { job, created } = await deps.storage.claimJob({
       correlationId,
@@ -128,9 +146,12 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
       initiation: {
         kind: body.kind,
         query: body.query ?? null,
-        limit: body.limit ?? null,
-        window: body.window ?? null,
+        limit,
+        window,
         budget: body.budget ?? null,
+        depth,
+        seo: body.seo ?? false,
+        expansion,
         authorStatement: body.authorStatement ?? null,
         providerConfig: body.providerConfig ?? null,
       },
@@ -165,9 +186,16 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
       deps.storage.listSources(id),
       deps.storage.listEvidence(id),
     ]);
-    return res.json(
-      serializeJob(job, { sourceCount: sources.length, evidenceCount: evidence.length }),
-    );
+    const analysis = deps.storage.getAnalysis ? await deps.storage.getAnalysis(id) : undefined;
+    const snapshot = analysis?.snapshot && typeof analysis.snapshot === "object"
+      ? (analysis.snapshot as Record<string, unknown>)
+      : null;
+    return res.json({
+      ...serializeJob(job, { sourceCount: sources.length, evidenceCount: evidence.length }),
+      quality: snapshot && typeof snapshot.quality === "string" ? snapshot.quality : null,
+      summary: snapshot && typeof snapshot.summary === "object" ? snapshot.summary : null,
+      window: (job.initiation as Record<string, unknown> | null)?.window ?? null,
+    });
   });
 
   /** Recent research jobs for the caller (their own, plus legacy unowned rows). */
@@ -202,6 +230,43 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     return res.json({ providers });
   });
 
+  router.get("/capabilities", async (_req, res) => {
+    const providers = listProviders().map((provider) => ({
+      providerId: provider.id,
+      capabilities: Array.from(new Set(provider.backends.flatMap((backend) => backend.capabilities))).sort(),
+      accessClass: provider.accessClass,
+      configured: true,
+      available: provider.accessClass !== "local-agent-only",
+      reason: provider.description ?? null,
+    }));
+    const seo = unconfiguredSeoHealth();
+    if (seoConfigured()) {
+      seo.configured = true;
+      seo.reason = "OPENSEO configured (live availability requires /health)";
+    }
+    return res.json({
+      limits: RESEARCH_LIMITS,
+      last30days: {
+        providerId: "last30days",
+        configured: last30daysConfigured(),
+        available: false,
+        accessClass: "open",
+        reason: last30daysConfigured()
+          ? "configured; availability comes from last30days doctor JSON at probe time, not env presence"
+          : "not enabled (set LAST30DAYS_ENABLED=1 or LAST30DAYS_SCRIPT)",
+      },
+      openseo: seo,
+      agentReach: {
+        providerId: "agent-reach",
+        configured: false,
+        available: false,
+        accessClass: "local-agent-only",
+        reason: "design reference for doctor/fallback; not dispatched by hosted ResearchEngine",
+      },
+      providers,
+    });
+  });
+
   router.get("/jobs/:id/sources", async (req, res) => {
     const id = parseId(req, res);
     if (id === null) return;
@@ -218,6 +283,21 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
     const job = await loadOwnedJob(req, res, deps, id);
     if (!job) return;
     return res.json(await deps.storage.listEvidence(id));
+  });
+
+  router.get("/jobs/:id/analysis", async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null) return;
+    const job = await loadOwnedJob(req, res, deps, id);
+    if (!job) return;
+    const analysis = deps.storage.getAnalysis ? await deps.storage.getAnalysis(id) : undefined;
+    if (!analysis) return res.status(404).json({ message: "Research analysis not found" });
+    return res.json({
+      jobId: id,
+      analysisVersion: analysis.analysisVersion,
+      snapshot: analysis.snapshot,
+      createdAt: analysis.createdAt,
+    });
   });
 
   return router;

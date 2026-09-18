@@ -408,6 +408,23 @@ async function execTool(runId, tool, args, extra = {}) {
     return `job ${researchJobId} ${row.status}`;
   });
 
+  await check("get_research_quality returns the frozen analysis snapshot", async () => {
+    const res = await execTool(runId, "get_research_quality", { researchJobId });
+    assert([200, 201].includes(res.status), `status ${res.status}: ${res.text}`);
+    const quality = res.body.result?.data?.quality;
+    assert(typeof quality === "string", "quality shape");
+    return `quality=${quality}`;
+  });
+
+  await check("research_keywords does not fabricate OpenSEO metrics when unconfigured", async () => {
+    const res = await execTool(runId, "research_keywords", { topic: "AI agents" });
+    assert([200, 201].includes(res.status), `status ${res.status}: ${res.text}`);
+    assert(res.body.result.data.available === false || Array.isArray(res.body.result.data.keywords), "seo shape");
+    assert(res.body.result.data.available === false, "unconfigured OpenSEO must not look live");
+    assert(Array.isArray(res.body.result.data.keywords) && res.body.result.data.keywords.length === 0, "no fabricated keywords");
+    return res.body.result.summary;
+  });
+
   let storyId;
   await check("create_story persists a Story from completed research", async () => {
     const res = await execTool(runId, "create_story", {

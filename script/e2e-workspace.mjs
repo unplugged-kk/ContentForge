@@ -352,8 +352,22 @@ async function cookieHeader() {
     await page.locator('[data-testid="panel-agent-capabilities"]').waitFor();
     await page.locator('[data-testid="panel-style-intelligence"]').waitFor();
     await page.locator('[data-testid="panel-repurposing"]').waitFor();
+    await page.locator('[data-testid="panel-research"]').waitFor();
     await context.close();
-    return "workspace chrome + style + repurpose panels visible";
+    return "workspace chrome + style + repurpose + research panels visible";
+  });
+
+  await check("Browser Journey A: research panel queues a job and reconstructs progress", async () => {
+    const { context, page } = await openWorkspace();
+    await page.locator('[data-testid="panel-research"]').waitFor();
+    await page.locator('[data-testid="input-research-query"]').fill(`${RUN} kubernetes`);
+    await page.locator('[data-testid="button-window-last_30d"]').click();
+    await page.locator('[data-testid="button-research-start"]').click();
+    await page.locator('[data-testid="text-research-progress"]').waitFor({ timeout: 90_000 });
+    await page.reload();
+    await page.locator('[data-testid="panel-research"]').waitFor();
+    await context.close();
+    return "research panel started";
   });
 
   await check("HTTP: operator can add reference content and list it", async () => {

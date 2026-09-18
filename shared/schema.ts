@@ -685,6 +685,23 @@ export const researchEvidence = pgTable(
   ],
 );
 
+export const researchAnalyses = pgTable(
+  "research_analyses",
+  {
+    id: serial("id").primaryKey(),
+    jobId: integer("job_id").notNull().references(() => researchJobs.id),
+    userId: integer("user_id"),
+    analysisVersion: varchar("analysis_version", { length: 40 }).notNull().default("research-analysis-v1"),
+    snapshot: jsonb("snapshot").notNull().default({}),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_analyses_job_version_uq").on(table.jobId, table.analysisVersion),
+    index("research_analyses_job_idx").on(table.jobId),
+    index("research_analyses_owner_idx").on(table.userId),
+  ],
+);
+
 export const insertResearchJobSchema = createInsertSchema(researchJobs).omit({
   id: true,
   createdAt: true,
@@ -704,6 +721,12 @@ export type ResearchSource = typeof researchSources.$inferSelect;
 export type InsertResearchSource = z.infer<typeof insertResearchSourceSchema>;
 export type ResearchEvidence = typeof researchEvidence.$inferSelect;
 export type InsertResearchEvidence = z.infer<typeof insertResearchEvidenceSchema>;
+export const insertResearchAnalysisSchema = createInsertSchema(researchAnalyses).omit({
+  id: true,
+  createdAt: true,
+});
+export type ResearchAnalysisRow = typeof researchAnalyses.$inferSelect;
+export type InsertResearchAnalysis = z.infer<typeof insertResearchAnalysisSchema>;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 
 // ── STORY DOMAIN (Phase B) ────────────────────────────────────────────────────

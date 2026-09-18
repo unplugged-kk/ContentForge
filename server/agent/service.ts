@@ -38,6 +38,7 @@ function researchPort() {
     getJob: (jobId: number) => researchStorage.getJob(jobId),
     listSources: (jobId: number) => researchStorage.listSources(jobId),
     listEvidence: (jobId: number) => researchStorage.listEvidence(jobId),
+    getAnalysis: (jobId: number) => researchStorage.getAnalysis(jobId),
     enqueueResearchRun: async (job: { id: number; correlationId: string; idempotencyKey: string }) => {
       const { getJobRuntime } = await import("../jobs/bootstrap");
       await getJobRuntime().enqueue({

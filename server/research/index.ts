@@ -50,6 +50,22 @@ export {
   type ResearchRunResult,
 } from "./engine";
 export {
+  RESEARCH_ANALYSIS_VERSION,
+  RESEARCH_LIMITS,
+  analyzeResearch,
+  clusterSources,
+  detectConflicts,
+  depthBudget,
+  expandQueries,
+  resolveTimeWindow,
+} from "./intelligence";
+export {
+  createSeoProvider,
+  createUnconfiguredSeoProvider,
+  normalizeSeoContext,
+  seoConfigured,
+} from "./seo";
+export {
   DatabaseResearchStorage,
   ResearchJobImmutableError,
   type ClaimJobInput,
@@ -89,6 +105,16 @@ export {
   webProvider,
   webProviderConfigSchema,
 } from "./providers/web";
+export {
+  LAST30DAYS_HOSTED_SOURCES,
+  LAST30DAYS_PROVIDER_ID,
+  createLast30DaysProvider,
+  last30daysConfigured,
+  last30daysProvider,
+  last30daysProviderConfigSchema,
+  normalizeLast30DaysItems,
+  parseDoctorReport,
+} from "./providers/last30days";
 export {
   DEFAULT_ALLOWED_CONTENT_TYPES,
   DEFAULT_URL_MAX_LENGTH,

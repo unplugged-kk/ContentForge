@@ -16,7 +16,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
-import { researchEvidence, researchJobs, researchSources } from "@shared/schema";
+import { researchEvidence, researchJobs, researchSources, researchAnalyses } from "@shared/schema";
 import type { NormalizedSource, ProviderDefinition } from "./contracts";
 import { ResearchEngine } from "./engine";
 import { ProviderExecutor, registerProvider, resetProviderRegistry } from "./registry";
@@ -86,6 +86,7 @@ describeDb("research providers (db)", () => {
       .where(like(researchJobs.correlationId, `${RUN}%`));
     const ids = jobs.map((j) => j.id);
     if (ids.length > 0) {
+      await db.delete(researchAnalyses).where(inArray(researchAnalyses.jobId, ids));
       await db.delete(researchEvidence).where(inArray(researchEvidence.jobId, ids));
       await db.delete(researchSources).where(inArray(researchSources.jobId, ids));
       await db.delete(researchJobs).where(inArray(researchJobs.id, ids));
@@ -193,7 +194,9 @@ describeDb("research providers (db)", () => {
 
     assert.equal(result.status, "complete");
     assert.equal(result.sourceCount, 3, "one source per provider");
-    assert.equal(result.diagnostics.length, 3, "every attempted provider is recorded");
+    const attempted = Array.from(new Set(result.diagnostics.map((row) => row.provider))).sort();
+    assert.deepEqual(attempted, [...ids].sort(), "every attempted provider is recorded");
+    assert.ok(result.diagnostics.length >= 3, "expansion follow-up searches may add diagnostics");
     assert.ok(result.diagnostics.every((d) => d.outcome === "ok"));
 
     const rows = await db.select().from(researchSources).where(eq(researchSources.jobId, result.jobId));
