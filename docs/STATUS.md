@@ -3,6 +3,50 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.1 — YouTube ChannelAdapter
+
+**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED — credential unavailable.
+
+Google login OAuth (`GOOGLE_CLIENT_ID` / `SECRET`) is present for account login,
+but no YouTube **upload** refresh token (`youtube.upload` scope) is configured.
+The ChannelAdapter, validation, resumable-upload transport, reconcile seam,
+real-publish gate, and unit coverage are implemented. A real private/unlisted
+upload has **not** been executed.
+
+### Implemented
+
+- `createYouTubeChannelAdapter()` registered beside X / LinkedIn / Threads /
+  Instagram. Supports format `video` only.
+- Transport: `server/social/youtube.ts` — YouTube Data API v3 resumable upload;
+  token refresh; secret redaction; ambiguous upload → reconcile hint.
+- Credentials: env (`YOUTUBE_ACCESS_TOKEN` / `YOUTUBE_REFRESH_TOKEN` + client)
+  or `connected_accounts` platform `youtube`. Reuses `GOOGLE_CLIENT_*` when
+  `YOUTUBE_CLIENT_*` unset.
+- Real publish blocked unless `CONTENTFORGE_REAL_PUBLISH_E2E=1` (Google hosts).
+  Optional certification budget via `CONTENTFORGE_PUBLISH_CERTIFICATION=1`.
+- Status: `GET /api/social/youtube/status` (no secrets).
+- Agent remains `publish_now` (channel-neutral). No `publish_youtube` tool.
+- Docs: `docs/channel-onboarding.md`.
+
+### Not done this slice
+
+- Live HTTP publish (needs YouTube upload OAuth token).
+- TikTok adapter.
+- Threads live re-certification (adapter already existed; credentials still absent).
+- YouTube analytics / playlists / Shorts-specific UX.
+- Media generation (fal / ElevenLabs / OpenShorts / Video Factory untouched).
+
+### Audit notes (existing distribution)
+
+| Channel | Adapter before 28.1 | Notes |
+| --- | --- | --- |
+| X | yes | xQuick transport |
+| LinkedIn | yes | text |
+| Threads | yes (Phase 17) | live often credential-blocked |
+| Instagram | yes | image / carousel / Reels |
+| YouTube | **no** → added | research/RSS connector ≠ publishing |
+| TikTok | no | deferred |
+
 ## Phase 27.3 — Pluggable Media Provider Platform
 
 **Status:** IMPLEMENTED. Real cloud audio (ElevenLabs) and an additional real

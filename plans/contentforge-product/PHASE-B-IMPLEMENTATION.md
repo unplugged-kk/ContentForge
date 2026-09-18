@@ -1105,6 +1105,24 @@ Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
 **Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
 VideoTemplate revisions; editor; auto-publish.
 
+## Phase 28.1 — YouTube publishing adapter (partial)
+
+**Status:** PARTIALLY IMPLEMENTED. Adapter + unit doubles IMPLEMENTED.
+Live E2E **BLOCKED — YouTube upload credential unavailable** (no refresh token
+with `youtube.upload`; Google login OAuth alone is insufficient).
+
+**Architecture.** Same `Artifact → Publication → ChannelAdapter → Result`.
+`createYouTubeChannelAdapter()` supports `video` only. Transport in
+`server/social/youtube.ts` (resumable upload, refresh, reconcile via
+`videos.list`). Provider idempotency unavailable — ContentForge Publication
+identity wins. Real Google hosts require `CONTENTFORGE_REAL_PUBLISH_E2E=1`.
+
+**Audit.** Threads and Instagram adapters already existed; YouTube publishing
+did not. TikTok not started. No fal/ElevenLabs spend.
+
+**Deferred:** live cert until OAuth upload token; TikTok; Threads live cert;
+YouTube analytics.
+
 ## Phase 27.3 — Pluggable Media Provider Platform (done)
 
 **Status:** IMPLEMENTED.

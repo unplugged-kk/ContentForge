@@ -1830,6 +1830,18 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
+  app.get("/api/social/youtube/status", async (_req, res) => {
+    try {
+      const { getYouTubeConfigSummary } = await import("./social/youtube");
+      res.json({
+        ...(await getYouTubeConfigSummary()),
+        hint: "Publishing uses YouTube Data API v3 resumable upload (video only). Connect via POST /api/accounts/connect { platform: \"youtube\", accessToken, refreshToken } or set YOUTUBE_REFRESH_TOKEN with YOUTUBE_CLIENT_ID/SECRET (or GOOGLE_CLIENT_ID/SECRET). Real publishes require CONTENTFORGE_REAL_PUBLISH_E2E=1. Prefer private/unlisted for certification.",
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/accounts", async (_req, res) => {
     try {
       const accounts = await storage.getConnectedAccounts();

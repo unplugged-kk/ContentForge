@@ -55,6 +55,19 @@ import {
   validateInstagramCaption,
   validateInstagramPublishMedia,
 } from "../social/instagram";
+import {
+  descriptionFromPayload,
+  privacyFromPayload,
+  reconcileYouTubeVideo,
+  titleFromPayload,
+  translateYouTubeError,
+  uploadVideoToYouTube,
+  validateYouTubeDescription,
+  validateYouTubePrivacy,
+  validateYouTubeTitle,
+  validateYouTubeVideoMedia,
+  YouTubePublishAmbiguousError,
+} from "../social/youtube";
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
@@ -1026,10 +1039,209 @@ export function createInstagramChannelAdapter(): ChannelAdapter {
   };
 }
 
-/** Idempotent: registers the Phase-B channel set (X, LinkedIn, Threads, Instagram). */
+function classifyYouTubeFailure(message: string): AdapterFailureClass {
+  if (/YOUTUBE_CONFIG_MISSING|YOUTUBE_REAL_PUBLISH_BLOCKED|youtube title|youtube description|youtube privacy|youtube requires|youtube Phase|youtube video/i.test(message)) {
+    return "permanent";
+  }
+  if (/429|rate limit|quotaExceeded|dailyLimitExceeded|503|502|504|timeout|ECONN|ENOTFOUND|fetch failed|ambiguous/i.test(message)) {
+    return "transient";
+  }
+  if (/401|403|invalid.?grant|UNAUTHENTICATED/i.test(message)) return "permanent";
+  return "permanent";
+}
+
+/**
+ * YouTube ChannelAdapter — Phase 28.1 video upload only.
+ * Supports format `video`. Provider idempotency unavailable; ContentForge
+ * Publication identity is authoritative.
+ */
+export function createYouTubeChannelAdapter(): ChannelAdapter {
+  const supported = new Set(["video"]);
+
+  return {
+    channel: "youtube",
+    supports: (format) => supported.has(format),
+
+    async publish(request: PublishRequest): Promise<PublishOutcome> {
+      if (!supported.has(request.format)) return unavailable(request.format, "youtube");
+      const media = request.media ?? [];
+      if (media.length !== 1) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: `youtube video requires exactly one asset, got ${media.length}`,
+        };
+      }
+      const title = titleFromPayload(request.payload);
+      const description = descriptionFromPayload(request.payload);
+      const privacyStatus = privacyFromPayload(request.payload);
+      const titleError = validateYouTubeTitle(title);
+      if (titleError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: titleError,
+        };
+      }
+      const descError = validateYouTubeDescription(description);
+      if (descError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: descError,
+        };
+      }
+      const privacyError = validateYouTubePrivacy(privacyStatus);
+      if (privacyError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: privacyError,
+        };
+      }
+      const mediaError = validateYouTubeVideoMedia(media[0]);
+      if (mediaError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: mediaError,
+        };
+      }
+
+      const certKey = typeof request.payload.certificationKey === "string"
+        ? request.payload.certificationKey
+        : null;
+
+      try {
+        const result = await uploadVideoToYouTube(
+          {
+            media: media[0],
+            title,
+            description,
+            privacyStatus,
+            certificationKey: certKey,
+          },
+          request.ownerUserId,
+        );
+        return {
+          ok: true,
+          providerCalled: true,
+          externalId: result.videoId,
+          externalUrl: result.url,
+          publishedAt: new Date(),
+          metrics: {
+            privacyStatus: result.privacyStatus,
+            title: result.title,
+          },
+        };
+      } catch (error) {
+        if (error instanceof YouTubePublishAmbiguousError) {
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: error.hint.videoId ?? null,
+            externalUrl: null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: {
+              title: error.hint.title,
+              attemptedAt: error.hint.attemptedAt,
+              ...(error.hint.uploadSessionUrl ? { uploadSessionUrl: error.hint.uploadSessionUrl } : {}),
+              ...(error.hint.videoId ? { videoId: error.hint.videoId } : {}),
+            },
+          };
+        }
+        const raw = error instanceof Error ? error.message : String(error);
+        const providerCalled = !/YOUTUBE_CONFIG_MISSING|YOUTUBE_REAL_PUBLISH_BLOCKED|youtube title|youtube description|youtube privacy|youtube requires|youtube Phase|youtube video|blocked without CONTENTFORGE_REAL_PUBLISH/i.test(
+          raw,
+        );
+        return {
+          ok: false,
+          providerCalled,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: classifyYouTubeFailure(raw),
+          errorMessage: translateYouTubeError(raw),
+        };
+      }
+    },
+
+    async reconcile(request: PublishRequest): Promise<PublishOutcome | null> {
+      const hint = request.reconciliationHint ?? {};
+      const videoId = request.externalId
+        ?? (typeof hint.videoId === "string" ? hint.videoId : null)
+        ?? (typeof hint.externalId === "string" ? hint.externalId : null);
+      const title = typeof hint.title === "string" ? hint.title : null;
+      const attemptedAt = typeof hint.attemptedAt === "string" ? hint.attemptedAt : null;
+      if (!videoId && !title) return null;
+
+      const status = await reconcileYouTubeVideo(
+        {
+          videoId: videoId ?? undefined,
+          externalId: videoId ?? undefined,
+          title: title ?? undefined,
+          attemptedAt: attemptedAt ?? undefined,
+        },
+        request.ownerUserId,
+      );
+
+      if (status === "published" && videoId) {
+        return {
+          ok: true,
+          providerCalled: true,
+          externalId: videoId,
+          externalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+          publishedAt: new Date(),
+        };
+      }
+      if (status === "absent") {
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: "YouTube reconcile confirmed no matching video",
+        };
+      }
+      // unknown — do not invent failure
+      return null;
+    },
+
+    async fetchMetrics(request: MetricFetchRequest): Promise<MetricFetchOutcome> {
+      const now = new Date();
+      return missingMetricsOutcome("youtube", request.externalId, now, now, null);
+    },
+  };
+}
+
+/** Idempotent: registers Phase-B channels including YouTube (Phase 28.1). */
 export function registerBuiltinChannelAdapters(): void {
   if (!hasChannelAdapter("x")) registerChannelAdapter(createXChannelAdapter());
   if (!hasChannelAdapter("linkedin")) registerChannelAdapter(createLinkedInChannelAdapter());
   if (!hasChannelAdapter("threads")) registerChannelAdapter(createThreadsChannelAdapter());
   if (!hasChannelAdapter("instagram")) registerChannelAdapter(createInstagramChannelAdapter());
+  if (!hasChannelAdapter("youtube")) registerChannelAdapter(createYouTubeChannelAdapter());
 }
