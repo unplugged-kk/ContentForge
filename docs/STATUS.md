@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-18 (Phase 19) · Branch reviewed: `replit` @ `73951c8` (implementation landed)
+Last updated: 2026-09-18 (Phase 20) · Branch reviewed: `replit` @ `2230cf2` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,25 +13,79 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **435 passed / 0 failed** (107 suites) |
-| `npm test` | **435 passed** |
-| `npm run test:db` (real PostgreSQL) | **220 passed / 0 failed / 0 skipped** (27 suites) |
-| `npm run test:e2e:live` (real running app) | **145 passed / 0 failed** (145 checks). Phase 18 Instagram Paths A–K green. Phase 17 Threads remained green. No YouTube/Reels paths added |
-| `npm run test:e2e:visual` (real running app) | **28 passed / 0 failed** (28 checks). Phase 19 Paths A–H green (Path H SIGKILL, no duplicate VideoAsset) |
+| `npm run test:unit` | **445 passed / 0 failed** (107 suites) |
+| `npm test` | **445 passed** |
+| `npm run test:db` (real PostgreSQL) | **228 passed / 0 failed / 0 skipped** (27 suites) |
+| `npm run test:e2e:live` (real running app) | **154 passed / 0 failed** (154 checks). Phase 20 Reels Paths A–I green (Path H SIGKILL, no duplicate Publication). Phase 18 image/carousel A–K remained green |
+| `npm run test:e2e:visual` (real running app) | **28 passed / 0 failed** (28 checks). Phase 19 video Paths A–H remained green |
 | `npm run build` (production CJS bundle) | **succeeds**; live/visual E2E boot `dist/index.cjs` |
-| Fresh DB migration | **22 migrations / 50 tables** from zero (additive `visual_assets` video columns; no new tables) |
+| Fresh DB migration | **22 migrations / 50 tables** from zero (no new Instagram/Reel tables) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema including `0021` |
+| Real Instagram Reels network smoke | **BLOCKED — professional publishing credentials/account unavailable** |
 | Real video provider network smoke | **BLOCKED — no verified video generation endpoint/credential** |
-| Real Instagram network verification | **BLOCKED — credential/account unavailable** |
+| Real Instagram image/carousel network verification | **BLOCKED — credential/account unavailable** |
 | Real Threads network verification | **BLOCKED — credential unavailable** |
 | Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 427 unit / 211 DB / 145 live E2E / 19 visual E2E / 21 migrations / 50 tables.
+Baseline before this phase: 435 unit / 220 DB / 145 live E2E / 28 visual E2E / 22 migrations / 50 tables.
 
 ---
 
-## Video Content Production Foundation (new in this phase — Phase 19)
+## Instagram Reels Video Publishing (new in this phase — Phase 20)
+
+**PARTIALLY IMPLEMENTED — `format=video + channel=instagram` publishes through the existing Instagram ChannelAdapter and Publication lifecycle; live professional Reel network smoke is credential-blocked.**
+
+```
+VideoAsset → Artifact(format=video)
+        → Publication(channel=instagram)
+        → Schedule / Occurrence
+        → Instagram ChannelAdapter
+              validate → provider-fetch URL → REELS container
+              → poll processing → media_publish
+        → Result → PerformanceSignal → LearningSignal
+```
+
+`Instagram image publishing: IMPLEMENTED`
+`Instagram carousel publishing: IMPLEMENTED`
+`Instagram Reel publishing: PARTIALLY IMPLEMENTED` (adapter + fixture E2E complete; live Meta publish blocked)
+
+**No parallel Reel model.** Channel remains `instagram`. Format remains `video`.
+No `ReelPublication` / `InstagramReel` / `ReelsPublisher` / `instagram_reel` content format.
+
+**Registries.** Format profile `video × instagram`. Adapter `supports("video")`.
+Visual spec `instagram_reel` (1080×1920, 9:16, `video/mp4`, 3s–15min, 100 MB) in the
+Phase 15 specification registry.
+
+**Adapter.** Same `createInstagramChannelAdapter`: image, carousel, and Reels.
+Reels use `media_type=REELS` + `video_url`. Cover/`thumb_offset` omitted (optional
+at Meta; no thumbnail subsystem). Bounded in-adapter status polls distinguish
+`IN_PROGRESS` / `FINISHED` / `ERROR` / `EXPIRED` / published. Container creation
+is never treated as published.
+
+**Media.** Artifact refs → VisualAsset (`kind=video`) → `AssetStoragePort` →
+`issueProviderFetchUrl` or `INSTAGRAM_MEDIA_STAGE_URL`. Adapter does not query
+`visual_assets`. URLs are object-scoped and time-limited; storage keys are not
+persisted as public URLs.
+
+**Reconciliation.** Ambiguous outcomes (`IN_PROGRESS`, dropped `media_publish`, 5xx)
+stay `unknown` with a bounded `creationId`. Lookup: media id → container status →
+listing. Listing miss ≠ unpublished. Duplicate fan-out reuses the same Publication;
+`republishKey` remains explicit republish.
+
+**Reuse.** Approval, Schedule/Occurrence, Phase 12 repurposing, Phase 13 automation
+(no default Reel autopilot), Phase 14 analytics unchanged. X video publishing
+remains `not implemented`.
+
+**Credentials.** Existing Instagram connected-account / env-token boundary. Tokens
+never enter pg-boss, Publication, Result, Artifact, logs, or this status report.
+
+**Not in this phase:** live professional Reel publish, X/LinkedIn/YouTube video,
+Stories/Live, cover generation, editing/clipping, video autopilot, UI.
+
+---
+
+## Video Content Production Foundation (previous — Phase 19)
 
 **PARTIALLY IMPLEMENTED — durable VideoGeneration/VideoAsset on the existing visual architecture; live video vendor execution blocked; no channel video publishing.**
 
