@@ -3,11 +3,68 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 27.2 — Real OpenShorts Local Processing
+
+**Status:** IMPLEMENTED (Video Factory real E2E unchanged; OpenShorts Docker
+processed a 63s owned speech source through local Ollama `llama3.1:8b-16k`;
+real MP4 clips imported as VideoAssets)
+
+**Verification:** TypeScript 0; unit 528/528; video-repurpose Postgres
+8/8 including import-retry. Live OpenShorts HTTP: capabilities
+`processing_ready=true` / `llm_ready=true`; ingest owned VideoAsset 665
+(964119 B, 63.227s); one ContentForge job `7` / semantic `cfvr-7`; one
+OpenShorts job `10090da1-28cb-4045-8606-34410cdb4fd4`; SIGKILL then
+reconcile without a second provider job; owner isolation 404. Import after
+provider completion produced VideoAssets 666, 667, 668. Full live E2E 190
+and browser/agent suites were not re-run this slice; prior 185/190 still
+carries the 5 pre-existing Phase 13 scheduler-tick / Phase 24
+style-snapshot failures.
+
+### Real OpenShorts evidence (not a fixture)
+
+| field | value |
+|---|---|
+| ContentForge job | `7` (`cfvr-7`) |
+| OpenShorts job | `10090da1-28cb-4045-8606-34410cdb4fd4` |
+| source VideoAsset | `665` |
+| source bytes | 964119 |
+| source duration | 63.227s H.264 1080×1920 + AAC |
+| provider | openshorts + Ollama `llama3.1:8b-16k` `num_ctx=16384` |
+| clip 666 | 760810 B, 15.330s, 1080×1920, `local:204e61d82c00ded8d6f2b6c136f7771569cf9d04bc40be6a09f86ca381dd02dc` |
+| clip 667 | 864095 B, 15.560s, 1080×1920, `local:249e6766cc2066417d5681882ea9c2870d1dddee25ae00c198b4c8d4703a39d4` |
+| clip 668 | 789504 B, 15.220s, 1080×1920, `local:c5717448eb28098641441ee6a356dbc2b1a2142cf5792ba06f3892dfee3d8194` |
+
+Ollama 2-pass chat completions from the OpenShorts container
+(`POST /v1/chat/completions` from `192.168.1.23`). Transcription detected
+English, 19 segments. `GET /health` 200 is still not enough for
+`processing_ready`.
+
+Docker context is Dory: `host.docker.internal` does not reach host Ollama;
+`LLM_BASE_URL=http://192.168.1.23:11434/v1` (Mac LAN) does. Config only —
+OpenShorts source was not patched. Video Factory was not modified.
+
+HyperFrames Cloud remains **DEFERRED**.
+
+### What changed
+
+- OpenShorts health distinguishes reachable / local-LLM-ready / processing-ready.
+- Adapter follows live REST: `POST /api/uploads` + PUT `upload_url` (same-origin only) + `POST /api/process` + `GET /api/status/:job_id`. Process timeout after upload is `unknown`, not a second submit.
+- Owned VideoAsset ingest: `POST /api/video-assets` (raw MP4 bytes, not a public URL).
+- Restart: in-flight jobs with a provider id resume without resubmitting. Import retry keeps the provider job when `AssetStoragePort.put` fails.
+- Agent tools still `repurpose_video` / `get_video_repurposing_status` / `list_video_derivatives`. Never `publish_clip`. Never `/api/social/post`.
+
+### Distribution
+
+Imported clips are durable VideoAssets on the existing Instagram Reel path
+(Artifact → Approval → Reels adapter). This slice did not create a new
+researched Story or call `/api/social/post`. HyperFrames Cloud remains
+deferred.
+
 ## Phase 27.1 — Real Video Provider Integration Hardening
 
-**Status:** PARTIALLY IMPLEMENTED (Video Factory local render proven and
-imported; OpenShorts REST adapter protocol-correct but processing BLOCKED
-without Gemini or a local LLM; HyperFrames Cloud deferred — no subscription)
+**Status:** PARTIALLY IMPLEMENTED as of this slice (Video Factory local
+render proven; OpenShorts processing closed in 27.2; HyperFrames Cloud
+deferred — no subscription)
 
 **Verification:** TypeScript 0; unit 523/523; visual E2E 38/38 (Path B now
 asserts `index.html`; Path J confirms the live factory MP4). Live E2E 185/190
@@ -55,7 +112,7 @@ Cloud and OpenShorts adapters spoke invented HTTP paths, and
 | tool | host | result |
 |---|---|---|
 | Video Factory + `npx hyperframes@0.7.60 render` | local filesystem worker at `/Users/kishore/git/video-factory` | **proven** — real MP4 imported through `AssetStoragePort` |
-| OpenShorts (`mutonby/openshorts`, Docker) | clone at `/Users/kishore/git/openshorts` HEAD `27d4916`; container `openshorts-backend` on `:8000` | **reachable** — `GET /health` 200, `POST /api/uploads` returns `upload_id`, `POST /api/process` is the real route. **processing BLOCKED** — `400 Missing X-Gemini-Key header`; Ollama is not on `:11434`; factory MP4 is 2s vs `MIN_SOURCE_SECONDS` 45 |
+| OpenShorts (`mutonby/openshorts`, Docker) | clone at `/Users/kishore/git/openshorts` HEAD `27d4916`; container `openshorts-backend` on `:8000` | 27.1: reachable, process 400 Missing Gemini. **27.2: processing PASS** via Ollama `llama3.1:8b-16k` |
 | HyperFrames Cloud / HeyGen | hosted | **deferred** — no subscription; not tested |
 | Clips Studio / Clipper / VibeClip | local Docker clippers | researched, **not integrated** this phase (OpenShorts remains the clipping port) |
 
@@ -71,16 +128,14 @@ Cloud and OpenShorts adapters spoke invented HTTP paths, and
 
 ### Deferred
 
-Phase 28 YouTube + TikTok + Threads; HyperFrames Cloud; OpenShorts live
-processing (needs Gemini or Ollama + ≥45s source); new clip adapters;
-Video Factory repo changes.
+Phase 28 YouTube + TikTok + Threads; HyperFrames Cloud; new clip adapters;
+Video Factory repo changes. OpenShorts live processing closed in 27.2.
 
 ## Phase 27 — Video Production + Video Repurposing Factory
 
-**Status:** PARTIALLY IMPLEMENTED (orchestration + fixture E2E implemented;
-Video Factory filesystem contract unchanged and unmodified; HyperFrames Cloud
-ARCHITECTURALLY READY / unconfigured; OpenShorts ARCHITECTURALLY READY /
-unconfigured; YouTube Shorts / TikTok publishing deferred)
+**Status:** IMPLEMENTED (Video Factory real local MP4 + OpenShorts Docker
+real clipping via Ollama; HyperFrames Cloud remains deferred / no
+subscription; YouTube Shorts / TikTok publishing deferred)
 
 **Verification:** TypeScript 0; unit 519/519; Postgres 258/258; live E2E
 185/190 (8 new Phase 27 checks all passed; 5 failures are the pre-existing
@@ -215,8 +270,8 @@ YouTube Shorts / TikTok / full YouTube are NOT marked implemented.
 ### Deferred
 
 Phase 28 YouTube + TikTok + Threads publishing; HyperFrames live cloud
-verification; OpenShorts live processing; VideoTemplate revisions;
-advanced editor; avatar/lip-sync; auto-publish.
+verification; VideoTemplate revisions; advanced editor; avatar/lip-sync;
+auto-publish. OpenShorts live processing closed in 27.2.
 
 ## Phase 26 — Research Intelligence + SEO
 

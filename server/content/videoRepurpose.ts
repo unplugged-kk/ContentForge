@@ -15,6 +15,7 @@ import type { ContentStoragePort, JsonRecord } from "./storage";
 import {
   createLocalAssetStorage,
   validateMediaOutput,
+  InvalidVisualInputError,
   type AssetStoragePort,
 } from "./visual";
 import { fixtureMp4Bytes } from "./visualFixture";
@@ -89,6 +90,7 @@ export interface VideoRepurposeHealth {
   configured: boolean;
   reachable: boolean;
   apiRouteAvailable?: boolean;
+  llmReady?: boolean;
   processingReady?: boolean;
   reason?: string | null;
   notes?: string[];
@@ -120,6 +122,21 @@ export function listVideoRepurposingProviders(): VideoRepurposingProviderPort[] 
 
 export function resetVideoRepurposingProviders(): void {
   providers.clear();
+}
+
+function emitVideoEvent(type: string, fields: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      source: "content",
+      type,
+      ...fields,
+    }),
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function uniquifyMp4(base: Buffer, salt: number): Buffer {
@@ -254,14 +271,42 @@ function readErrorDetail(body: unknown): string {
   return "";
 }
 
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = "name" in error ? String((error as { name?: unknown }).name ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return name === "AbortError" || name === "TimeoutError" || /aborted|timeout/i.test(message);
+}
+
+/** Only follow upload_url when it is this OpenShorts origin + /api/uploads/:id (no SSRF). */
+export function resolveOpenShortsUploadPath(baseUrl: string, uploadId: string, uploadUrl?: string | null): string {
+  const fallback = `/api/uploads/${encodeURIComponent(uploadId)}`;
+  if (!uploadUrl?.trim()) return fallback;
+  try {
+    const base = new URL(baseUrl.includes("://") ? baseUrl : `http://${baseUrl}`);
+    const parsed = new URL(uploadUrl, base);
+    if (parsed.origin !== base.origin) return fallback;
+    if (parsed.pathname !== `/api/uploads/${uploadId}` && parsed.pathname !== `/api/uploads/${encodeURIComponent(uploadId)}`) {
+      return fallback;
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return fallback;
+  }
+}
+
 export function createOpenShortsProvider(options: {
   baseUrl: string;
   apiKey?: string;
   geminiKey?: string;
   fetchImpl?: typeof fetch;
+  llmProbeUrl?: string | null;
+  processTimeoutMs?: number;
 }): VideoRepurposingProviderPort {
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const llmProbeUrl = options.llmProbeUrl?.trim() || "http://127.0.0.1:11434/v1/models";
+  const processTimeoutMs = options.processTimeoutMs ?? 60_000;
 
   async function api(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
@@ -280,17 +325,25 @@ export function createOpenShortsProvider(options: {
       ];
       let reachable = false;
       let apiRouteAvailable = false;
+      let llmReady = false;
       let processingReady = false;
       let reason: string | null = "openshorts health probe failed";
       try {
         const live = await api("/health", { method: "GET" });
         reachable = live.ok;
         if (!reachable) {
-          return { configured: true, reachable: false, apiRouteAvailable: false, processingReady: false, reason: `GET /health returned ${live.status}`, notes };
+          return { configured: true, reachable: false, apiRouteAvailable: false, llmReady: false, processingReady: false, reason: `GET /health returned ${live.status}`, notes };
         }
         const ready = await api("/health/ready", { method: "GET" });
         const configRes = await api("/api/config", { method: "GET" });
         const config = configRes.ok ? ((await configRes.json()) as Record<string, unknown>) : {};
+        const localLlm = config.localLlm && typeof config.localLlm === "object";
+        try {
+          const llm = await fetchImpl(llmProbeUrl, { method: "GET" });
+          llmReady = llm.ok;
+        } catch {
+          llmReady = false;
+        }
         const probe = await api("/api/process", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -306,23 +359,29 @@ export function createOpenShortsProvider(options: {
         } else if (probe.status === 401) {
           reason = detail || "provider credentials unavailable";
         } else if (probe.status === 400 && /gemini/i.test(detail)) {
-          reason = "provider credentials unavailable";
-        } else if (probe.status === 400) {
-          const localLlm = config.localLlm && typeof config.localLlm === "object";
-          processingReady = ready.ok && apiRouteAvailable;
-          reason = processingReady ? null : "OpenShorts process route is up but not ready";
-          if (!localLlm && processingReady) {
-            notes.push("self-hosted process route answers 400 without a source; Gemini/local LLM is required at submit time");
+          reason = localLlm && !llmReady ? "local LLM unavailable" : "provider credentials unavailable";
+        } else if (probe.status === 400 && /must provide url|upload_id/i.test(detail)) {
+          if (!localLlm) {
+            reason = "local LLM is not configured on OpenShorts";
+          } else if (!llmReady) {
+            reason = "local LLM unavailable";
+          } else if (!ready.ok) {
+            reason = "OpenShorts process route is up but not ready";
+          } else {
+            processingReady = true;
+            reason = null;
           }
+        } else if (probe.status === 400) {
+          reason = detail || "OpenShorts rejected an empty process probe";
         } else if (probe.ok) {
           processingReady = false;
           reason = "unexpected process success without a source; refusing to claim operational";
         } else {
           reason = detail || `POST /api/process returned ${probe.status}`;
         }
-        return { configured: true, reachable, apiRouteAvailable, processingReady, reason, notes };
+        return { configured: true, reachable, apiRouteAvailable, llmReady, processingReady, reason, notes };
       } catch {
-        return { configured: true, reachable, apiRouteAvailable, processingReady: false, reason, notes };
+        return { configured: true, reachable, apiRouteAvailable, llmReady, processingReady: false, reason, notes };
       }
     },
     async submit(request) {
@@ -342,11 +401,12 @@ export function createOpenShortsProvider(options: {
         }
         throw JobFailure.transient(`openshorts upload slot ${slotRes.status}`);
       }
-      const slot = (await slotRes.json()) as { upload_id?: string };
+      const slot = (await slotRes.json()) as { upload_id?: string; upload_url?: string };
       const uploadId = String(slot.upload_id ?? "").trim();
       if (!uploadId) throw JobFailure.permanent("openshorts upload slot missing upload_id");
 
-      const put = await api(`/api/uploads/${encodeURIComponent(uploadId)}`, {
+      const putPath = resolveOpenShortsUploadPath(baseUrl, uploadId, slot.upload_url);
+      const put = await api(putPath, {
         method: "PUT",
         headers: { "content-type": request.source.mime || "video/mp4" },
         body: new Uint8Array(request.source.bytes),
@@ -357,16 +417,25 @@ export function createOpenShortsProvider(options: {
         throw JobFailure.transient(`openshorts upload ${put.status}`);
       }
 
-      const res = await api("/api/process", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          upload_id: uploadId,
-          acknowledged: true,
-          target_clips: request.clipCount,
-          output_format: "vertical",
-        }),
-      });
+      let res: Response;
+      try {
+        res = await api("/api/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            upload_id: uploadId,
+            acknowledged: true,
+            target_clips: request.clipCount,
+            output_format: "vertical",
+          }),
+          signal: AbortSignal.timeout(processTimeoutMs),
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          return { providerJobId: `upload:${uploadId}`, status: "unknown" };
+        }
+        throw error;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const detail = readErrorDetail(body);
@@ -383,7 +452,27 @@ export function createOpenShortsProvider(options: {
       return { providerJobId, status: mapOpenShortsStatus(body.status) };
     },
     async getStatus(providerJobId) {
-      const res = await api(`/api/status/${encodeURIComponent(providerJobId)}`, { method: "GET" });
+      if (providerJobId.startsWith("upload:")) {
+        return {
+          providerJobId,
+          status: "unknown",
+          clips: [],
+          failureClass: "unknown",
+          errorMessage: "process timed out after upload; reconcile the same identity without resubmitting",
+        };
+      }
+      let res: Response;
+      try {
+        res = await api(`/api/status/${encodeURIComponent(providerJobId)}`, {
+          method: "GET",
+          signal: AbortSignal.timeout(20_000),
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          return { providerJobId, status: "processing", clips: [], errorMessage: "openshorts status timed out" };
+        }
+        throw error;
+      }
       if (res.status === 404) {
         return { providerJobId, status: "unknown", clips: [], failureClass: "unknown" };
       }
@@ -395,6 +484,10 @@ export function createOpenShortsProvider(options: {
         result?: { clips?: Array<Record<string, unknown>> };
         clips?: Array<Record<string, unknown>>;
       };
+      let status = mapOpenShortsStatus(body.status);
+      if (status === "accepted" || status === "queued" || status === "processing") {
+        return { providerJobId, status, clips: [], errorMessage: body.error ?? null };
+      }
       const rawClips = Array.isArray(body.result?.clips) ? body.result!.clips! : Array.isArray(body.clips) ? body.clips : [];
       const clips: VideoRepurposeClip[] = [];
       for (const [index, clip] of Array.from(rawClips.entries())) {
@@ -405,31 +498,47 @@ export function createOpenShortsProvider(options: {
         const failed = Boolean(clip.failed) || String(clip.status ?? "") === "failed" || !videoUrl;
         let bytes = Buffer.alloc(0);
         if (!failed && videoUrl) {
-          const downloaded = /^https?:\/\//i.test(videoUrl)
-            ? await fetchImpl(videoUrl)
-            : await api(videoUrl.startsWith("/") ? videoUrl : `/${videoUrl}`, { method: "GET" });
-          if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
+          if (/^https?:\/\//i.test(videoUrl)) {
+            try {
+              const parsed = new URL(videoUrl);
+              const base = new URL(baseUrl);
+              if (parsed.origin === base.origin) {
+                const downloaded = await fetchImpl(videoUrl);
+                if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
+              }
+            } catch {
+              bytes = Buffer.alloc(0);
+            }
+          } else {
+            const downloaded = await api(videoUrl.startsWith("/") ? videoUrl : `/${videoUrl}`, { method: "GET" });
+            if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
+          }
         }
         const durationMs =
           startSec != null && endSec != null ? Math.max(0, Math.round((endSec - startSec) * 1000)) : typeof clip.duration_ms === "number" ? clip.duration_ms : null;
+        const title =
+          typeof clip.title === "string"
+            ? clip.title
+            : typeof clip.video_title_for_youtube_short === "string"
+              ? clip.video_title_for_youtube_short
+              : null;
         clips.push({
           position: index,
           clipId,
           bytes,
           mime: "video/mp4",
-          width: typeof clip.width === "number" ? clip.width : 1080,
-          height: typeof clip.height === "number" ? clip.height : 1920,
-          durationMs: durationMs && durationMs > 0 ? durationMs : 1000,
+          width: typeof clip.width === "number" && clip.width > 0 ? clip.width : 1080,
+          height: typeof clip.height === "number" && clip.height > 0 ? clip.height : 1920,
+          durationMs: durationMs && durationMs > 0 ? durationMs : null,
           startMs: startSec != null ? Math.round(startSec * 1000) : null,
           endMs: endSec != null ? Math.round(endSec * 1000) : null,
-          title: typeof clip.title === "string" ? clip.title : null,
+          title,
           caption: typeof clip.video_description_for_instagram === "string" ? clip.video_description_for_instagram : null,
           aspectRatio: "9:16",
           failed: failed || bytes.length === 0,
           errorMessage: failed || bytes.length === 0 ? String(clip.error ?? "clip download failed") : undefined,
         });
       }
-      let status = mapOpenShortsStatus(body.status);
       if (status === "ready" && (body.partial || clips.some((c) => c.failed))) {
         status = clips.some((c) => !c.failed) ? "partial" : "failed";
       }
@@ -462,7 +571,8 @@ export function createConfiguredOpenShortsProvider(
   return createOpenShortsProvider({
     baseUrl,
     apiKey: env.OPENSHORTS_API_KEY?.trim() || undefined,
-    geminiKey: env.OPENSHORTS_GEMINI_KEY?.trim() || env.GEMINI_API_KEY?.trim() || undefined,
+    geminiKey: env.OPENSHORTS_GEMINI_KEY?.trim() || undefined,
+    llmProbeUrl: env.OPENSHORTS_LLM_PROBE_URL?.trim() || "http://127.0.0.1:11434/v1/models",
   });
 }
 
@@ -654,13 +764,15 @@ export interface VideoRepurposeRunResult {
 }
 
 function classifyRepurposeError(error: unknown): VideoRepurposeFailureClass {
+  if (isAbortError(error)) return "unknown";
   if (error instanceof JobFailure) {
     if (error.failureClass === "rate_limited") return "rate_limited";
     if (error.failureClass === "transient") return "transient";
     return "permanent";
   }
   const message = describeError(error);
-  return /timeout|ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate.?limit/i.test(message)
+  if (/timeout|aborted/i.test(message)) return "unknown";
+  return /ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate.?limit/i.test(message)
     ? "transient"
     : "permanent";
 }
@@ -684,6 +796,12 @@ export async function runVideoRepurposing(
 
   const provider = getVideoRepurposingProvider(job.providerId);
   const semanticId = job.providerJobId || semanticRepurposeId(job.id);
+  emitVideoEvent("video.repurpose.started", {
+    videoRepurposingJobId: job.id,
+    providerId: job.providerId,
+    providerJobId: job.providerJobId,
+    sourceVideoAssetId: job.sourceVisualAssetId,
+  });
   await deps.content.markVideoRepurposingJob(job.id, {
     status: "processing",
     startedAt: new Date(),
@@ -733,6 +851,12 @@ export async function runVideoRepurposing(
         providerJobId: submitted.providerJobId,
         providerVersion: provider.providerVersion,
       });
+      emitVideoEvent("video.repurpose.accepted", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: submitted.providerJobId,
+        sourceVideoAssetId: source.id,
+      });
       if (submitted.status === "unknown") {
         return {
           jobId: job.id,
@@ -765,6 +889,29 @@ export async function runVideoRepurposing(
     };
   }
 
+  if (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") {
+    const budgetMs = Number(process.env.VIDEO_REPURPOSE_POLL_BUDGET_MS ?? 25 * 60 * 1000);
+    const deadline = Date.now() + (Number.isFinite(budgetMs) ? budgetMs : 25 * 60 * 1000);
+    let delayMs = 5_000;
+    while (
+      (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") &&
+      Date.now() < deadline
+    ) {
+      emitVideoEvent("video.repurpose.processing", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: statusResult.providerJobId,
+        sourceVideoAssetId: source.id,
+      });
+      await deps.content.markVideoRepurposingJob(job.id, {
+        status: statusResult.status,
+        providerJobId: statusResult.providerJobId,
+      });
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs + 5_000, 30_000);
+      statusResult = await provider.getStatus(statusResult.providerJobId);
+    }
+  }
   if (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") {
     await deps.content.markVideoRepurposingJob(job.id, {
       status: statusResult.status,
@@ -876,7 +1023,19 @@ export async function runVideoRepurposing(
       });
       importedIds.push(asset.id);
       occupied.add(clip.position);
+      emitVideoEvent("video.asset.imported", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: statusResult.providerJobId,
+        sourceVideoAssetId: source.id,
+        videoAssetId: asset.id,
+      });
     } catch (error) {
+      if (!(error instanceof InvalidVisualInputError)) {
+        throw JobFailure.transient(
+          `import failed; provider job ${statusResult.providerJobId} retained: ${describeError(error)}`,
+        );
+      }
       importedFailures += 1;
       await deps.content.insertVideoRepurposingOutput({
         jobId: job.id,
@@ -903,6 +1062,12 @@ export async function runVideoRepurposing(
       errorMessage: null,
       finishedAt: new Date(),
     });
+    emitVideoEvent("video.repurpose.completed", {
+      videoRepurposingJobId: job.id,
+      providerId: provider.providerId,
+      providerJobId: statusResult.providerJobId,
+      sourceVideoAssetId: source.id,
+    });
     return { jobId: job.id, status: "ready", reused: false, assetIds };
   }
   if (ready.length > 0) {
@@ -912,6 +1077,12 @@ export async function runVideoRepurposing(
       errorClass: "partial",
       errorMessage: `${failed.length} clip(s) failed`,
       finishedAt: new Date(),
+    });
+    emitVideoEvent("video.repurpose.partial", {
+      videoRepurposingJobId: job.id,
+      providerId: provider.providerId,
+      providerJobId: statusResult.providerJobId,
+      sourceVideoAssetId: source.id,
     });
     return {
       jobId: job.id,
@@ -928,6 +1099,12 @@ export async function runVideoRepurposing(
     errorClass: "permanent",
     errorMessage: statusResult.errorMessage ?? "no clips imported",
     finishedAt: new Date(),
+  });
+  emitVideoEvent("video.repurpose.failed", {
+    videoRepurposingJobId: job.id,
+    providerId: provider.providerId,
+    providerJobId: statusResult.providerJobId,
+    sourceVideoAssetId: source.id,
   });
   return {
     jobId: job.id,

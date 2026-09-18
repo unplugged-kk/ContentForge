@@ -8,7 +8,7 @@
  * generation or publication inline.
  */
 
-import { Router } from "express";
+import { Router, raw as rawBody } from "express";
 import { z } from "zod";
 import type {
   Artifact,
@@ -105,6 +105,7 @@ import {
   InvalidVisualInputError,
   VisualCapabilityUnsupportedError,
   VisualModelUnsupportedError,
+  validateMediaOutput,
 } from "./visual";
 import {
   ChatInputError,
@@ -1540,6 +1541,64 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  const importOwnedVideoQuery = z.object({
+    durationMs: z.coerce.number().int().positive(),
+    width: z.coerce.number().int().positive(),
+    height: z.coerce.number().int().positive(),
+    altText: z.string().trim().max(500).optional(),
+  });
+
+  router.post(
+    "/video-assets",
+    rawBody({ type: ["video/mp4", "application/octet-stream"], limit: "80mb" }),
+    async (req, res, next) => {
+      try {
+        const ownerId = getUserId(req) ?? 1;
+        const parsed = importOwnedVideoQuery.safeParse(req.query);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "durationMs, width, and height are required" });
+        }
+        const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? []);
+        validateMediaOutput(
+          {
+            bytes,
+            mime: "video/mp4",
+            width: parsed.data.width,
+            height: parsed.data.height,
+            durationMs: parsed.data.durationMs,
+          },
+          { maxBytes: 80 * 1024 * 1024, maxDurationMs: 30 * 60 * 1000 },
+        );
+        const stored = await deps.visualStorage.put(bytes, "video/mp4");
+        const asset = await deps.content.insertVisualAsset({
+          userId: ownerId,
+          visualGenerationId: null,
+          kind: "video",
+          storageKey: stored.storageKey,
+          mime: "video/mp4",
+          width: parsed.data.width,
+          height: parsed.data.height,
+          durationMs: parsed.data.durationMs,
+          container: "mp4",
+          codec: "h264",
+          byteSize: stored.byteSize,
+          contentHash: stored.contentHash,
+          altText: parsed.data.altText ?? "owned source video",
+          role: "source",
+          provenance: "owned",
+          metadata: { ingest: "owned-bytes" },
+          position: 0,
+        });
+        return res.status(201).json(serializeVisualAsset(asset));
+      } catch (error) {
+        if (error instanceof InvalidVisualInputError) {
+          return res.status(400).json({ message: error.message });
+        }
+        return next(error);
+      }
+    },
+  );
+
   router.get("/video-assets/:id", async (req, res, next) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid video asset id" });
@@ -1576,10 +1635,14 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         content: deps.content as VideoRepurposeStoragePort,
         storage: deps.visualStorage,
       });
-      if (job.status === "requested") {
+      const current = deps.content.getVideoRepurposingJob
+        ? await deps.content.getVideoRepurposingJob(job.id)
+        : job;
+      const resumable = new Set(["requested", "accepted", "queued", "processing", "unknown"]);
+      if (resumable.has((current ?? job).status)) {
         try {
           if (deps.enqueueVideoRepurpose) {
-            await deps.enqueueVideoRepurpose(job);
+            await deps.enqueueVideoRepurpose(current ?? job);
           } else {
             await runVideoRepurposing(job.id, {
               content: deps.content as VideoRepurposeStoragePort,
@@ -1595,10 +1658,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
           });
         }
       }
-      const current = deps.content.getVideoRepurposingJob
+      const latest = deps.content.getVideoRepurposingJob
         ? await deps.content.getVideoRepurposingJob(job.id)
-        : job;
-      return res.status(created ? 201 : 200).json(serializeVideoRepurposingJob(current ?? job));
+        : current ?? job;
+      return res.status(created ? 201 : 200).json(serializeVideoRepurposingJob(latest ?? job));
     } catch (error) {
       if (error instanceof VideoRepurposeInputError) {
         return res.status(400).json({ message: error.message });

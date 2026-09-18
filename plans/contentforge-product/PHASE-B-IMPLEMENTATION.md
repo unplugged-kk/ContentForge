@@ -1103,9 +1103,36 @@ agent E2E 21/21; workspace/browser E2E 19/19. Visual E2E not re-run.
 Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
 
 **Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
-live OpenShorts; VideoTemplate revisions; editor; auto-publish.
+VideoTemplate revisions; editor; auto-publish.
+
+## Phase 27.2 — Real OpenShorts Local Processing (done)
+
+**The problem this closes**: Phase 27.1 made the OpenShorts adapter speak
+the real REST contract, but processing still returned `400 Missing
+X-Gemini-Key`. This slice runs OpenShorts in Docker against host Ollama
+and imports real clips.
+
+**Ollama.** `llama3.1:8b-16k` (`FROM llama3.1:8b`, `PARAMETER num_ctx 16384`).
+Reachable from the OpenShorts container at `http://192.168.1.23:11434/v1`
+(Dory Docker; `host.docker.internal` does not forward host port 11434).
+Two real `/v1/chat/completions` calls selected three moments.
+
+**OpenShorts.** Config only (`LLM_BASE_URL`, `LLM_MODEL=llama3.1:8b-16k`,
+`LLM_PROVIDER=openai`). Clone `/Users/kishore/git/openshorts` @ `27d4916`.
+No Gemini key. No source patch. REST: uploads → PUT bytes → `/api/process`
+→ `/api/status/:job_id`. Job `10090da1-28cb-4045-8606-34410cdb4fd4`
+completed; ContentForge job `7` imported VideoAssets 666–668
+(`local:<sha>`). Provider job survived ContentForge SIGKILL; import
+resumed without a second OpenShorts submit.
+
+**Capabilities.** `processing_ready` requires local LLM reachable plus
+`POST /api/process` rejecting empty bodies with the source-required
+error, not `/health` 200.
+
+**Deferred:** Phase 28; HyperFrames Cloud; additional clip adapters.
 
 ## Phase 27.1 — Real Video Provider Integration Hardening (partial)
+
 
 **The problem this closes**: Phase 27 registered production adapters that
 could not actually execute. Video Factory jobs had no `index.html`, so the
@@ -1135,8 +1162,8 @@ Clone: `/Users/kishore/git/openshorts` @ `27d4916`.
 reachable / processing_ready / reason. HyperFrames Cloud is always
 `processing_ready: false` this phase.
 
-**Deferred:** Phase 28; HyperFrames Cloud; OpenShorts live clip (needs LLM +
-source ≥ `MIN_SOURCE_SECONDS`); additional clip adapters.
+**Deferred:** Phase 28; HyperFrames Cloud; additional clip adapters.
+Video Factory repo changes.
 
 ## Phase 25 — Mass Repurposing Engine (done)
 

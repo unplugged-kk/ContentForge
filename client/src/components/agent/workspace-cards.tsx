@@ -175,8 +175,9 @@ export function VideoRepurposingCard({ job }: { job: Record<string, unknown> }) 
         <CardTitle className="text-sm">VideoRepurposingJob {String(job.id)}</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
-        <p>Status: {textField(job.status)}</p>
-        <p>Source VideoAsset {String(job.sourceVisualAssetId ?? "—")}</p>
+        <p data-testid="text-video-repurpose-status">Status: {textField(job.status)}</p>
+        <p data-testid="text-video-repurpose-source">Source VideoAsset {String(job.sourceVisualAssetId ?? "—")}</p>
+        <p data-testid="text-video-repurpose-clip-count">Clips {String(job.clipCount ?? "—")}</p>
       </CardContent>
     </Card>
   );

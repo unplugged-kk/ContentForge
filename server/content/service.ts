@@ -377,10 +377,10 @@ export function registerVideoRepurposeJob(
     description: "Clip an owned VideoAsset into short VideoAssets",
     payloadSchema: videoRepurposePayloadSchema,
     queue: {
-      retryLimit: 3,
-      retryDelaySeconds: 60,
+      retryLimit: 8,
+      retryDelaySeconds: 30,
       retryBackoff: true,
-      expireInSeconds: 15 * 60,
+      expireInSeconds: 45 * 60,
       singletonSeconds: 30,
       ...queueOverrides,
     },

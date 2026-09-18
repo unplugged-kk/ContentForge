@@ -1104,7 +1104,7 @@ async function repurposeVideo(
       },
       { content: deps.content as VideoRepurposeStoragePort, storage: deps.visualStorage },
     );
-    if (job.status === "requested") {
+    if (job.status === "requested" || job.status === "accepted" || job.status === "queued" || job.status === "processing" || job.status === "unknown") {
       if (deps.enqueueVideoRepurpose) await deps.enqueueVideoRepurpose(job);
       else {
         await runVideoRepurposing(job.id, {

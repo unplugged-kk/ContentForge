@@ -154,7 +154,15 @@ export function VideoPanel({
         )}
         {repurposeQuery.data ? (
           <div className="space-y-1" data-testid="card-video-repurposing">
-            <p className="text-xs">Repurpose {repurposeQuery.data.id} · {repurposeQuery.data.status}</p>
+            <p className="text-xs" data-testid="text-video-repurpose-status">
+              Job {repurposeQuery.data.id} · {repurposeQuery.data.status}
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="text-video-repurpose-source">
+              Source VideoAsset {generation?.visualAssetId ?? "—"}
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="text-video-repurpose-clip-count">
+              Clips {clips.filter((clip) => clip.status === "ready").length}/{repurposeQuery.data.clipCount ?? clips.length}
+            </p>
             {clips.map((clip) => (
               <div
                 key={`${clip.position}-${clip.visualAssetId ?? "pending"}`}

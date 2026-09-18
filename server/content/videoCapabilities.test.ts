@@ -24,6 +24,7 @@ describe("video capability report", () => {
     assert.ok(openshorts);
     assert.equal(openshorts.configured, false);
     assert.equal(openshorts.processing_ready, false);
+    assert.equal(openshorts.llm_ready === undefined || openshorts.llm_ready === false, true);
     assert.match(report.notes.join(" "), /HyperFrames Cloud is deferred/);
     assert.equal(
       [...report.production, ...report.repurposing].some((row) => row.capability.includes("publish")),

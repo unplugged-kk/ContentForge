@@ -161,6 +161,43 @@ describeDb("video repurposing (db)", () => {
     );
   });
 
+  it("import failure retains the provider job and retries import only", async () => {
+    const { store, assetId } = await readyVideo();
+    const { job } = await createVideoRepurposingJob(
+      1,
+      {
+        sourceVisualAssetId: assetId,
+        clipCount: 3,
+        providerId: LOCAL_VIDEO_REPURPOSE_FIXTURE_ID,
+        regenerate: true,
+      },
+      { content: store, storage },
+    );
+    let puts = 0;
+    const flaky = {
+      ...storage,
+      async put(bytes: Buffer, mime: string) {
+        puts += 1;
+        if (puts === 1) throw new Error("disk full");
+        return storage.put(bytes, mime);
+      },
+    };
+    await assert.rejects(
+      () => runVideoRepurposing(job.id, { content: store, storage: flaky }),
+      /import failed; provider job/,
+    );
+    const afterFail = await store.getVideoRepurposingJob(job.id);
+    assert.equal(afterFail?.providerJobId, `cfvr-${job.id}`);
+    assert.notEqual(afterFail?.status, "ready");
+    const outputsAfterFail = await store.listVideoRepurposingOutputs(job.id);
+    assert.equal(outputsAfterFail.length, 0);
+    const retried = await runVideoRepurposing(job.id, { content: store, storage: flaky });
+    assert.equal(retried.status, "ready");
+    assert.equal(retried.assetIds.length, 3);
+    const again = await store.getVideoRepurposingJob(job.id);
+    assert.equal(again?.providerJobId, afterFail?.providerJobId);
+  });
+
   it("rejects shell-like video generation intent", async () => {
     const store = content();
     await assert.rejects(

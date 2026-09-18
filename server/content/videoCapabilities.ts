@@ -28,6 +28,7 @@ export interface VideoCapabilityReport {
   capability: string;
   configured: boolean;
   reachable: boolean;
+  llm_ready?: boolean;
   processing_ready: boolean;
   verified: boolean;
   reason: string | null;
@@ -134,6 +135,7 @@ async function repurposeRow(
     capability: "repurpose_video",
     configured: health.configured ?? configured,
     reachable,
+    llm_ready: Boolean(health.llmReady),
     processing_ready: processingReady,
     verified: processingReady && providerId === LOCAL_VIDEO_REPURPOSE_FIXTURE_ID,
     reason: health.reason ?? (processingReady ? null : fallbackReason),
