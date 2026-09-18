@@ -45,6 +45,16 @@ import {
   unmappedThreadsMetrics,
   validateThreadsText,
 } from "../social/threads";
+import {
+  fetchInstagramInsights,
+  InstagramPublishAmbiguousError,
+  postMediaToInstagram,
+  reconcileInstagramPost,
+  translateInstagramError,
+  unmappedInstagramMetrics,
+  validateInstagramCaption,
+  validateInstagramPublishMedia,
+} from "../social/instagram";
 
 export type AdapterFailureClass = "transient" | "permanent" | "policy_human";
 
@@ -63,6 +73,10 @@ export interface PublishMedia {
   altText: string | null;
   /** Resolved bytes of that exact revision. */
   bytes: Buffer;
+  /** Optional provider-fetchable URL from AssetStoragePort (never a directory listing). */
+  providerFetchUrl?: string | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface PublishRequest {
@@ -810,9 +824,197 @@ export function resetChannelAdapters(): void {
   registry.clear();
 }
 
-/** Idempotent: registers the Phase-B channel set (X, LinkedIn, Threads). */
+/**
+ * Classify an Instagram transport failure. Missing credentials / personal
+ * accounts / missing media URLs are terminal-by-policy. Timeouts, 5xx, and 429
+ * map to transient. Invalid media and missing ids after a parsed response are
+ * permanent.
+ */
+export function classifyInstagramFailure(message: string): AdapterFailureClass {
+  if (
+    /INSTAGRAM_CONFIG_MISSING|not connected|INSTAGRAM_ACCOUNT_UNSUPPORTED|INSTAGRAM_MEDIA_URL_MISSING/i.test(
+      message,
+    )
+  ) {
+    return "policy_human";
+  }
+  if (/INSTAGRAM_CONTAINER_ID_MISSING|INSTAGRAM_PUBLISH_ID_MISSING/i.test(message)) {
+    return "permanent";
+  }
+  if (/timeout|ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate limit/i.test(message)) {
+    return "transient";
+  }
+  return "permanent";
+}
+
+/**
+ * Instagram adapter — professional-account image and carousel publishing.
+ * Text formats (`x_post`, `linkedin_post`) are not registered: Instagram feed
+ * publishing is media-first (JPEG URL). Stories/Reels are not registered.
+ * Provider has no documented idempotency key.
+ */
+export function createInstagramChannelAdapter(): ChannelAdapter {
+  const supported = new Set(["image", "carousel"]);
+
+  function captionFor(payload: JsonRecord): string {
+    const caption = typeof payload.caption === "string" ? payload.caption : "";
+    return caption.trim();
+  }
+
+  return {
+    channel: "instagram",
+    supports: (format) => supported.has(format),
+
+    async publish(request: PublishRequest): Promise<PublishOutcome> {
+      if (!supported.has(request.format)) return unavailable(request.format, "instagram");
+      const media = request.media ?? [];
+      const caption = captionFor(request.payload);
+      const captionError = validateInstagramCaption(caption);
+      if (captionError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: captionError,
+        };
+      }
+      const mediaError = validateInstagramPublishMedia(request.format, media);
+      if (mediaError) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: mediaError,
+        };
+      }
+      try {
+        const result = await postMediaToInstagram(
+          { format: request.format as "image" | "carousel", caption, media },
+          request.ownerUserId,
+        );
+        return {
+          ok: true,
+          providerCalled: true,
+          externalId: result.mediaId,
+          externalUrl: result.url,
+          publishedAt: new Date(),
+        };
+      } catch (error) {
+        if (error instanceof InstagramPublishAmbiguousError) {
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: null,
+            externalUrl: null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: {
+              caption: error.hint.caption,
+              attemptedAt: error.hint.attemptedAt,
+              ...(error.hint.creationId ? { creationId: error.hint.creationId } : {}),
+              ...(error.hint.childIds ? { childIds: error.hint.childIds } : {}),
+            },
+          };
+        }
+        const raw = error instanceof Error ? error.message : String(error);
+        const providerCalled = !/INSTAGRAM_CONFIG_MISSING|INSTAGRAM_ACCOUNT_UNSUPPORTED|INSTAGRAM_MEDIA_URL_MISSING|instagram requires|instagram image|instagram caption|instagram carousel/i.test(
+          raw,
+        );
+        return {
+          ok: false,
+          providerCalled,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: classifyInstagramFailure(raw),
+          errorMessage: translateInstagramError(raw),
+        };
+      }
+    },
+
+    async reconcile(request: PublishRequest): Promise<PublishOutcome | null> {
+      const hint = request.reconciliationHint ?? {};
+      const caption = typeof hint.caption === "string" ? hint.caption : null;
+      const attemptedAt = typeof hint.attemptedAt === "string" ? hint.attemptedAt : null;
+      const creationId = typeof hint.creationId === "string" ? hint.creationId : null;
+      const externalId = request.externalId ?? (typeof hint.externalId === "string" ? hint.externalId : null);
+      if (!caption && !creationId && !externalId) return null;
+
+      const status = await reconcileInstagramPost(
+        {
+          caption: caption ?? undefined,
+          attemptedAt: attemptedAt ?? undefined,
+          creationId: creationId ?? undefined,
+          externalId: externalId ?? undefined,
+        },
+        request.ownerUserId,
+      );
+      if (!status || status.status === "pending") return null;
+      if (status.status === "absent") {
+        return {
+          ok: false,
+          providerCalled: true,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: status.message,
+        };
+      }
+      return {
+        ok: true,
+        providerCalled: true,
+        externalId: status.mediaId,
+        externalUrl: status.url,
+        publishedAt: new Date(),
+      };
+    },
+
+    async fetchMetrics(request: MetricFetchRequest): Promise<MetricFetchOutcome> {
+      const now = new Date();
+      const window = hourWindow(now);
+      const fetched = await fetchInstagramInsights(request.externalId, request.ownerUserId);
+      if (!fetched.ok) {
+        const errorClass = classifyMetricsHttpFailure(fetched.status, fetched.message);
+        return {
+          ok: false,
+          provider: "instagram",
+          retrievedAt: fetched.retrievedAt,
+          observedAt: window.observedAt,
+          measurementWindow: window.window,
+          externalId: request.externalId,
+          normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+          metrics: [],
+          errorClass,
+          errorMessage: fetched.message,
+        };
+      }
+      const source: Record<string, unknown> = { ...fetched.insights };
+      return {
+        ok: true,
+        provider: "instagram",
+        retrievedAt: fetched.retrievedAt,
+        observedAt: window.observedAt,
+        measurementWindow: window.window,
+        externalId: request.externalId,
+        normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+        metrics: normalizeProviderMetrics(source, "instagram"),
+        unmapped: unmappedInstagramMetrics(fetched.insights),
+      };
+    },
+  };
+}
+
+/** Idempotent: registers the Phase-B channel set (X, LinkedIn, Threads, Instagram). */
 export function registerBuiltinChannelAdapters(): void {
   if (!hasChannelAdapter("x")) registerChannelAdapter(createXChannelAdapter());
   if (!hasChannelAdapter("linkedin")) registerChannelAdapter(createLinkedInChannelAdapter());
   if (!hasChannelAdapter("threads")) registerChannelAdapter(createThreadsChannelAdapter());
+  if (!hasChannelAdapter("instagram")) registerChannelAdapter(createInstagramChannelAdapter());
 }

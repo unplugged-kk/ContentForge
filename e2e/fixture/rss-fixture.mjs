@@ -152,6 +152,14 @@ const threadsContainers = new Map();
 const threadsMedia = new Map();
 const threadsListed = [];
 
+let instagramMode = "immediate";
+let instagramFailMarker = null;
+let instagramSeq = 0;
+const instagramContainers = new Map();
+const instagramMedia = new Map();
+const instagramListed = [];
+const instagramBlobs = new Map();
+
 /** Read a JSON request body (bounded). */
 function readBody(req) {
   return new Promise((resolve) => {
@@ -506,6 +514,73 @@ async function handlePost(req, res, url) {
     return send(200, { id: mediaId });
   }
 
+  if (url.pathname === "/control/instagram-mode") {
+    const body = await readBody(req);
+    instagramMode = body.mode === "network-fail-publish" ? "network-fail-publish" : "immediate";
+    instagramFailMarker = instagramMode === "network-fail-publish" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: instagramMode, matchSubstring: instagramFailMarker });
+  }
+
+  if (url.pathname === "/control/instagram-record-media") {
+    const body = await readBody(req);
+    instagramListed.push({
+      id: body.id,
+      caption: body.caption,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.instagram.com/p/${body.id}/`,
+    });
+    instagramMedia.set(body.id, { caption: body.caption });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/ig-stage-media") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    instagramSeq += 1;
+    const id = `blob-${RUN}-${instagramSeq}`;
+    instagramBlobs.set(id, Buffer.concat(chunks));
+    return send(200, { url: `http://127.0.0.1/ig-media/${id}` });
+  }
+
+  if (req.method === "POST" && /\/v25\.0\/[^/]+\/media$/.test(url.pathname) && !url.pathname.endsWith("/media_publish")) {
+    const body = await readBody(req);
+    instagramSeq += 1;
+    const id = `ic-${RUN}-${instagramSeq}`;
+    instagramContainers.set(id, {
+      caption: body.caption ?? "",
+      status: "FINISHED",
+      children: body.children,
+    });
+    return send(200, { id });
+  }
+
+  if (url.pathname.endsWith("/media_publish")) {
+    const body = await readBody(req);
+    const creationId = body.creation_id;
+    const caption = instagramContainers.get(creationId)?.caption ?? "";
+    const matchesArm =
+      instagramMode === "network-fail-publish" &&
+      instagramFailMarker &&
+      caption.includes(instagramFailMarker);
+    if (matchesArm) {
+      instagramMode = "immediate";
+      instagramFailMarker = null;
+      req.destroy();
+      return;
+    }
+    instagramSeq += 1;
+    const mediaId = `im-${RUN}-${instagramSeq}`;
+    instagramMedia.set(mediaId, { caption });
+    instagramListed.push({
+      id: mediaId,
+      caption,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.instagram.com/p/${mediaId}/`,
+    });
+    if (instagramContainers.has(creationId)) instagramContainers.get(creationId).status = "PUBLISHED";
+    return send(200, { id: mediaId });
+  }
+
   return send(404, { error: "not found" });
 }
 
@@ -673,6 +748,24 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.endsWith("/insights")) {
     const parts = url.pathname.split("/").filter(Boolean);
     const id = parts[parts.length - 2];
+    if (url.pathname.includes("/v25.0/")) {
+      return send(
+        200,
+        JSON.stringify({
+          data: [
+            { name: "views", values: [{ value: 40 }] },
+            { name: "likes", values: [{ value: 5 }] },
+            { name: "comments", values: [{ value: 2 }] },
+            { name: "saved", values: [{ value: 3 }] },
+            { name: "shares", values: [{ value: 1 }] },
+            { name: "reach", values: [{ value: 30 }] },
+            { name: "total_interactions", values: [{ value: 11 }] },
+          ],
+          id,
+        }),
+        "application/json; charset=utf-8",
+      );
+    }
     return send(
       200,
       JSON.stringify({
@@ -694,8 +787,37 @@ const server = http.createServer(async (req, res) => {
     return send(200, JSON.stringify({ data: threadsListed }), "application/json; charset=utf-8");
   }
 
-  if (url.pathname === "/v1.0/me" || url.pathname.endsWith("/me")) {
+  if (url.pathname === "/v25.0/me" || (url.pathname.includes("/v25.0/") && url.pathname.endsWith("/me"))) {
+    return send(
+      200,
+      JSON.stringify({ id: "cf_e2e_ig", username: "cf_e2e", account_type: "BUSINESS" }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  if (url.pathname === "/v1.0/me" || (url.pathname.includes("/v1.0/") && url.pathname.endsWith("/me"))) {
     return send(200, JSON.stringify({ id: "cf_e2e_threads", username: "cf_e2e" }), "application/json; charset=utf-8");
+  }
+
+  if (/\/v25\.0\/[^/]+\/media$/.test(url.pathname)) {
+    return send(200, JSON.stringify({ data: instagramListed }), "application/json; charset=utf-8");
+  }
+
+  const igNode = url.pathname.match(/^\/v25\.0\/([^/]+)$/);
+  if (igNode) {
+    const id = igNode[1];
+    if (instagramContainers.has(id)) {
+      const c = instagramContainers.get(id);
+      return send(200, JSON.stringify({ id, status_code: c.status }), "application/json; charset=utf-8");
+    }
+    if (instagramMedia.has(id)) {
+      const m = instagramMedia.get(id);
+      return send(
+        200,
+        JSON.stringify({ id, caption: m.caption, permalink: `https://www.instagram.com/p/${id}/` }),
+        "application/json; charset=utf-8",
+      );
+    }
   }
 
   const threadsNode = url.pathname.match(/^\/v1\.0\/([^/]+)$/);

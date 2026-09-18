@@ -10,7 +10,7 @@
  * The service layer owns all persistence; providers never see business tables.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { VisualAsset, VisualGeneration } from "@shared/schema";
 import { JobFailure, describeError } from "../jobs/failures";
@@ -262,6 +262,17 @@ export interface AssetStoragePort {
   get(storageKey: string): Promise<Buffer>;
   /** Archive = mark unusable without deleting history (never hard-delete referenced rows). */
   archive(storageKey: string): Promise<void>;
+  /**
+   * Optional: a time-bounded, object-scoped URL a provider (e.g. Meta) may
+   * fetch. Never a bucket listing. Implementations may return null when no
+   * public base is configured.
+   */
+  issueProviderFetchUrl?(input: {
+    storageKey: string;
+    ttlMs?: number;
+  }): Promise<{ url: string; expiresAt: Date } | null>;
+  /** Resolve a previously issued grant token to bytes. Missing/expired → null. */
+  getProviderGrant?(token: string): { bytes: Buffer; mime: string } | null;
 }
 
 /**
@@ -271,6 +282,7 @@ export interface AssetStoragePort {
  */
 export function createLocalAssetStorage(): AssetStoragePort & { size(): number } {
   const blobs = new Map<string, { bytes: Buffer; mime: string; archived: boolean }>();
+  const grants = new Map<string, { storageKey: string; expiresAt: number }>();
 
   return {
     async put(bytes: Buffer, mime: string) {
@@ -290,6 +302,29 @@ export function createLocalAssetStorage(): AssetStoragePort & { size(): number }
       assertSafeStorageKey(storageKey);
       const entry = blobs.get(storageKey);
       if (entry) entry.archived = true;
+    },
+    async issueProviderFetchUrl(input) {
+      assertSafeStorageKey(input.storageKey);
+      const entry = blobs.get(input.storageKey);
+      if (!entry || entry.archived) return null;
+      const publicBase = process.env.CONTENTFORGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+      if (!publicBase) return null;
+      const ttlMs = input.ttlMs ?? 15 * 60 * 1000;
+      const token = randomBytes(24).toString("hex");
+      const expiresAt = Date.now() + ttlMs;
+      grants.set(token, { storageKey: input.storageKey, expiresAt });
+      return { url: `${publicBase}/api/provider-media/${token}`, expiresAt: new Date(expiresAt) };
+    },
+    getProviderGrant(token: string) {
+      const grant = grants.get(token);
+      if (!grant) return null;
+      if (grant.expiresAt <= Date.now()) {
+        grants.delete(token);
+        return null;
+      }
+      const entry = blobs.get(grant.storageKey);
+      if (!entry || entry.archived) return null;
+      return { bytes: entry.bytes, mime: entry.mime };
     },
     size() {
       return blobs.size;

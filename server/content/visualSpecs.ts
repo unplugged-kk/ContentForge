@@ -23,6 +23,7 @@ export interface VisualSpec {
     | "social_portrait"
     | "x_image"
     | "linkedin_image"
+    | "instagram_feed"
     | "thumbnail";
   width: number;
   height: number;
@@ -95,6 +96,15 @@ const SPECS: readonly VisualSpec[] = [
     mime: "image/png",
     maxBytes: 5 * 1024 * 1024,
   },
+  {
+    id: "instagram_feed",
+    usage: "instagram_feed",
+    width: 1080,
+    height: 1080,
+    aspectRatio: "1:1",
+    mime: "image/jpeg",
+    maxBytes: 8 * 1024 * 1024,
+  },
 ];
 
 const byId = new Map(SPECS.map((s) => [s.id, s]));
@@ -105,6 +115,8 @@ const FORMAT_CHANNEL_SPEC: Record<string, string> = {
   "carousel:x": "generic_square",
   "carousel:linkedin": "linkedin_image",
   "thumbnail:x": "thumbnail",
+  "image:instagram": "instagram_feed",
+  "carousel:instagram": "instagram_feed",
 };
 
 export function listVisualSpecs(): VisualSpec[] {

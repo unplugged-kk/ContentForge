@@ -12,6 +12,11 @@ const PNG_1x1 = Buffer.from(
   "base64",
 );
 
+const JPEG_1x1 = Buffer.from(
+  "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAEDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpA/9k=",
+  "base64",
+);
+
 export function createFixtureVisualProvider(
   options: {
     providerId?: string;
@@ -54,13 +59,14 @@ export function createFixtureVisualProvider(
           usage: {},
         };
       }
-      void request;
+      const spec = request.snapshot && typeof request.snapshot === "object" ? (request.snapshot as { spec?: { mime?: string; width?: number; height?: number } }).spec : undefined;
+      const jpeg = spec?.mime === "image/jpeg";
       const index = request.variationIndex ?? 0;
       return {
-        bytes: Buffer.from(PNG_1x1),
-        mime: "image/png",
-        width: 1,
-        height: 1,
+        bytes: Buffer.from(jpeg ? JPEG_1x1 : PNG_1x1),
+        mime: jpeg ? "image/jpeg" : "image/png",
+        width: jpeg ? spec?.width ?? 1080 : 1,
+        height: jpeg ? spec?.height ?? 1080 : 1,
         altText: request.source
           ? `Refined fixture visual (source ${request.source.mime})`
           : `Deterministic 1×1 fixture visual #${index}`,

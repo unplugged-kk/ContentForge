@@ -52,9 +52,11 @@ import {
   channelSupportsFormat,
   classifyLinkedInFailure,
   classifyThreadsFailure,
+  classifyInstagramFailure,
   classifyXFailure,
   createLinkedInChannelAdapter,
   createThreadsChannelAdapter,
+  createInstagramChannelAdapter,
   createXChannelAdapter,
   registerBuiltinChannelAdapters,
 } from "./adapters";
@@ -727,6 +729,17 @@ describe("threads channel adapter", () => {
     assert.equal(adapter.supports("carousel"), false);
     assert.equal(classifyThreadsFailure("THREADS_CONFIG_MISSING"), "policy_human");
     assert.equal(classifyThreadsFailure("429"), "transient");
+  });
+});
+
+describe("instagram channel adapter", () => {
+  it("declares image and carousel only and classifies failures", () => {
+    const adapter = createInstagramChannelAdapter();
+    assert.equal(adapter.supports("image"), true);
+    assert.equal(adapter.supports("carousel"), true);
+    assert.equal(adapter.supports("x_post"), false);
+    assert.equal(classifyInstagramFailure("INSTAGRAM_CONFIG_MISSING"), "policy_human");
+    assert.equal(classifyInstagramFailure("429"), "transient");
   });
 });
 

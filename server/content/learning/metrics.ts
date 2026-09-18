@@ -110,7 +110,7 @@ export function normalizeProviderMetrics(
   const comments = pickCount(nested, ["comments", "comment_count"]);
   const shares = pickCount(nested, ["shares", "share_count", "reposts", "retweets", "retweet_count"]);
   const clicks = pickCount(nested, ["clicks", "click_count", "url_link_clicks"]);
-  const saves = pickCount(nested, ["saves", "bookmarks", "bookmark_count"]);
+  const saves = pickCount(nested, ["saves", "saved", "bookmarks", "bookmark_count"]);
   const replies = pickCount(nested, ["replies", "reply_count"]);
   const followers = pickCount(nested, ["followers_gained", "followers", "follower_count"]);
   const engagement = pickCount(nested, ["engagement_rate"]);

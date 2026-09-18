@@ -208,6 +208,12 @@ async function startApp() {
       THREADS_ACCESS_TOKEN: "fixture-token",
       THREADS_USER_ID: "me",
       THREADS_TIMEOUT_MS: "3000",
+      INSTAGRAM_API_BASE_URL: FIXTURE_BASE,
+      INSTAGRAM_API_VERSION: "v25.0",
+      INSTAGRAM_ACCESS_TOKEN: "fixture-token",
+      INSTAGRAM_USER_ID: "me",
+      INSTAGRAM_TIMEOUT_MS: "3000",
+      INSTAGRAM_MEDIA_STAGE_URL: `${FIXTURE_BASE}/ig-stage-media`,
       // Phase 2: point the real providers at the deterministic fixture. The
       // operator allowlist is what lets the SSRF-guarded providers reach it; it
       // is default-off in production and never derived from request input.
@@ -1485,6 +1491,90 @@ const observed = {};
     await http("POST", `/api/artifacts/${rev.body.id}/submit-review`, {});
     const approved = await http("POST", `/api/artifacts/${rev.body.id}/approve`, {});
     assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return approved.body.id;
+  }
+
+  async function approvedInstagramImageArtifact(caption) {
+    const vis = await http("POST", "/api/visual-generations", {
+      kind: "image",
+      providerId: "local-fixture",
+      specId: "instagram_feed",
+      intent: { subject: caption, aspectRatio: "1:1" },
+    });
+    assert(vis.status === 201 || vis.status === 200, `visual ${vis.status}: ${vis.text}`);
+    const ready = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${vis.body.id}`);
+        if (r.body.status === "ready" && r.body.visualAssetId) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage ?? r.text);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "instagram visual ready" },
+    );
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "instagram image",
+      objective: "publish",
+      format: "image",
+      channel: "instagram",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const created = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      payload: {
+        visualAssetId: ready.visualAssetId,
+        caption,
+        altText: caption,
+        aspectRatio: "1:1",
+      },
+      attributionReason: "instagram e2e",
+    });
+    assert(created.status === 201, `artifact ${created.status}: ${created.text}`);
+    await http("POST", `/api/artifacts/${created.body.id}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${created.body.id}/approve`, {});
+    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return approved.body.id;
+  }
+
+  async function approvedInstagramCarouselArtifact(caption) {
+    const vis = await http("POST", "/api/visual-generations", {
+      kind: "carousel",
+      providerId: "local-fixture",
+      specId: "instagram_feed",
+      slideCount: 3,
+      intent: { subject: caption, aspectRatio: "1:1" },
+    });
+    assert(vis.status === 201 || vis.status === 200, `carousel visual ${vis.status}: ${vis.text}`);
+    const ready = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${vis.body.id}`);
+        if (r.body.status === "ready" && Array.isArray(r.body.assets) && r.body.assets.length === 3) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage ?? r.text);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "instagram carousel visual ready" },
+    );
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "instagram carousel",
+      objective: "publish",
+      format: "carousel",
+      channel: "instagram",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const created = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      payload: {
+        slides: ready.assets
+          .slice()
+          .sort((a, b) => a.position - b.position)
+          .map((a) => ({ visualAssetId: a.id, altText: caption })),
+        aspectRatio: "1:1",
+      },
+      attributionReason: "instagram carousel e2e",
+    });
+    assert(created.status === 201, `carousel artifact ${created.status}: ${created.text}`);
+    await http("POST", `/api/artifacts/${created.body.id}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${created.body.id}/approve`, {});
+    assert(approved.body.readiness === "approved");
     return approved.body.id;
   }
 
@@ -3363,6 +3453,204 @@ const observed = {};
   inform(
     "Path J/K: Real Threads network verification: BLOCKED — credential unavailable",
     "THREADS_ACCESS_TOKEN is not a live Meta credential in this environment; fixture Graph double covered Paths A–I",
+  );
+
+  // ── Phase 18: Instagram ChannelAdapter ──────────────────────────────────────
+  phase("Phase 18: Artifact → Publication(instagram) → Instagram ChannelAdapter");
+
+  let igArtifactId = null;
+  let igPubId = null;
+
+  await check("Path A: Image Artifact → Instagram Publication", async () => {
+    igArtifactId = await approvedInstagramImageArtifact(`${RUN}-ig-a`);
+    const fan = await http("POST", `/api/artifacts/${igArtifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ot = fan.body.outcomes.find((o) => o.channel === "instagram");
+    assert(ot && ot.status === "created" && ot.publicationId, JSON.stringify(fan.body));
+    igPubId = ot.publicationId;
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${igPubId}`);
+        return r.status === 200 && r.body.state === "published" ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "instagram publication published" },
+    );
+    assert(row.channel === "instagram");
+    assert(String(row.externalId || "").startsWith("im-"), `externalId=${row.externalId}`);
+    return `artifact ${igArtifactId} publication ${igPubId} externalId=${row.externalId}`;
+  });
+
+  await check("Path B: same image Artifact → X + Threads + Instagram", async () => {
+    const artifactId = await approvedInstagramImageArtifact(`${RUN}-ig-tri`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "x" }, { channel: "threads" }, { channel: "instagram" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    const ot = fan.body.outcomes.find((o) => o.channel === "threads");
+    const oi = fan.body.outcomes.find((o) => o.channel === "instagram");
+    assert(ox.status === "created" && oi.status === "created");
+    assert(ot.status !== "created", "image format is not Threads-compatible");
+    assert(ox.publicationId !== oi.publicationId);
+    const rows = await q("select channel, artifact_id from publications where id = any($1::int[])", [
+      [ox.publicationId, oi.publicationId],
+    ]);
+    assert(rows.every((r) => r.artifact_id === artifactId));
+    return `artifact ${artifactId} x=${ox.publicationId} instagram=${oi.publicationId} threads=${ot.status}`;
+  });
+
+  await check("Path C: independent Instagram vs X startAt", async () => {
+    const artifactId = await approvedInstagramImageArtifact(`${RUN}-ig-sched`);
+    const t2 = new Date(Date.now() + 86_400_000).toISOString();
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [
+        { channel: "instagram" },
+        { channel: "x", startAt: t2 },
+      ],
+    });
+    const oi = fan.body.outcomes.find((o) => o.channel === "instagram");
+    const ox = fan.body.outcomes.find((o) => o.channel === "x");
+    assert(oi.publicationId, "due Instagram target materializes");
+    assert(!ox.publicationId, "future X target has no Publication yet");
+    return `instagram due now, x ${t2}`;
+  });
+
+  await check("Path D: duplicate Instagram fan-out reuses the Publication", async () => {
+    const again = await http("POST", `/api/artifacts/${igArtifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === igPubId);
+    return `reused ${igPubId}`;
+  });
+
+  await check("Path E: explicit Instagram republish creates a new Publication", async () => {
+    const again = await http("POST", `/api/artifacts/${igArtifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+      republishKey: "ig-again",
+    });
+    assert(again.body.outcomes[0].status === "created");
+    assert(again.body.outcomes[0].publicationId !== igPubId);
+    return `new ${again.body.outcomes[0].publicationId}`;
+  });
+
+  await check("Path F: foreign Artifact ids remain non-leaking 404s for Instagram fan-out", async () => {
+    const missing = await http("POST", "/api/artifacts/999999991/publications", {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(missing.status === 404, `expected 404 got ${missing.status}`);
+    return "404";
+  });
+
+  await check("Path G: SIGKILL with a queued Instagram Publication does not duplicate it", async () => {
+    const artifactId = await approvedInstagramImageArtifact(`${RUN}-ig-restart`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    await killApp("SIGKILL");
+    await startApp();
+    const again = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === pubId);
+    const count = await q("select count(*)::int c from publications where artifact_id = $1 and channel = 'instagram'", [
+      artifactId,
+    ]);
+    assert(count[0].c === 1, `duplicates after restart: ${count[0].c}`);
+    return `publication ${pubId} survived`;
+  });
+
+  await check("Path H: Instagram Publication → PerformanceSignal → LearningSignal", async () => {
+    const queued = await http("POST", `/api/learning/publications/${igPubId}/refresh`, {});
+    assert(queued.status === 202 || queued.status === 200, `refresh ${queued.status}: ${queued.text}`);
+    const snaps = await waitFor(
+      async () => {
+        const rows = await q(
+          "select metric, value, availability, provenance from performance_signals where publication_id = $1",
+          [igPubId],
+        );
+        return rows.length > 0 ? rows : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 400, label: "instagram performance signals" },
+    );
+    const impressions = snaps.find((s) => s.metric === "impressions");
+    assert(impressions, "views mapped to impressions");
+    const learned = await q("select id, publication_id from learning_signals where publication_id = $1", [igPubId]);
+    assert(learned.every((r) => r.publication_id === igPubId));
+    return `signals=${snaps.length} learning=${learned.length}`;
+  });
+
+  await check("Path I: Instagram reconciliation after ambiguous publish", async () => {
+    const marker = `${RUN}-ig-ambiguous`;
+    const artifactId = await approvedInstagramImageArtifact(marker);
+    await fixturePost("/control/instagram-mode", { mode: "network-fail-publish", matchSubstring: marker });
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    const unknown = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${pubId}`);
+        return r.status === 200 && (r.body.state === "failed" || r.body.state === "published") ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 500, label: "instagram ambiguous outcome" },
+    );
+    assert(unknown.channel === "instagram");
+    await fixturePost("/control/instagram-record-media", { id: `listed-${marker}`, caption: marker });
+    const recon = await http("POST", "/api/publications/dispatch", {});
+    assert(recon.status === 200, `dispatch ${recon.status}: ${recon.text}`);
+    return `state=${unknown.state}`;
+  });
+
+  await check("Path J: Carousel Artifact → Instagram Publication", async () => {
+    const artifactId = await approvedInstagramCarouselArtifact(`${RUN}-ig-car`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const ot = fan.body.outcomes.find((o) => o.channel === "instagram");
+    assert(ot && ot.status === "created");
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${ot.publicationId}`);
+        return r.status === 200 && r.body.state === "published" ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "instagram carousel published" },
+    );
+    assert(row.channel === "instagram");
+    const refs = await q(
+      "select position from visual_asset_refs where artifact_id = $1 order by position",
+      [artifactId],
+    );
+    assert(refs.length === 3);
+    return `carousel publication ${ot.publicationId} slides=${refs.length}`;
+  });
+
+  await check("Path K: SIGKILL does not duplicate an Instagram carousel Publication", async () => {
+    const artifactId = await approvedInstagramCarouselArtifact(`${RUN}-ig-car-rst`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    await killApp("SIGKILL");
+    await startApp();
+    const again = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    const count = await q("select count(*)::int c from publications where artifact_id = $1 and channel = 'instagram'", [
+      artifactId,
+    ]);
+    assert(count[0].c === 1);
+    return `carousel publication ${pubId} survived`;
+  });
+
+  inform(
+    "Path L/M/N: Real Instagram network verification: BLOCKED — credential/account unavailable",
+    "No INSTAGRAM_ACCESS_TOKEN professional credential in this environment; fixture Graph double covered Paths A–K",
   );
 
   // ── 9. EXTERNAL SMOKE (optional, non-gating) ────────────────────────────────

@@ -534,8 +534,93 @@ against a local Graph double: pass.
 
 **Verification:** unit 415/415; real Postgres 199/199; migration 21 / 50 tables.
 
-**Deferred (unchanged):** Instagram, YouTube, TikTok, Bluesky, Threads carousel/video/
+**Deferred (unchanged):** YouTube, TikTok, Bluesky, Threads carousel/video/
 replies/moderation/search, social account UI, automatic learning mutation.
+
+## Phase 18 — Instagram Channel + Visual Publishing (done)
+
+**The problem this closes**: prove a media-first provider on the existing
+`Artifact → Publication[N] → ChannelAdapter → Result` path using Phase 15 visuals
+and Phase 16 fan-out, without a second queue, scheduler, analytics system, or
+Instagram-specific domain tables.
+
+```
+Artifact (immutable revision; format image|carousel)
+        └─ Publication(channel=instagram)
+                ├── Schedule / Occurrence
+                ├── Instagram ChannelAdapter
+                │      validate → publish → reconcile → fetchMetrics
+                └── Result → PerformanceSignal → LearningSignal
+
+VisualAsset[] → AssetStoragePort → provider-fetchable JPEG URL → Instagram
+```
+
+**Authoritative API contract (verified 2026-09-18 from Meta docs).**
+Instagram Content Publishing is **professional accounts only** (Business / Creator).
+This transport uses **Instagram Login**: host `graph.instagram.com`, API version
+`v25.0` (overridable via `INSTAGRAM_API_VERSION`), Instagram User token, scopes
+`instagram_business_basic`, `instagram_business_content_publish`,
+`instagram_business_manage_insights`. Personal accounts are rejected
+(`INSTAGRAM_ACCOUNT_UNSUPPORTED`). Image: JPEG only, public `image_url` Meta can
+cURL, 8 MB, aspect 4:5–1.91:1, width 320–1440. Flow: POST `/{ig-user-id}/media`
+then POST `/{ig-user-id}/media_publish`. Carousel: child containers
+`is_carousel_item=true`, parent `media_type=CAROUSEL` + `children`, then publish.
+Containers expire in 24h; 400 containers / 100 published posts per 24h.
+Container `status_code`: EXPIRED | ERROR | FINISHED | IN_PROGRESS | PUBLISHED.
+**Provider idempotency: none documented.** Insights: GET `/{media-id}/insights`;
+empty dataset is not 0. Album-child insights are unavailable.
+
+**Adapter.** `createInstagramChannelAdapter()` registered by
+`registerBuiltinChannelAdapters()`. Transport: `server/social/instagram.ts`.
+Registered capabilities: `image`, `carousel`. Not registered: Stories, Reels,
+Live, DMs, comments, `x_post`/`linkedin_post` (feed publishing is media-first;
+no cosmetic `instagram_post`).
+
+**Format.** `format = content type`; `Publication.channel = instagram`. Visual
+spec `instagram_feed` (JPEG 1080×1080, 8 MB) via `visualSpecs.ts`
+`image:instagram` / `carousel:instagram`. PNG assets fail validation; they are
+not silently converted.
+
+**Auth.** Reuses `connected_accounts` (`userId + platform`). Env override
+`INSTAGRAM_ACCESS_TOKEN` + `INSTAGRAM_USER_ID`. No InstagramTokenStore. Connect:
+`POST /api/accounts/connect { platform: "instagram" }`. Status:
+`GET /api/social/instagram/status`.
+
+**Media delivery / security.** Instagram requires a provider-fetchable URL, not
+binary upload. `AssetStoragePort.issueProviderFetchUrl` issues a 15-minute,
+object-scoped grant served at `GET /api/provider-media/:token` (no listing, no
+session). Tests/E2E use `INSTAGRAM_MEDIA_STAGE_URL` so Meta never sees the local
+bucket. Missing URL → `INSTAGRAM_MEDIA_URL_MISSING` (policy). Bytes never enter
+PostgreSQL or pg-boss payloads.
+
+**Unknown / reconcile.** Timeout / 5xx after a container exists → Result
+`unknown`, hint `{caption, attemptedAt, creationId?, childIds?}`. Reconcile: GET
+media by id; GET container `status_code` (`ERROR`/`EXPIRED` can prove absence);
+listing `GET /{ig-user-id}/media` may confirm a caption match; a miss is never
+absence. IN_PROGRESS is unknown, not a new job type.
+
+**Metrics (`performance.v1`).** Requested: likes, comments, views, reach, saved,
+shares, total_interactions. Mapping: views→impressions (display/play count; Meta
+does not return `impressions` on current IG Login media insights), likes→likes,
+comments→comments, saved→saves, shares→shares. **reach** (unique accounts) and
+**total_interactions** stay on `provenance.unmapped` — they are not impressions
+and not fabricated as 0.
+
+**Multi-channel.** No single Artifact format is genuinely compatible with X +
+Threads + Instagram. Image revision → independent X + Instagram Publications
+(Threads rejected). `x_post` → X + Threads (Instagram rejected). Failure in one
+does not alter siblings.
+
+**Automation / repurposing.** Unchanged. Instagram is a distribution target
+through `POST /api/artifacts/:id/publications`. Not automatic by default.
+
+**Live provider.** `Real Instagram network verification: BLOCKED — credential/account unavailable`.
+
+**Verification:** TypeScript 0 errors; unit 427/427; real Postgres 211/211; live E2E 145/145; visual E2E 19/19; fresh migrations 21 / 50 tables.
+
+**Deferred:** Stories, Reels, Live, DMs/comments/moderation, discovery/search,
+follower/audience features, PNG→JPEG transcode, Facebook Login Graph path,
+UI, Chrome.
 
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 

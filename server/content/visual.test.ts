@@ -190,7 +190,7 @@ describe("visual specs and variation identity", () => {
     const { resolveVisualSpec, getVisualSpec, validateVariationCount, variationIdentityKey, validateCarouselSlideCount } =
       await import("./visualSpecs");
     assert.equal(resolveVisualSpec({ specId: "x_image" }).usage, "x_image");
-    assert.equal(resolveVisualSpec({ format: "image", channel: "linkedin" }).id, "linkedin_image");
+    assert.equal(resolveVisualSpec({ format: "image", channel: "instagram" }).id, "instagram_feed");
     assert.equal(resolveVisualSpec({ aspectRatio: "16:9" }).id, "generic_landscape");
     assert.ok(getVisualSpec("social_portrait"));
     assert.equal(validateVariationCount(0), "variationCount must be an integer 1–8");

@@ -113,6 +113,7 @@ describe("format vs channel", () => {
     assert.match(String(formatChannelError("x_post", "linkedin")), /cannot target channel/);
     assert.equal(formatChannelError("x_post", "x"), null);
     assert.equal(formatChannelError("x_post", "threads"), null);
+    assert.equal(formatChannelError("image", "instagram"), null);
     assert.equal(formatChannelError("linkedin_post", "linkedin"), null);
   });
 
@@ -127,6 +128,12 @@ describe("format vs channel", () => {
     assert.equal(channelSupportsFormat("linkedin", "image"), false);
     assert.equal(channelSupportsFormat("linkedin", "x_thread"), false);
     assert.equal(channelSupportsFormat("x", "carousel"), false);
+    assert.equal(channelSupportsFormat("instagram", "image"), true);
+    assert.equal(channelSupportsFormat("instagram", "carousel"), true);
+    assert.equal(channelSupportsFormat("instagram", "x_post"), false);
+    assert.equal(channelSupportsFormat("instagram", "x_thread"), false);
+    assert.equal(channelSupportsFormat("instagram", "thumbnail"), false);
+    assert.equal(channelSupportsFormat("threads", "image"), false);
   });
 });
 

@@ -100,6 +100,12 @@ export async function resolvePublicationMedia(
       );
     }
 
+    let providerFetchUrl: string | null = null;
+    if (deps.storage.issueProviderFetchUrl) {
+      const issued = await deps.storage.issueProviderFetchUrl({ storageKey: asset.storageKey });
+      providerFetchUrl = issued?.url ?? null;
+    }
+
     media.push({
       visualAssetId: asset.id,
       mime: asset.mime,
@@ -107,6 +113,9 @@ export async function resolvePublicationMedia(
       position: ref.position,
       altText: ref.altText ?? asset.altText ?? null,
       bytes,
+      providerFetchUrl,
+      width: asset.width,
+      height: asset.height,
     });
   }
   return media;

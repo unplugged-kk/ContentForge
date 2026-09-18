@@ -1168,6 +1168,27 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   });
 
   // ── Visual assets ───────────────────────────────────────────────────────────
+  /**
+   * Provider-facing, token-scoped media fetch. No session. The token is a
+   * time-bounded grant for one storage key — not a directory listing.
+   */
+  router.get("/provider-media/:token", async (req, res, next) => {
+    try {
+      const token = String(req.params.token ?? "");
+      if (!/^[a-f0-9]{48}$/i.test(token) || !deps.visualStorage.getProviderGrant) {
+        return res.status(404).json({ message: "Media grant not found" });
+      }
+      const grant = deps.visualStorage.getProviderGrant(token);
+      if (!grant) return res.status(404).json({ message: "Media grant not found" });
+      res.setHeader("Content-Type", grant.mime);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).end(grant.bytes);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   /** Owner-scoped listing. */
   router.get("/visual-assets", async (req, res, next) => {
     const requested = Number(req.query.limit ?? 50);

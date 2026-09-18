@@ -92,6 +92,29 @@ const PROFILES: readonly FormatProfile[] = [
     constraints: { minUnits: 2, maxUnits: 10, sequential: true, hookFirst: true, visual: "required", visualSpecId: "generic_square" },
   },
   {
+    format: "image",
+    channel: "instagram",
+    guidance:
+      "A single Instagram feed JPEG. One focal subject, readable at phone size. " +
+      "Caption is optional and must not invent data. Aspect between 4:5 and 1.91:1.",
+    constraints: { maxCharacters: 2200, maxUnits: 1, visual: "required", visualSpecId: "instagram_feed" },
+  },
+  {
+    format: "carousel",
+    channel: "instagram",
+    guidance:
+      "An ordered Instagram carousel of 2–10 JPEG slides. Slide 1 is the hook. " +
+      "Each slide keeps its own asset; never collapse slides. Complete set required to publish.",
+    constraints: {
+      minUnits: 2,
+      maxUnits: 10,
+      sequential: true,
+      hookFirst: true,
+      visual: "required",
+      visualSpecId: "instagram_feed",
+    },
+  },
+  {
     format: "thumbnail",
     channel: "x",
     guidance:
