@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-18 (Phase 21) · Branch reviewed: `replit` @ `181fbb8` (implementation landed)
+Last updated: 2026-09-18 (Phase 22) · Branch reviewed: `replit` @ `6fcbf77` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,14 +13,16 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **460 passed / 0 failed** (110 suites) |
-| `npm test` | **460 passed** |
-| `npm run test:db` (real PostgreSQL) | **235 passed / 0 failed / 0 skipped** (28 suites) |
-| `npm run test:e2e:live` (real running app) | **154 passed / 0 failed** (154 checks). Phase 20 Reels Paths A–I remained green. Phase 18 image/carousel A–K remained green |
-| `npm run test:e2e:visual` (real running app) | **38 passed / 0 failed** (38 checks). Phase 21 Video Factory Paths A–I green (Path H SIGKILL, one VideoAsset). Phase 19 video Paths A–H remained green. Path J documented blocker |
-| `npm run build` (production CJS bundle) | **succeeds**; live/visual E2E boot `dist/index.cjs` |
-| Fresh DB migration | **22 migrations / 50 tables** from zero (no new Video Factory tables) |
-| Existing DB migration | upgrades a 0000–0002 database to the same schema including `0021` |
+| `npm run test:unit` | **470 passed / 0 failed** (116 suites) |
+| `npm test` | **470 passed** |
+| `npm run test:db` (real PostgreSQL) | **240 passed / 0 failed / 0 skipped** (29 suites) |
+| `npm run test:e2e:live` (real running app) | **154 passed / 0 failed** (154 checks). Instagram/Threads/X/LinkedIn/Reels regressions green |
+| `npm run test:e2e:visual` (real running app) | **38 passed / 0 failed** (38 checks). Phase 21 Video Factory Paths A–I green; Path J documented blocker |
+| `npm run test:e2e:agent` (real running app) | **17 passed / 0 failed** (17 checks). Paths A–N green |
+| `npm run build` (production CJS bundle) | **succeeds**; live/visual/agent E2E boot `dist/index.cjs` |
+| Fresh DB migration | **23 migrations / 52 tables** from zero (`0022_agent_runtime` adds `agent_runs` / `agent_tool_calls`) |
+| Existing DB migration | upgrades a 0000–0002 database to the same schema including `0022` |
+| Timeplus live MCP | **ENVIRONMENTALLY BLOCKED — `TIMEPLUS_MCP_URL` unset**; Path N returned ContentForge-local metrics; pipeline still works |
 | Real Video Factory render smoke | **BLOCKED — hyperframes@0.7.60 is not installed here; ContentForge does not emit HyperFrames composition; factory has no versioned remote submit API** |
 | Video Factory remote integration | **BLOCKED — current factory has no versioned remote submission API** |
 | Real Instagram Reels network smoke | **BLOCKED — professional publishing credentials/account unavailable** |
@@ -30,11 +32,45 @@ summary kept in the review PR.
 | Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 445 unit / 228 DB / 154 live E2E / 28 visual E2E / 22 migrations / 50 tables.
+Baseline before this phase: 460 unit / 235 DB / 154 live E2E / 38 visual E2E / 22 migrations / 50 tables.
 
 ---
 
-## Video Factory Integration Contract (new in this phase — Phase 21)
+## Agent Runtime + Agent Tool Layer (new in this phase — Phase 22)
+
+**IMPLEMENTED — interchangeable agent backends operate the existing ContentForge pipeline through a governed tool registry. Timeplus live MCP is ENVIRONMENTALLY BLOCKED. CopilotKit workspace UI is DEFERRED (Phase 23). Video Factory HyperFrames render remains the Phase 21 blocker.**
+
+```
+LLM / local / cloud / AG-UI agent
+        ↓
+ContentForge Agent Runtime  (AgentRun + AgentToolCall, pg-boss `agent.run`)
+        ↓
+AgentToolRegistry + tool policy (read / write / privileged)
+        ├─ ContentForge tools → existing domain services → PostgreSQL + pg-boss
+        └─ ExternalToolProviderPort → MCP (Timeplus semantic read-only tools)
+```
+
+`OpenAI-compatible backend: IMPLEMENTED` (verified against a local HTTP test endpoint; switch is `AGENT_BACKEND_BASE_URL` only)
+`AG-UI remote backend: IMPLEMENTED` (verified against a real external process at `AGENT_AGUI_URL`)
+`Fixture backend: IMPLEMENTED`
+`Timeplus live MCP: PARTIALLY IMPLEMENTED / ENVIRONMENTALLY BLOCKED — TIMEPLUS_MCP_URL unset`
+`CopilotKit workspace UI: DEFERRED (Phase 23)`
+
+**Source of truth.** PostgreSQL remains authoritative. Agents never receive SQL tools, never write domain tables, never introduce a second queue or a second generation abstraction. Tools compose `server/content/*`, research, story, visual, and publication services.
+
+**Durable state.** Additive `agent_runs` / `agent_tool_calls` (`0022_agent_runtime`). Tool retries reuse `idempotency_key`. Explicit regenerate is a new semantic request. SIGKILL recovery reuses the same AgentRun / tool-call / VisualGeneration identities (Path I). Video Factory identity remains `cfvg-{VisualGeneration.id}`.
+
+**Authorization.** Runtime injects `ownerId`. Agent-supplied owner/credential keys are stripped. Foreign IDs return `not_found` (Path J). `approve_artifact` and `publish_now` are privileged: tool presence is not authorization (Path F denied then granted). Retrieved research is DATA (Path K).
+
+**Tool set.** `research_topic`, `research_url`, `get_research_job`, `create_story`, `get_story`, `find_opportunities`, `repurpose_story`, `generate_artifact`, `generate_image`, `generate_video`, `approve_artifact`, `schedule_publication`, `publish_now`, `get_publication_status`, `get_analytics`, plus read-only Timeplus semantic tools. `get_analytics` returns the real descriptive summary (capability=`partial`). `timeplus_run_sql` is not advertised to the content agent.
+
+**AG-UI.** Backend event reconstruction at `GET /api/agent/runs/:id/events` (`RUN_STARTED` … `RUN_FINISHED`). No CopilotKit frontend in this phase.
+
+**Not in this phase:** CopilotKit workspace, mass-repurposing intelligence, style learning, autonomous publishing as default, Chrome, YouTube/TikTok, vector memory, Timeplus as a live cluster.
+
+---
+
+## Video Factory Integration Contract (previous — Phase 21)
 
 **PARTIALLY IMPLEMENTED — versioned `video-factory.contract.v1` + `VisualProviderPort` adapter + filesystem transport + ContentForge import are real; live HyperFrames render and remote HTTP submit are blocked.**
 
@@ -1405,10 +1441,11 @@ unrestricted autopilot, all authoring UI, YouTube / Shorts / X video /
 LinkedIn video publishing, remote Video Factory HTTP submit, live HyperFrames
 render in this environment, audio / lip-sync / timeline editing, video
 autopilot, LinkedIn media/articles/comments, billing, collaboration,
-notifications, full iCalendar/RRULE recurrence.
+notifications, full iCalendar/RRULE recurrence, CopilotKit workspace UI,
+mass-repurposing intelligence, Timeplus as a live telemetry cluster.
 
 ## Next boundary
 
-Not decided here. Phase 21 is landed on `replit` (`181fbb8`). The next
-implementation phase is selected externally after review of this status. Do not
-start Phase 22 from this document.
+Not decided here. Phase 22 is landed on `replit` (`6fcbf77`). The next
+implementation phase (Phase 23 CopilotKit/AG-UI workspace) is selected
+externally after review of this status. Do not start Phase 23 from this document.
