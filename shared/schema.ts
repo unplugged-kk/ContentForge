@@ -1453,6 +1453,83 @@ export type VisualAsset = typeof visualAssets.$inferSelect;
 export type InsertVisualAsset = z.infer<typeof insertVisualAssetSchema>;
 export type VisualAssetRef = typeof visualAssetRefs.$inferSelect;
 export type InsertVisualAssetRef = z.infer<typeof insertVisualAssetRefSchema>;
+
+// ── VIDEO REPURPOSING (Phase 27) ──────────────────────────────────────────────
+// Distinct from VisualGeneration: clipping/derivation of an owned VideoAsset
+// into N short VideoAssets. ContentForge owns intent/lineage/publishing;
+// OpenShorts (or a fixture) is a worker behind VideoRepurposingProviderPort.
+
+export const videoRepurposingJobs = pgTable(
+  "video_repurposing_jobs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    sourceVisualAssetId: integer("source_visual_asset_id").notNull().references(() => visualAssets.id),
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull(),
+    providerId: varchar("provider_id", { length: 80 }).notNull(),
+    providerVersion: varchar("provider_version", { length: 50 }),
+    providerJobId: varchar("provider_job_id", { length: 200 }),
+    clipCount: integer("clip_count").notNull().default(3),
+    requestSnapshot: jsonb("request_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    /** requested | accepted | queued | processing | ready | partial | failed | unknown */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    attempt: integer("attempt").notNull().default(1),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_repurposing_jobs_idempotency_uq").on(table.idempotencyKey),
+    index("video_repurposing_jobs_owner_idx").on(table.userId),
+    index("video_repurposing_jobs_source_idx").on(table.sourceVisualAssetId),
+    index("video_repurposing_jobs_status_idx").on(table.status),
+  ],
+);
+
+export const videoRepurposingOutputs = pgTable(
+  "video_repurposing_outputs",
+  {
+    id: serial("id").primaryKey(),
+    jobId: integer("job_id").notNull().references(() => videoRepurposingJobs.id),
+    userId: integer("user_id"),
+    position: integer("position").notNull(),
+    visualAssetId: integer("visual_asset_id").references(() => visualAssets.id),
+    /** requested | ready | failed */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    startMs: integer("start_ms"),
+    endMs: integer("end_ms"),
+    durationMs: integer("duration_ms"),
+    title: varchar("title", { length: 200 }),
+    caption: text("caption"),
+    aspectRatio: varchar("aspect_ratio", { length: 16 }),
+    providerClipId: varchar("provider_clip_id", { length: 200 }),
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_repurposing_outputs_job_position_uq").on(table.jobId, table.position),
+    index("video_repurposing_outputs_job_idx").on(table.jobId),
+    index("video_repurposing_outputs_asset_idx").on(table.visualAssetId),
+  ],
+);
+
+export const insertVideoRepurposingJobSchema = createInsertSchema(videoRepurposingJobs).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertVideoRepurposingOutputSchema = createInsertSchema(videoRepurposingOutputs).omit({
+  id: true,
+  createdAt: true,
+});
+export type VideoRepurposingJob = typeof videoRepurposingJobs.$inferSelect;
+export type InsertVideoRepurposingJob = z.infer<typeof insertVideoRepurposingJobSchema>;
+export type VideoRepurposingOutput = typeof videoRepurposingOutputs.$inferSelect;
+export type InsertVideoRepurposingOutput = z.infer<typeof insertVideoRepurposingOutputSchema>;
+
 // ── AUTOMATION / AUTOPILOT FOUNDATION (Phase 13) ──────────────────────────────
 // Durable automation *intent*, not a second orchestration system. An
 // AutomationPolicy describes WHEN (trigger) and WHAT (research → targets →

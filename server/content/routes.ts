@@ -20,6 +20,8 @@ import type {
   Schedule,
   VisualAsset,
   VisualGeneration,
+  VideoRepurposingJob,
+  VideoRepurposingOutput,
   Voice,
 } from "@shared/schema";
 import { getUserId } from "../middleware/userContext";
@@ -92,6 +94,14 @@ import {
   VisualServiceInputError,
 } from "./visualService";
 import {
+  createVideoRepurposingJob,
+  runVideoRepurposing,
+  VideoRepurposeInputError,
+  videoRepurposingProviderMatrix,
+  type VideoRepurposeStoragePort,
+} from "./videoRepurpose";
+import { videoProductionProviderMatrix } from "./videoProviders";
+import {
   createLocalAssetStorage,
   InvalidVisualInputError,
   VisualCapabilityUnsupportedError,
@@ -120,6 +130,7 @@ export interface ContentApiDeps {
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
   enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
+  enqueueVideoRepurpose?: (job: VideoRepurposingJob) => Promise<boolean>;
   /** Optional so existing test doubles that build `ContentApiDeps` by hand are unaffected. */
   style?: import("./styleService").StyleServiceDeps;
   enqueueStyleAnalysis?: (analysis: import("@shared/schema").StyleAnalysis) => Promise<boolean>;
@@ -221,6 +232,38 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   visualGenerationId: a.visualGenerationId,
   position: a.position,
   createdAt: a.createdAt,
+});
+
+const serializeVideoRepurposingJob = (job: VideoRepurposingJob) => ({
+  id: job.id,
+  sourceVisualAssetId: job.sourceVisualAssetId,
+  providerId: job.providerId,
+  providerJobId: job.providerJobId,
+  clipCount: job.clipCount,
+  status: job.status,
+  attempt: job.attempt,
+  errorClass: job.errorClass,
+  errorMessage: job.errorMessage,
+  correlationId: job.correlationId,
+  startedAt: job.startedAt,
+  finishedAt: job.finishedAt,
+  createdAt: job.createdAt,
+});
+
+const serializeVideoRepurposingOutput = (row: VideoRepurposingOutput) => ({
+  id: row.id,
+  jobId: row.jobId,
+  position: row.position,
+  visualAssetId: row.visualAssetId,
+  status: row.status,
+  startMs: row.startMs,
+  endMs: row.endMs,
+  durationMs: row.durationMs,
+  title: row.title,
+  caption: row.caption,
+  aspectRatio: row.aspectRatio,
+  providerClipId: row.providerClipId,
+  errorMessage: row.errorMessage,
 });
 
 const serializeOpportunity = (o: Opportunity) => ({
@@ -1516,6 +1559,107 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  router.get("/video/capabilities", async (_req, res) => {
+    return res.json({
+      production: videoProductionProviderMatrix(),
+      repurposing: videoRepurposingProviderMatrix(),
+      notes: [
+        "ContentForge is the control plane; Video Factory / HyperFrames / OpenShorts are workers",
+        "OpenShorts publish_clip is never called",
+        "YouTube Shorts and TikTok publishing remain deferred",
+      ],
+    });
+  });
+
+  router.post("/video/repurposing", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      if (!deps.content.claimVideoRepurposingJob) {
+        return res.status(503).json({ message: "Video repurposing storage is not configured" });
+      }
+      const { job, created } = await createVideoRepurposingJob(ownerId, req.body ?? {}, {
+        content: deps.content as VideoRepurposeStoragePort,
+        storage: deps.visualStorage,
+      });
+      if (job.status === "requested") {
+        try {
+          if (deps.enqueueVideoRepurpose) {
+            await deps.enqueueVideoRepurpose(job);
+          } else {
+            await runVideoRepurposing(job.id, {
+              content: deps.content as VideoRepurposeStoragePort,
+              storage: deps.visualStorage,
+            });
+          }
+        } catch (error) {
+          return res.status(503).json({
+            message: "Video repurposing queue unavailable",
+            id: job.id,
+            correlationId: job.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      const current = deps.content.getVideoRepurposingJob
+        ? await deps.content.getVideoRepurposingJob(job.id)
+        : job;
+      return res.status(created ? 201 : 200).json(serializeVideoRepurposingJob(current ?? job));
+    } catch (error) {
+      if (error instanceof VideoRepurposeInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  router.get("/video/repurposing/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid video repurposing id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const job = deps.content.getVideoRepurposingJobForOwner
+        ? await deps.content.getVideoRepurposingJobForOwner(id, ownerId)
+        : undefined;
+      if (!job) return res.status(404).json({ message: "Video repurposing job not found" });
+      const outputs = deps.content.listVideoRepurposingOutputs
+        ? await deps.content.listVideoRepurposingOutputs(job.id)
+        : [];
+      return res.json({
+        ...serializeVideoRepurposingJob(job),
+        outputs: outputs.map(serializeVideoRepurposingOutput),
+        assetIds: outputs.filter((o) => o.visualAssetId != null).map((o) => o.visualAssetId),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/video/repurposing/:id/assets", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid video repurposing id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const job = deps.content.getVideoRepurposingJobForOwner
+        ? await deps.content.getVideoRepurposingJobForOwner(id, ownerId)
+        : undefined;
+      if (!job) return res.status(404).json({ message: "Video repurposing job not found" });
+      const outputs = deps.content.listVideoRepurposingOutputs
+        ? await deps.content.listVideoRepurposingOutputs(job.id)
+        : [];
+      const assets = [];
+      for (const output of outputs) {
+        if (!output.visualAssetId) continue;
+        const asset = await deps.content.getVisualAsset(output.visualAssetId);
+        if (asset && (asset.userId === null || asset.userId === ownerId)) {
+          assets.push(serializeVisualAsset(asset));
+        }
+      }
+      return res.json({ jobId: job.id, assets });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   // ── Artifact ↔ visual attachment ────────────────────────────────────────────
   const attachVisualBody = z.object({
     visualAssetId: z.number().int().positive(),
@@ -1820,6 +1964,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
       VISUAL_RUN_JOB_TYPE,
+      VIDEO_REPURPOSE_JOB_TYPE,
       STYLE_ANALYZE_JOB_TYPE,
     },
     { storyStorage },
@@ -1862,6 +2007,15 @@ export async function createDefaultContentRouter(): Promise<Router> {
         payload: { visualGenerationId: generation.id },
         correlationId: generation.correlationId,
         idempotencyKey: generation.idempotencyKey,
+      });
+      return !result.deduplicated;
+    },
+    enqueueVideoRepurpose: async (job) => {
+      const result = await getJobRuntime().enqueue({
+        jobType: VIDEO_REPURPOSE_JOB_TYPE,
+        payload: { videoRepurposingJobId: job.id },
+        correlationId: job.correlationId,
+        idempotencyKey: job.idempotencyKey,
       });
       return !result.deduplicated;
     },

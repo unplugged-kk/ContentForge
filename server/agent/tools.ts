@@ -37,6 +37,13 @@ import {
 } from "../content/scheduling";
 import { DistributionInputError, publishArtifactToChannels } from "../content/distribution";
 import { createVisualGeneration, VisualServiceInputError } from "../content/visualService";
+import {
+  createVideoRepurposingJob,
+  runVideoRepurposing,
+  VideoRepurposeInputError,
+  type VideoRepurposeStoragePort,
+} from "../content/videoRepurpose";
+import type { VideoRepurposingJob } from "@shared/schema";
 import { computeAnalyticsSummary } from "../content/learning/summary";
 import type { ContentStoragePort } from "../content/storage";
 import type { VisualGeneration, Artifact, GenerationJob, Publication, StyleAnalysis } from "@shared/schema";
@@ -81,6 +88,7 @@ export interface AgentDomainDeps {
   visualStorage: Parameters<typeof createVisualGeneration>[2]["storage"];
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
+  enqueueVideoRepurpose?: (job: VideoRepurposingJob) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
   style?: StyleServiceDeps;
   enqueueStyleAnalysis?: (analysis: StyleAnalysis) => Promise<boolean>;
@@ -111,6 +119,7 @@ function mapDomainError(tool: string, error: unknown): ToolEnvelope {
     error instanceof GenerationInputError ||
     error instanceof VisualServiceInputError ||
     error instanceof RepurposeInputError ||
+    error instanceof VideoRepurposeInputError ||
     error instanceof ScheduleInputError ||
     error instanceof DistributionInputError ||
     error instanceof StyleServiceInputError
@@ -358,6 +367,59 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
       requiresApproval: false,
       capabilityStatus: "implemented",
       execute: (input, ctx) => generateVideo(deps, input, ctx),
+    },
+    {
+      name: "get_video_generation",
+      description: "Read a VideoGeneration and its VideoAsset identity. Owner scoped.",
+      inputSchema: z.object({ videoGenerationId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getVideoGeneration(deps, input, ctx),
+    },
+    {
+      name: "repurpose_video",
+      description: "Clip an owned VideoAsset into short VideoAssets via VideoRepurposingProviderPort.",
+      inputSchema: z.object({
+        sourceVisualAssetId: positiveId,
+        clipCount: z.number().int().min(1).max(10).optional(),
+        providerId: z.string().trim().min(1).max(80).optional(),
+        regenerate: z.boolean().optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => repurposeVideo(deps, input, ctx),
+    },
+    {
+      name: "get_video_repurposing_status",
+      description: "Read a VideoRepurposingJob and derivative asset ids.",
+      inputSchema: z.object({ videoRepurposingJobId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getVideoRepurposingStatus(deps, input, ctx),
+    },
+    {
+      name: "list_video_derivatives",
+      description: "List short VideoAssets produced from a VideoRepurposingJob.",
+      inputSchema: z.object({ videoRepurposingJobId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => listVideoDerivatives(deps, input, ctx),
     },
     {
       name: "approve_artifact",
@@ -997,6 +1059,142 @@ async function generateVideo(
   } catch (error) {
     return mapDomainError("generate_video", error);
   }
+}
+
+async function getVideoGeneration(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const generation = owned(await deps.content.getVisualGeneration(Number(input.videoGenerationId)), ctx.ownerId);
+  if (!generation || generation.kind !== "video") return notFound("get_video_generation", "videoGeneration");
+  const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+  return envelope({
+    tool: "get_video_generation",
+    status: "success",
+    summary: `VideoGeneration ${generation.id} is ${generation.status}`,
+    refs: {
+      videoGenerationId: generation.id,
+      videoAssetId: assets[0]?.id ?? null,
+    },
+    data: {
+      status: generation.status,
+      providerId: generation.providerId,
+      assetIds: assets.map((a) => a.id),
+    },
+  });
+}
+
+async function repurposeVideo(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    if (!deps.content.claimVideoRepurposingJob) {
+      return invalid("repurpose_video", "Video repurposing storage is not configured");
+    }
+    const { job, created } = await createVideoRepurposingJob(
+      ctx.ownerId,
+      {
+        sourceVisualAssetId: Number(input.sourceVisualAssetId),
+        ...(typeof input.clipCount === "number" ? { clipCount: input.clipCount } : {}),
+        ...(typeof input.providerId === "string" ? { providerId: input.providerId } : {}),
+        ...(input.regenerate === true ? { regenerate: true } : {}),
+      },
+      { content: deps.content as VideoRepurposeStoragePort, storage: deps.visualStorage },
+    );
+    if (job.status === "requested") {
+      if (deps.enqueueVideoRepurpose) await deps.enqueueVideoRepurpose(job);
+      else {
+        await runVideoRepurposing(job.id, {
+          content: deps.content as VideoRepurposeStoragePort,
+          storage: deps.visualStorage,
+        });
+      }
+    }
+    const current = deps.content.getVideoRepurposingJob
+      ? await deps.content.getVideoRepurposingJob(job.id)
+      : job;
+    const outputs = deps.content.listVideoRepurposingOutputs
+      ? await deps.content.listVideoRepurposingOutputs(job.id)
+      : [];
+    return envelope({
+      tool: "repurpose_video",
+      status: (current ?? job).status === "ready" ? "success" : "queued",
+      summary: created ? "VideoRepurposingJob submitted" : "VideoRepurposingJob reused",
+      refs: {
+        videoRepurposingJobId: job.id,
+        sourceVisualAssetId: job.sourceVisualAssetId,
+        videoAssetIds: outputs.map((o) => o.visualAssetId).filter((id): id is number => id != null),
+      },
+      data: {
+        status: (current ?? job).status,
+        created,
+        providerId: job.providerId,
+        clipCount: job.clipCount,
+      },
+    });
+  } catch (error) {
+    return mapDomainError("repurpose_video", error);
+  }
+}
+
+async function getVideoRepurposingStatus(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const job = deps.content.getVideoRepurposingJobForOwner
+    ? await deps.content.getVideoRepurposingJobForOwner(Number(input.videoRepurposingJobId), ctx.ownerId)
+    : undefined;
+  if (!job) return notFound("get_video_repurposing_status", "videoRepurposingJob");
+  const outputs = deps.content.listVideoRepurposingOutputs
+    ? await deps.content.listVideoRepurposingOutputs(job.id)
+    : [];
+  return envelope({
+    tool: "get_video_repurposing_status",
+    status: "success",
+    summary: `VideoRepurposingJob ${job.id} is ${job.status}`,
+    refs: {
+      videoRepurposingJobId: job.id,
+      sourceVisualAssetId: job.sourceVisualAssetId,
+      videoAssetIds: outputs.map((o) => o.visualAssetId).filter((id): id is number => id != null),
+    },
+    data: { status: job.status, clipCount: job.clipCount, providerId: job.providerId },
+  });
+}
+
+async function listVideoDerivatives(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const job = deps.content.getVideoRepurposingJobForOwner
+    ? await deps.content.getVideoRepurposingJobForOwner(Number(input.videoRepurposingJobId), ctx.ownerId)
+    : undefined;
+  if (!job) return notFound("list_video_derivatives", "videoRepurposingJob");
+  const outputs = deps.content.listVideoRepurposingOutputs
+    ? await deps.content.listVideoRepurposingOutputs(job.id)
+    : [];
+  return envelope({
+    tool: "list_video_derivatives",
+    status: "success",
+    summary: `${outputs.filter((o) => o.visualAssetId).length} derivative VideoAssets`,
+    refs: {
+      videoRepurposingJobId: job.id,
+      sourceVisualAssetId: job.sourceVisualAssetId,
+      videoAssetIds: outputs.map((o) => o.visualAssetId).filter((id): id is number => id != null),
+    },
+    data: {
+      outputs: outputs.map((o) => ({
+        position: o.position,
+        status: o.status,
+        visualAssetId: o.visualAssetId,
+        title: o.title,
+      })),
+    },
+  });
 }
 
 async function approve(

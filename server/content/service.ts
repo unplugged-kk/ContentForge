@@ -48,7 +48,12 @@ import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { createConfiguredVideoFactoryProvider } from "./videoFactoryProvider";
+import { registerOptionalHyperframesCloudProvider } from "./videoProviders";
 import { runVisualGeneration } from "./visualService";
+import {
+  registerBuiltinVideoRepurposingProviders,
+  runVideoRepurposing,
+} from "./videoRepurpose";
 import { registerStyleAnalyzer } from "./style";
 import { createGatewayStyleAnalyzer } from "./styleAnalyzer";
 import { createDatabaseStyleStorage, runStyleAnalysis, type StyleServiceDeps } from "./styleService";
@@ -102,6 +107,7 @@ export function registerBuiltinVisualProviders(): void {
   // registration — selected explicitly via providerId `video-factory`. Default
   // video generation remains `local-video-fixture` so existing callers are unchanged.
   registerVisualProvider(createConfiguredVideoFactoryProvider());
+  registerOptionalHyperframesCloudProvider();
 }
 
 export interface VisualRunDeps {
@@ -322,6 +328,63 @@ export function registerVisualRunJob(
       ...queueOverrides,
     },
     handler: createVisualRunHandler(deps),
+  };
+  registerJob(definition);
+  return definition;
+}
+
+// ── video.repurpose ───────────────────────────────────────────────────────────
+export const VIDEO_REPURPOSE_JOB_TYPE = "video.repurpose";
+
+export const videoRepurposePayloadSchema = z.object({
+  videoRepurposingJobId: z.number().int().positive(),
+});
+export type VideoRepurposePayload = z.infer<typeof videoRepurposePayloadSchema>;
+
+export function createVideoRepurposeHandler() {
+  return async (payload: VideoRepurposePayload, ctx: JobContext): Promise<void> => {
+    const result = await runVideoRepurposing(payload.videoRepurposingJobId, {
+      content: contentStorage,
+      storage: visualAssetStorage,
+    });
+    ctx.logger.info(
+      {
+        videoRepurposingJobId: result.jobId,
+        status: result.status,
+        assetIds: result.assetIds,
+        reused: result.reused,
+        failureClass: result.failureClass,
+      },
+      "video repurposing result",
+    );
+    if (result.status === "ready" || result.status === "partial") return;
+    const failureClass = result.failureClass ?? "transient";
+    const message = result.failureMessage ?? "video repurposing failed";
+    if (result.status === "unknown" || failureClass === "unknown" || failureClass === "transient") {
+      throw JobFailure.transient(message);
+    }
+    if (failureClass === "rate_limited") throw JobFailure.rateLimited(message);
+    throw JobFailure.permanent(message);
+  };
+}
+
+export function registerVideoRepurposeJob(
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<VideoRepurposePayload> | undefined {
+  if (hasJob(VIDEO_REPURPOSE_JOB_TYPE)) return undefined;
+  const definition: JobDefinition<VideoRepurposePayload> = {
+    jobType: VIDEO_REPURPOSE_JOB_TYPE,
+    description: "Clip an owned VideoAsset into short VideoAssets",
+    payloadSchema: videoRepurposePayloadSchema,
+    queue: {
+      retryLimit: 3,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 15 * 60,
+      singletonSeconds: 30,
+      ...queueOverrides,
+    },
+    handler: createVideoRepurposeHandler(),
   };
   registerJob(definition);
   return definition;
@@ -572,11 +635,13 @@ export async function enqueueAnalyticsRefreshJob(
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
   registerBuiltinVisualProviders();
+  registerBuiltinVideoRepurposingProviders();
   registerBuiltinStyleAnalyzers();
   registerGenerationRunJob();
   registerStyleAnalyzeJob();
   registerPublicationRunJob();
   registerVisualRunJob();
+  registerVideoRepurposeJob();
   registerAutomationRunJob();
   registerAnalyticsRefreshJob();
 }

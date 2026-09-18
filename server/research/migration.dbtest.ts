@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 55, `expected 55 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 26, "all twenty-six migrations recorded");
+      assert.equal(tables.length, 57, `expected 57 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 27, "all twenty-seven migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -122,6 +122,8 @@ describeDb("migration chain (db)", () => {
         "style_observations",
         "repurposing_plans",
         "research_analyses",
+        "video_repurposing_jobs",
+        "video_repurposing_outputs",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
       }
@@ -204,12 +206,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0025 without a db:push.
+      // The forward migration must apply 0003-0026 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 55, `expected 55 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 26, "0003-0025 recorded after upgrade");
+      assert.equal(tables.length, 57, `expected 57 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 27, "0003-0026 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -244,6 +246,13 @@ describeDb("migration chain (db)", () => {
       assert.ok(tables.includes("style_observations"), "0023 table created on the upgrade path");
       assert.ok(tables.includes("repurposing_plans"), "0024 table created on the upgrade path");
       assert.ok(tables.includes("research_analyses"), "0025 table created on the upgrade path");
+      assert.ok(tables.includes("video_repurposing_jobs"), "0026 table created on the upgrade path");
+      assert.ok(tables.includes("video_repurposing_outputs"), "0026 table created on the upgrade path");
+      const vrUnique = await pool.query<{ indexname: string }>(
+        `select indexname from pg_indexes
+          where tablename = 'video_repurposing_jobs' and indexname = 'video_repurposing_jobs_idempotency_uq'`,
+      );
+      assert.equal(vrUnique.rows.length, 1, "video_repurposing_jobs idempotency is unique");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

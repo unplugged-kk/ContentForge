@@ -372,6 +372,10 @@ async function execTool(runId, tool, args, extra = {}) {
       "generate_artifact",
       "generate_image",
       "generate_video",
+      "get_video_generation",
+      "repurpose_video",
+      "get_video_repurposing_status",
+      "list_video_derivatives",
       "approve_artifact",
       "schedule_publication",
       "publish_now",
@@ -532,6 +536,34 @@ async function execTool(runId, tool, args, extra = {}) {
     ]);
     assert(assets.length === 1, `assets=${assets.length}`);
     return `video ${videoGenerationId} → ${assets[0].storage_key}`;
+  });
+
+  await check("repurpose_video derives three VideoAssets from the factory output", async () => {
+    const assets = await q("select id from visual_assets where visual_generation_id = $1", [videoGenerationId]);
+    assert(assets.length === 1, "need a source VideoAsset");
+    const res = await execTool(runId, "repurpose_video", {
+      sourceVisualAssetId: assets[0].id,
+      clipCount: 3,
+      providerId: "local-video-repurpose-fixture",
+    });
+    assert([200, 201].includes(res.status), `repurpose ${res.status}: ${res.text}`);
+    const jobId = res.body.result.refs.videoRepurposingJobId;
+    assert(Number.isInteger(jobId), "missing videoRepurposingJobId");
+    await waitFor(async () => {
+      const [row] = await q("select status, error_message from video_repurposing_jobs where id = $1", [jobId]);
+      if (!row) return false;
+      if (row.status === "ready" || row.status === "partial") return row;
+      if (row.status === "failed") throw new Error(row.error_message);
+      return false;
+    }, { timeoutMs: 90_000, label: "video repurpose" });
+    const outputs = await q(
+      "select visual_asset_id, status from video_repurposing_outputs where job_id = $1 order by position",
+      [jobId],
+    );
+    assert(outputs.filter((o) => o.status === "ready").length === 3, `ready clips=${outputs.length}`);
+    const listed = await execTool(runId, "list_video_derivatives", { videoRepurposingJobId: jobId });
+    assert(listed.body.result.refs.videoAssetIds.length === 3, "list_video_derivatives missing assets");
+    return `job ${jobId} → 3 clips`;
   });
 
   phase("Path F — approval policy");

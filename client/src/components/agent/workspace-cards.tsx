@@ -146,7 +146,51 @@ export function VideoAssetCard({ asset }: { asset: Record<string, unknown> }) {
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p>Status: {textField(asset.status)}</p>
         {asset.visualGenerationId != null ? <p>Generation {String(asset.visualGenerationId)}</p> : null}
+        {asset.durationMs != null ? <p>Duration {String(asset.durationMs)}ms</p> : null}
+        {asset.width != null && asset.height != null ? <p>{String(asset.width)}×{String(asset.height)}</p> : null}
         <p>Identity only — no binary in agent messages.</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function VideoGenerationCard({ generation }: { generation: Record<string, unknown> }) {
+  return (
+    <Card data-testid={`card-video-generation-${generation.id}`}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">VideoGeneration {String(generation.id)}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground space-y-1">
+        <p>Status: {textField(generation.status)}</p>
+        <p>Provider: {textField(generation.providerId)}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function VideoRepurposingCard({ job }: { job: Record<string, unknown> }) {
+  return (
+    <Card data-testid={`card-video-repurposing-${job.id}`}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">VideoRepurposingJob {String(job.id)}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground space-y-1">
+        <p>Status: {textField(job.status)}</p>
+        <p>Source VideoAsset {String(job.sourceVisualAssetId ?? "—")}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ClipCard({ clip }: { clip: Record<string, unknown> }) {
+  return (
+    <Card data-testid={`card-clip-${clip.visualAssetId ?? clip.position}`}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Clip {String(clip.position ?? clip.id)}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground space-y-1">
+        <p>Status: {textField(clip.status)}</p>
+        {clip.visualAssetId != null ? <p>VideoAsset {String(clip.visualAssetId)}</p> : null}
       </CardContent>
     </Card>
   );

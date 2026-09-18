@@ -272,12 +272,14 @@ export {
   registerGenerationRunJob,
   registerPublicationRunJob,
   registerVisualRunJob,
+  registerVideoRepurposeJob,
   visualAssetStorage,
   visualRunDeps,
   visualRunPayloadSchema,
   GENERATION_RUN_JOB_TYPE,
   PUBLICATION_RUN_JOB_TYPE,
   VISUAL_RUN_JOB_TYPE,
+  VIDEO_REPURPOSE_JOB_TYPE,
   type GenerationRunPayload,
   type PublicationRunPayload,
   type VisualRunDeps,
@@ -296,6 +298,21 @@ export {
   type VisualRunResult,
   type VisualServiceDeps,
 } from "./visualService";
+
+export {
+  createVideoRepurposingJob,
+  runVideoRepurposing,
+  VIDEO_REPURPOSE_LIMITS,
+  LOCAL_VIDEO_REPURPOSE_FIXTURE_ID,
+  OPENSHORTS_PROVIDER_ID,
+  VideoRepurposeInputError,
+} from "./videoRepurpose";
+
+export {
+  selectVideoProductionProvider,
+  HYPERFRAMES_CLOUD_PROVIDER_ID,
+  videoProductionProviderMatrix,
+} from "./videoProviders";
 
 export {
   registerVisualProvider,

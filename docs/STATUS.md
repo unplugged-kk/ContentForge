@@ -3,7 +3,151 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 27 — Video Production + Video Repurposing Factory
+
+**Status:** PARTIALLY IMPLEMENTED (orchestration + fixture E2E implemented;
+Video Factory filesystem contract unchanged and unmodified; HyperFrames Cloud
+ARCHITECTURALLY READY / unconfigured; OpenShorts ARCHITECTURALLY READY /
+unconfigured; YouTube Shorts / TikTok publishing deferred)
+
+**Verification:** TypeScript 0; unit 519/519; Postgres 258/258; live E2E
+185/190 (8 new Phase 27 checks all passed; 5 failures are the pre-existing
+regression-suite on `cf_e2e_live`: Phase 13 scheduler-tick timeout and
+Phase 24 style-snapshot assertions — not Phase 27 paths); agent E2E 21/21
+(1 new `repurpose_video` check); workspace/browser E2E 19/19 (video panel
+on the existing Path A). Visual E2E not re-run (Video Factory untouched).
+
+```
+Regression suite:     177 passed / 5 failed
+Phase 27 new live:      8 passed / 0 failed
+Phase 27 agent extra:   1 passed / 0 failed
+Phase 27 critical invariants: PASS
+```
+
+### Problem
+
+Phase 21 proved Story → VideoGeneration → VisualProviderPort → VideoAsset,
+with Video Factory remaining an external worker behind `video-factory.contract.v1`.
+The missing production loop was derivative short-form: an owned VideoAsset
+clipped into N VideoAssets with durable jobs, restart/reconcile, and no
+provider-side publishing.
+
+### Architecture
+
+```
+Story
+  ↓
+Opportunity(video)
+  ↓
+GenerationPolicy / ContextAssembly
+  ↓
+VideoGeneration
+  ↓
+VisualProviderPort
+  ├── video-factory          (existing contract; not modified)
+  ├── hyperframes-cloud      (adapter registered only if HYPERFRAMES_CLOUD_URL)
+  └── local-video-fixture    (default omitted providerId)
+       ↓
+    VideoAsset
+       ↓
+VideoRepurposingJob
+       ↓
+VideoRepurposingProviderPort
+  ├── openshorts             (if OPENSHORTS_API_URL)
+  └── local-video-repurpose-fixture
+       ↓
+VideoAsset[N] (provenance=derived)
+       ↓
+Artifact → approval → existing publication pipeline (Instagram Reels)
+```
+
+ContentForge is the control plane. Video Factory / HyperFrames / OpenShorts
+are workers. `publish_clip` is never called.
+
+### Providers
+
+| provider | capability | configured | verified | status |
+|---|---|---|---|---|
+| video-factory | generate_video | VIDEO_FACTORY_ROOT | filesystem contract in agent E2E | implemented adapter; factory repo unmodified |
+| hyperframes-cloud | generate_video | HYPERFRAMES_CLOUD_URL | no | architecturally-ready / unconfigured |
+| local-video-fixture | generate_video | always | yes | implemented |
+| openshorts | repurpose_video | OPENSHORTS_API_URL | no | architecturally-ready / unconfigured |
+| local-video-repurpose-fixture | repurpose_video | always | yes | implemented |
+
+Explicit production `providerId` is never silently replaced with a fixture.
+Omitted video `providerId` still defaults to `local-video-fixture`.
+
+### Video Factory
+
+Unmodified. External identity remains `cfvg-{VisualGeneration.id}`.
+Retries reuse that identity. `VIDEO_FACTORY_ROOT` is not ContentForge domain state.
+
+### HyperFrames
+
+Not merged. Optional `hyperframes-cloud` adapter maps safe variables
+(title/hook/body/cta/…) and imports bytes from ephemeral signed URLs into
+`AssetStoragePort`. Local / Lambda / Cloud Run backends are not claimed.
+
+No VideoTemplate table. Existing Template remains text/content templates.
+
+### OpenShorts
+
+Not merged. Adapter uses `process_video` / `get_job_status` / clip download
+only. ContentForge owns publishing.
+
+### Database
+
+Migration `0026_video_repurposing`: `video_repurposing_jobs` (unique
+`idempotency_key`) and `video_repurposing_outputs` (unique `job_id, position`).
+Tables 55 → 57. Job type `video.repurpose`.
+
+### API
+
+Existing `POST/GET /api/video-generations` unchanged.
+New: `GET /api/video/capabilities`, `POST /api/video/repurposing`,
+`GET /api/video/repurposing/:id`, `GET /api/video/repurposing/:id/assets`.
+
+### Agent / UI
+
+Tools: `generate_video` (reused), `get_video_generation`, `repurpose_video`,
+`get_video_repurposing_status`, `list_video_derivatives`.
+`/agent` reuses the Phase 23 workspace with a video panel
+(`VideoGenerationCard` / `VideoAssetCard` / `VideoRepurposingCard` / `ClipCard`).
+Binaries are never streamed through AgentRun messages.
+
+### Invariants
+
+| invariant | result |
+|---|---|
+| Story → Video without re-research | PASS (existing Phase 19/21) |
+| Context snapshot frozen | PASS |
+| VideoGeneration idempotency | PASS |
+| External job identity reused on retry | PASS (`cfvg-` / `cfvr-`) |
+| Unknown reconciled before retry | PASS (fixture unknown) |
+| VideoAsset immutable | PASS (existing trigger) |
+| Asset storage validated | PASS |
+| Video derivative provenance | PASS |
+| Partial clip survival | PASS |
+| Owner isolation | PASS |
+| Approval gate | PASS |
+| Publication uses existing pipeline | PASS (Reels adapter unchanged) |
+| No provider-side publishing | PASS |
+
+### CannerAI parity
+
+VI-1 strengthened (video production + separate clipping port).
+CR-13 video scripts remain data on the VideoGeneration snapshot.
+DI-12 distribution still Instagram Reels only.
+YouTube Shorts / TikTok / full YouTube are NOT marked implemented.
+
+### Deferred
+
+Phase 28 YouTube + TikTok + Threads publishing; HyperFrames live cloud
+verification; OpenShorts live processing; VideoTemplate revisions;
+advanced editor; avatar/lip-sync; auto-publish.
+
 ## Phase 26 — Research Intelligence + SEO
+
 
 **Status:** IMPLEMENTED (last30days live smoke BLOCKED unless explicitly enabled;
 OpenSEO ARCHITECTURALLY READY / unconfigured; YouTube remains metadata-only;
@@ -103,10 +247,10 @@ Completed analysis snapshots are immutable (`ON CONFLICT DO NOTHING`).
 
 ### Deferred
 
-Phase 27 video repurposing; vector DB; hosted cookie/session research;
+**Deferred:** vector DB; hosted cookie/session research;
 YouTube transcript unless a real backend exists; OpenSEO live until configured;
 last30days live until `LAST30DAYS_ENABLED=1` plus doctor-available hosted sources;
-batch analytics/learning (Phase 29); HyperFrames; automatic publish.
+batch analytics/learning (Phase 29); HyperFrames live; automatic publish.
 
 ## Phase 25 — Mass Repurposing Engine
 

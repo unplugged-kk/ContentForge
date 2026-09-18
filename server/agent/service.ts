@@ -10,6 +10,7 @@ import {
   GENERATION_RUN_JOB_TYPE,
   PUBLICATION_RUN_JOB_TYPE,
   VISUAL_RUN_JOB_TYPE,
+  VIDEO_REPURPOSE_JOB_TYPE,
   STYLE_ANALYZE_JOB_TYPE,
   registerContentJobs,
 } from "../content/service";
@@ -73,6 +74,17 @@ async function enqueueVisual(generation: VisualGeneration): Promise<boolean> {
   return !result.deduplicated;
 }
 
+async function enqueueVideoRepurpose(job: { id: number; correlationId: string; idempotencyKey: string }): Promise<boolean> {
+  const { getJobRuntime } = await import("../jobs/bootstrap");
+  const result = await getJobRuntime().enqueue({
+    jobType: VIDEO_REPURPOSE_JOB_TYPE,
+    payload: { videoRepurposingJobId: job.id },
+    correlationId: job.correlationId,
+    idempotencyKey: job.idempotencyKey,
+  });
+  return !result.deduplicated;
+}
+
 async function enqueuePublication(publication: Publication): Promise<boolean> {
   const { getJobRuntime } = await import("../jobs/bootstrap");
   const result = await getJobRuntime().enqueue({
@@ -116,6 +128,7 @@ export function registerAgentTools(): void {
     visualStorage: visualAssetStorage,
     enqueueGeneration,
     enqueueVisual,
+    enqueueVideoRepurpose,
     enqueuePublication,
     style: styleServiceDeps,
     enqueueStyleAnalysis,

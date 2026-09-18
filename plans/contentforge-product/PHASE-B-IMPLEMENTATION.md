@@ -1052,11 +1052,60 @@ agent E2E 20/20; workspace/browser E2E 19/19. Visual E2E not re-run.
 PARTIALLY IMPLEMENTED. last30days and OpenSEO live smokes BLOCKED /
 ARCHITECTURALLY READY until configured. YouTube transcript is not claimed.
 
-**Deferred:** Phase 27 video repurposing; vector DB; hosted cookie research;
-HyperFrames; automatic publish.
+**Deferred:** vector DB; hosted cookie research;
+HyperFrames live; automatic publish.
+
+## Phase 27 — Video Production + Video Repurposing Factory (done)
+
+**The problem this closes**: Phase 21 already had Story → VideoGeneration →
+VisualProviderPort → VideoAsset with Video Factory as an external worker.
+Phase 27 adds the missing derivative loop (owned VideoAsset → N short
+VideoAssets) without merging Video Factory / HyperFrames / OpenShorts into
+ContentForge, and without YouTube/TikTok/Threads publishing.
+
+```
+Story → Opportunity(video) → VideoGeneration
+        ↓
+VisualProviderPort
+  ├── video-factory
+  ├── hyperframes-cloud (if HYPERFRAMES_CLOUD_URL)
+  └── local-video-fixture
+        ↓
+VideoAsset → VideoRepurposingJob
+        ↓
+VideoRepurposingProviderPort
+  ├── openshorts (if OPENSHORTS_API_URL)
+  └── local-video-repurpose-fixture
+        ↓
+VideoAsset[N] → Artifact → approval → existing Reels pipeline
+```
+
+**Control plane vs workers.** ContentForge owns intent, durable state,
+lineage, approval, publication. External engines produce media only.
+`openshorts.publish_clip` is never called. Video Factory repository was
+not modified. `cfvg-{VisualGeneration.id}` and `cfvr-{VideoRepurposingJob.id}`
+are reused on retry; explicit regenerate creates a new semantic request.
+
+**No second generation abstraction.** `generate_video` stays on
+`VisualProviderPort`. Clipping is a separate `VideoRepurposingProviderPort`
+because derivation is technically distinct.
+
+**Templates.** No `video_templates` table. HyperFrames variables are mapped
+only inside the cloud adapter. Signed URLs are ephemeral; bytes are imported
+into `AssetStoragePort` before a VideoAsset is durable.
+
+**Verification:** TypeScript 0; unit 519/519; Postgres 258/258; live E2E
+185/190 (8 new Phase 27 checks, 0 failed; 5 failures are regression-suite:
+Phase 13 scheduler-tick and Phase 24 style-snapshot on `cf_e2e_live`);
+agent E2E 21/21; workspace/browser E2E 19/19. Visual E2E not re-run.
+
+**CannerAI:** VI-1 strengthened; CR-13 scripts remain data; DI-12 still
+Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
+
+**Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
+live OpenShorts; VideoTemplate revisions; editor; auto-publish.
 
 ## Phase 25 — Mass Repurposing Engine (done)
-
 
 **The problem this closes**: personalization was still mostly explicit Voice /
 user_profile notes plus one-reference Phase 11 observations. Generation quality

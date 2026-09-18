@@ -353,8 +353,9 @@ async function cookieHeader() {
     await page.locator('[data-testid="panel-style-intelligence"]').waitFor();
     await page.locator('[data-testid="panel-repurposing"]').waitFor();
     await page.locator('[data-testid="panel-research"]').waitFor();
+    await page.locator('[data-testid="panel-video"]').waitFor();
     await context.close();
-    return "workspace chrome + style + repurpose + research panels visible";
+    return "workspace chrome + style + repurpose + research + video panels visible";
   });
 
   await check("Browser Journey A: research panel queues a job and reconstructs progress", async () => {

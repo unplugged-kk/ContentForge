@@ -40,6 +40,7 @@ export type ToolRendererId =
   | "generate_artifact"
   | "generate_image"
   | "generate_video"
+  | "repurpose_video"
   | "approve_artifact"
   | "schedule_publication"
   | "publish_now"
@@ -100,6 +101,11 @@ export function selectToolRenderer(toolName: string): ToolRendererId {
       return "generate_image";
     case "generate_video":
       return "generate_video";
+    case "repurpose_video":
+    case "get_video_generation":
+    case "get_video_repurposing_status":
+    case "list_video_derivatives":
+      return "repurpose_video";
     case "approve_artifact":
       return "approve_artifact";
     case "schedule_publication":
@@ -158,7 +164,7 @@ export function mapCapabilities(
     { group: "Research", match: (name) => name.startsWith("research") || name.startsWith("get_research") },
     { group: "Generation", match: (name) => name === "generate_artifact" || name === "repurpose_story" || name === "find_opportunities" },
     { group: "Image", match: (name) => name === "generate_image" },
-    { group: "Video", match: (name) => name === "generate_video" },
+    { group: "Video", match: (name) => name === "generate_video" || name.startsWith("repurpose_video") || name.startsWith("get_video") || name === "list_video_derivatives" },
     { group: "Publishing", match: (name) => name === "publish_now" || name === "schedule_publication" || name === "approve_artifact" },
     { group: "Analytics", match: (name) => name === "get_analytics" },
   ];
@@ -263,6 +269,7 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   const storyId = matchStoryId(objective);
   const wantsImage = /\bimage\b|\bvisual\b/.test(text);
   const wantsVideo = /\bvideo\b/.test(text);
+  const wantsClips = /\bclips?\b|\bshorts?\b|\brepurpose (this |the )?video\b/.test(text);
   const wantsResearch = /\bresearch\b|\bsources\b|\bthis week\b|\blast 30 days\b/.test(text);
   const wantsContent =
     /\bpost\b|\bcontent\b|\bopportunit|\bprepare\b|\bvariant|\bstory\b|\blinkedin\b|\binstagram\b|\bx post\b/.test(
@@ -307,8 +314,17 @@ export function compileWorkspaceIntent(objective: string): WorkspacePlanStep[] {
   if (wantsImage) {
     steps.push({ tool: "generate_image", arguments: { subject: objective } });
   }
-  if (wantsVideo) {
+  if (wantsVideo && !wantsClips) {
     steps.push({ tool: "generate_video", arguments: { subject: objective } });
+  }
+  if (wantsClips) {
+    if (!steps.some((step) => step.tool === "generate_video") && /\bvideo\b/.test(text) && !/\bfrom this video\b|\bsource\b/.test(text)) {
+      steps.push({ tool: "generate_video", arguments: { subject: objective } });
+    }
+    steps.push({
+      tool: "repurpose_video",
+      arguments: { sourceVisualAssetId: "$videoAssetId", clipCount: 3 },
+    });
   }
   if (steps.length === 0) {
     steps.push({ tool: "research_topic", arguments: { query: objective } });
@@ -498,6 +514,9 @@ function activityForTool(name: string, status: string, result?: Record<string, u
   if (name === "generate_artifact") return status === "running" || status === "queued" ? "Generating artifacts…" : "Artifact generated";
   if (name === "generate_image") return status === "running" || status === "queued" ? "Generating image…" : "Image generated";
   if (name === "generate_video") return status === "running" || status === "queued" ? "Generating video…" : "Video requested";
+  if (name === "repurpose_video" || name === "get_video_repurposing_status" || name === "list_video_derivatives") {
+    return status === "running" || status === "queued" ? "Clipping video…" : "Video clips ready";
+  }
   if (name === "approve_artifact") {
     if (status === "denied") return "Waiting for approval";
     return status === "completed" || status === "success" ? "Approval granted" : "Waiting for approval";

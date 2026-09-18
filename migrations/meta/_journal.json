@@ -183,6 +183,13 @@
       "when": 1790354400000,
       "tag": "0025_research_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790440800000,
+      "tag": "0026_video_repurposing",
+      "breakpoints": true
     }
   ]
 }

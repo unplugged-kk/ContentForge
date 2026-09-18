@@ -15,6 +15,7 @@ import { AgentCopilotProvider } from "@/components/agent/copilot-provider";
 import { StyleIntelligencePanel } from "@/components/agent/style-panel";
 import { RepurposePanel } from "@/components/agent/repurpose-panel";
 import { ResearchPanel } from "@/components/agent/research-panel";
+import { VideoPanel } from "@/components/agent/video-panel";
 import {
   AgentRunCard,
   OpportunityCard,
@@ -92,6 +93,7 @@ function AgentWorkspaceInner() {
   const [researchJobId, setResearchJobId] = useState<number | null>(null);
   const [visual, setVisual] = useState<Record<string, unknown> | null>(null);
   const [video, setVideo] = useState<Record<string, unknown> | null>(null);
+  const [videoGenerationId, setVideoGenerationId] = useState<number | null>(null);
   const [untrusted, setUntrusted] = useState<string>("");
   const eventsRef = useRef<AgentUiEvent[]>([]);
   const pumpLock = useRef(false);
@@ -129,6 +131,7 @@ function AgentWorkspaceInner() {
     const artifactId = Number(refs.artifactId);
     const visualId = Number(refs.visualAssetId);
     const videoId = Number(refs.videoAssetId ?? refs.visualGenerationId);
+    const nextVideoGenerationId = Number(refs.videoGenerationId ?? refs.visualGenerationId);
     const nextPlanId = Number(refs.planId);
     if (nextPlanId > 0) setPlanId(nextPlanId);
     if (researchJobId > 0) setResearchJobId(researchJobId);
@@ -160,6 +163,7 @@ function AgentWorkspaceInner() {
       }
     }
     if (videoId > 0) setVideo({ id: videoId });
+    if (nextVideoGenerationId > 0) setVideoGenerationId(nextVideoGenerationId);
     const oppIds = Array.isArray(refs.opportunityIds) ? refs.opportunityIds : [];
     if (oppIds.length > 0 && opportunities.length === 0) {
       setOpportunities(oppIds.map((id) => ({ id })));
@@ -372,6 +376,7 @@ function AgentWorkspaceInner() {
 
         <aside className="border-l p-3 overflow-y-auto space-y-3">
           <ResearchPanel jobId={researchJobId} onJob={setResearchJobId} />
+          <VideoPanel generationId={videoGenerationId} onGeneration={setVideoGenerationId} />
           <RepurposePanel
             storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
             planId={planId}

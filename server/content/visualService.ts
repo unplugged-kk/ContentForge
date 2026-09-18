@@ -32,6 +32,11 @@ import {
   type VisualSourceImage,
 } from "./visual";
 import {
+  PRODUCTION_VIDEO_PROVIDERS,
+  selectVideoProductionProvider,
+  VideoProviderUnavailableError,
+} from "./videoProviders";
+import {
   MAX_VARIATION_COUNT,
   MAX_VISUAL_PROMPT_CHARS,
   resolveVisualSpec,
@@ -115,6 +120,13 @@ export async function createVisualGeneration(
 
   const isVideo = body.kind === "video";
   const isCarousel = body.kind === "carousel";
+  const forbiddenIntentKeys = ["command", "shell", "ffmpegArgs", "renderArgs", "outputPath", "callbackUrl"];
+  const forbiddenHits = forbiddenIntentKeys.filter((key) => key in body.intent);
+  if (forbiddenHits.length > 0) {
+    throw new VisualServiceInputError([
+      `video intent must not include ${forbiddenHits.join(", ")} — render implementation stays inside the provider adapter`,
+    ]);
+  }
   const slideCount =
     body.slideCount ??
     (typeof body.intent.slideCount === "number" ? body.intent.slideCount : isCarousel ? 3 : undefined);
@@ -166,16 +178,33 @@ export async function createVisualGeneration(
             ? "generate_image_variations"
             : "generate_image");
 
-  const providerId = body.providerId ?? (isVideo ? "local-video-fixture" : "local-fixture");
+  const preferredFromIntent =
+    typeof body.intent.preferredProvider === "string" ? body.intent.preferredProvider : undefined;
+  const providerId = body.providerId ?? preferredFromIntent ?? (isVideo ? "local-video-fixture" : "local-fixture");
 
   let provider: VisualProviderPort;
   try {
-    provider = getVisualProvider(providerId);
-  } catch {
+    provider = isVideo
+      ? selectVideoProductionProvider({ preferredProvider: providerId, capability })
+      : getVisualProvider(providerId);
+  } catch (error) {
+    if (error instanceof VideoProviderUnavailableError) {
+      throw new VisualServiceInputError([error.message]);
+    }
     throw new VisualServiceInputError([`unknown visual provider "${providerId}"`]);
   }
   if (!provider.capabilities.includes(capability)) {
-    throw new VisualCapabilityUnsupportedError(providerId, capability);
+    throw new VisualCapabilityUnsupportedError(provider.providerId, capability);
+  }
+  if (
+    isVideo &&
+    body.providerId &&
+    PRODUCTION_VIDEO_PROVIDERS.has(body.providerId) &&
+    provider.providerId !== body.providerId
+  ) {
+    throw new VisualServiceInputError([
+      `explicit video provider "${body.providerId}" cannot be silently replaced with "${provider.providerId}"`,
+    ]);
   }
   resolveProviderModel(provider, body.model);
 
@@ -270,6 +299,17 @@ export async function createVisualGeneration(
       spec,
       context: contextSnapshot,
       instruction: instruction ? { kind: "data", text: instruction } : null,
+      renderIntent: isVideo
+        ? {
+            title: typeof body.intent.title === "string" ? body.intent.title : null,
+            brief: typeof body.intent.brief === "string" ? body.intent.brief : null,
+            script: typeof body.intent.script === "string" ? body.intent.script : null,
+            storyboard: body.intent.storyboard ?? null,
+            preferredProvider: provider.providerId,
+            durationMs: requestedDuration ?? null,
+          }
+        : null,
+      providerChoice: provider.providerId,
     },
     idempotencyKey,
     generationJobId: body.generationJobId ?? null,

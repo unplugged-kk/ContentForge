@@ -25,6 +25,8 @@ import {
   schedules,
   visualAssetRefs,
   visualAssets,
+  videoRepurposingJobs,
+  videoRepurposingOutputs,
   visualGenerations,
   voices,
   type Artifact,
@@ -40,6 +42,8 @@ import {
   type Result,
   type Schedule,
   type ScheduleOccurrence,
+  type VideoRepurposingJob,
+  type VideoRepurposingOutput,
   type VisualAsset,
   type VisualAssetRef,
   type VisualGeneration,
@@ -252,6 +256,39 @@ export interface InsertVisualAssetRefRow {
   position?: number;
 }
 
+export interface InsertVideoRepurposingJobRow {
+  userId?: number | null;
+  sourceVisualAssetId: number;
+  idempotencyKey: string;
+  providerId: string;
+  providerVersion?: string | null;
+  clipCount: number;
+  requestSnapshot: JsonRecord;
+  correlationId: string;
+}
+
+export interface ClaimVideoRepurposingJobResult {
+  job: VideoRepurposingJob;
+  created: boolean;
+}
+
+export interface InsertVideoRepurposingOutputRow {
+  jobId: number;
+  userId?: number | null;
+  position: number;
+  visualAssetId?: number | null;
+  status: string;
+  startMs?: number | null;
+  endMs?: number | null;
+  durationMs?: number | null;
+  title?: string | null;
+  caption?: string | null;
+  aspectRatio?: string | null;
+  providerClipId?: string | null;
+  errorMessage?: string | null;
+  metadata?: JsonRecord;
+}
+
 export interface ContentStoragePort {
   // ── visual generations / assets / refs ──────────────────────────────────────
   claimVisualGeneration(row: InsertVisualGenerationRow): Promise<ClaimVisualGenerationResult>;
@@ -283,6 +320,25 @@ export interface ContentStoragePort {
 
   insertVisualAssetRef(row: InsertVisualAssetRefRow): Promise<VisualAssetRef>;
   listVisualAssetRefs(artifactId: number): Promise<VisualAssetRef[]>;
+
+  claimVideoRepurposingJob?(row: InsertVideoRepurposingJobRow): Promise<ClaimVideoRepurposingJobResult>;
+  getVideoRepurposingJob?(id: number): Promise<VideoRepurposingJob | undefined>;
+  getVideoRepurposingJobForOwner?(id: number, ownerId: number): Promise<VideoRepurposingJob | undefined>;
+  markVideoRepurposingJob?(
+    id: number,
+    patch: {
+      status: string;
+      attempt?: number;
+      providerJobId?: string | null;
+      providerVersion?: string | null;
+      errorClass?: string | null;
+      errorMessage?: string | null;
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+    },
+  ): Promise<void>;
+  insertVideoRepurposingOutput?(row: InsertVideoRepurposingOutputRow): Promise<VideoRepurposingOutput>;
+  listVideoRepurposingOutputs?(jobId: number): Promise<VideoRepurposingOutput[]>;
 
   // ── creation intelligence (voices / templates / policies) ──────────────────
   insertVoice(row: InsertVoiceRow): Promise<Voice>;
@@ -657,6 +713,115 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(eq(visualAssets.userId, userId))
       .orderBy(desc(visualAssets.id))
       .limit(Math.min(Math.max(limit, 1), 200));
+  }
+
+  async claimVideoRepurposingJob(
+    row: InsertVideoRepurposingJobRow,
+  ): Promise<ClaimVideoRepurposingJobResult> {
+    const inserted = await this.database
+      .insert(videoRepurposingJobs)
+      .values({
+        userId: row.userId ?? null,
+        sourceVisualAssetId: row.sourceVisualAssetId,
+        idempotencyKey: row.idempotencyKey,
+        providerId: row.providerId,
+        providerVersion: row.providerVersion ?? null,
+        clipCount: row.clipCount,
+        requestSnapshot: row.requestSnapshot ?? {},
+        correlationId: row.correlationId,
+        status: "requested",
+      })
+      .onConflictDoNothing({ target: videoRepurposingJobs.idempotencyKey })
+      .returning();
+    if (inserted.length > 0) return { job: inserted[0], created: true };
+    const [existing] = await this.database
+      .select()
+      .from(videoRepurposingJobs)
+      .where(eq(videoRepurposingJobs.idempotencyKey, row.idempotencyKey))
+      .limit(1);
+    return { job: existing, created: false };
+  }
+
+  async getVideoRepurposingJob(id: number): Promise<VideoRepurposingJob | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(videoRepurposingJobs)
+      .where(eq(videoRepurposingJobs.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getVideoRepurposingJobForOwner(id: number, ownerId: number): Promise<VideoRepurposingJob | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(videoRepurposingJobs)
+      .where(and(eq(videoRepurposingJobs.id, id), eq(videoRepurposingJobs.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
+  async markVideoRepurposingJob(
+    id: number,
+    patch: {
+      status: string;
+      attempt?: number;
+      providerJobId?: string | null;
+      providerVersion?: string | null;
+      errorClass?: string | null;
+      errorMessage?: string | null;
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+    },
+  ): Promise<void> {
+    const set: Record<string, unknown> = { status: patch.status };
+    if (patch.attempt != null) set.attempt = patch.attempt;
+    if (patch.providerJobId !== undefined) set.providerJobId = patch.providerJobId;
+    if (patch.providerVersion !== undefined) set.providerVersion = patch.providerVersion;
+    if (patch.errorClass !== undefined) set.errorClass = patch.errorClass;
+    if (patch.errorMessage !== undefined) set.errorMessage = patch.errorMessage;
+    if (patch.startedAt !== undefined) set.startedAt = patch.startedAt;
+    if (patch.finishedAt !== undefined) set.finishedAt = patch.finishedAt;
+    await this.database.update(videoRepurposingJobs).set(set).where(eq(videoRepurposingJobs.id, id));
+  }
+
+  async insertVideoRepurposingOutput(row: InsertVideoRepurposingOutputRow): Promise<VideoRepurposingOutput> {
+    const inserted = await this.database
+      .insert(videoRepurposingOutputs)
+      .values({
+        jobId: row.jobId,
+        userId: row.userId ?? null,
+        position: row.position,
+        visualAssetId: row.visualAssetId ?? null,
+        status: row.status,
+        startMs: row.startMs ?? null,
+        endMs: row.endMs ?? null,
+        durationMs: row.durationMs ?? null,
+        title: row.title ?? null,
+        caption: row.caption ?? null,
+        aspectRatio: row.aspectRatio ?? null,
+        providerClipId: row.providerClipId ?? null,
+        errorMessage: row.errorMessage ?? null,
+        metadata: row.metadata ?? {},
+      })
+      .onConflictDoNothing({ target: [videoRepurposingOutputs.jobId, videoRepurposingOutputs.position] })
+      .returning();
+    if (inserted.length > 0) return inserted[0];
+    const [existing] = await this.database
+      .select()
+      .from(videoRepurposingOutputs)
+      .where(
+        and(eq(videoRepurposingOutputs.jobId, row.jobId), eq(videoRepurposingOutputs.position, row.position)),
+      )
+      .limit(1);
+    return existing;
+  }
+
+  async listVideoRepurposingOutputs(jobId: number): Promise<VideoRepurposingOutput[]> {
+    return this.database
+      .select()
+      .from(videoRepurposingOutputs)
+      .where(eq(videoRepurposingOutputs.jobId, jobId))
+      .orderBy(asc(videoRepurposingOutputs.position), asc(videoRepurposingOutputs.id));
   }
 
   // ── Visual asset refs ───────────────────────────────────────────────────────
