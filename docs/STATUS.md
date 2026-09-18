@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-17 (Phase 17) · Branch reviewed: `replit` @ `cb1b669` (implementation landed)
+Last updated: 2026-09-18 (Phase 18) · Branch reviewed: `replit` @ `b9e090b` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,23 +13,70 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **415 passed / 0 failed** (99 suites) |
-| `npm test` | **415 passed** |
-| `npm run test:db` (real PostgreSQL) | **199 passed / 0 failed / 0 skipped** (25 suites) |
-| `npm run test:e2e:live` (real running app) | **134 passed / 0 failed** (134 checks). Phase 17 Paths A–I green (Path G SIGKILL no duplicate). Path J/K credential-blocked, not simulated. Prior suites including Phase 16 remained green |
+| `npm run test:unit` | **427 passed / 0 failed** (102 suites) |
+| `npm test` | **427 passed** |
+| `npm run test:db` (real PostgreSQL) | **211 passed / 0 failed / 0 skipped** (26 suites) |
+| `npm run test:e2e:live` (real running app) | **145 passed / 0 failed** (145 checks). Phase 18 Paths A–K green (Path G/K SIGKILL no duplicate). Path L/M/N credential-blocked, not simulated. Prior suites including Phase 17 remained green |
 | `npm run test:e2e:visual` (real running app) | **19 passed / 0 failed** |
 | `npm run build` (production CJS bundle) | **succeeds**; live E2E boots `dist/index.cjs` |
-| Fresh DB migration | **21 migrations / 50 tables** from zero (`0020_threads_connected_accounts.sql` additive unique `(user_id, platform)`) |
+| Fresh DB migration | **21 migrations / 50 tables** from zero (no new Instagram tables) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema |
+| Real Instagram network verification | **BLOCKED — credential/account unavailable** |
 | Real Threads network verification | **BLOCKED — credential unavailable** |
 | Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 403 unit / 189 DB / 125 live E2E / 19 visual E2E / 20 migrations / 50 tables.
+Baseline before this phase: 415 unit / 199 DB / 134 live E2E / 19 visual E2E / 21 migrations / 50 tables.
 
 ---
 
-## Threads Channel Integration (new in this phase — Phase 17)
+## Instagram Channel + Visual Publishing (new in this phase — Phase 18)
+
+**PARTIALLY IMPLEMENTED — image and carousel adapter complete on existing Publication/visual architecture; live Instagram network verification blocked by missing professional credential.**
+
+```
+Artifact (image|carousel, immutable)
+        └─ Publication(instagram) → Schedule → Occurrence → Instagram ChannelAdapter → Result
+                                              ↓
+                                    PerformanceSignal → LearningSignal
+
+VisualAsset[] → AssetStoragePort → time-bounded provider URL or INSTAGRAM_MEDIA_STAGE_URL
+```
+
+Registered via `registerBuiltinChannelAdapters()` (`createInstagramChannelAdapter`).
+Transport: `server/social/instagram.ts`. Host `graph.instagram.com` / `v25.0`.
+Capabilities: `image`, `carousel`. Not registered: Stories, Reels, Live, text-only
+formats. No `instagram_post`. Professional accounts only (Business/Creator);
+personal accounts rejected.
+
+Publish (official Content Publishing): JPEG `image_url` container →
+`media_publish`. Carousel: child `is_carousel_item` containers → parent
+`media_type=CAROUSEL` → publish. PNG is rejected (not silently converted).
+Provider idempotency: **none**. Unknown outcomes keep `{caption, attemptedAt,
+creationId?}`. Listing miss ≠ unpublished. `ERROR`/`EXPIRED` can prove absence.
+
+Media security: optional `AssetStoragePort.issueProviderFetchUrl` grants
+`GET /api/provider-media/:token` (TTL, single object, no listing). E2E stages
+bytes to the fixture URL. The local store is not a public bucket.
+
+Metrics: likes, comments, views, reach, saved, shares, total_interactions.
+views→impressions; saved→saves. reach and total_interactions stay unmapped
+(not interchangeable with impressions; empty insight ≠ 0).
+
+Auth: `connected_accounts` (`userId + platform`). Scopes:
+`instagram_business_basic`, `instagram_business_content_publish`,
+`instagram_business_manage_insights`. HTTP: existing
+`POST /api/artifacts/:id/publications` `{ channel: "instagram" }`.
+
+Same-revision fan-out: image → X + Instagram (Threads invalid). `x_post` still
+X + Threads (Instagram invalid). No format is genuinely all four channels.
+
+**Not in this phase:** Stories, Reels, Live, DMs/comments, discovery, audience,
+UI, Chrome, PNG transcode, Facebook Login Graph path.
+
+---
+
+## Threads Channel Integration (previous — Phase 17)
 
 **PARTIALLY IMPLEMENTED — provider adapter and contract complete; live network verification blocked by missing credential.**
 
@@ -59,8 +106,8 @@ Auth: `connected_accounts` + `getConnectedAccountForOwner`. Scopes:
 `threads_basic`, `threads_content_publish`, `threads_manage_insights`.
 No UI. `POST /api/artifacts/:id/publications` `{ channel: "threads" }`.
 
-**Not in this phase:** Instagram, YouTube, TikTok, Bluesky, Threads media,
-account UI, Chrome.
+**Not in this phase (at the time):** YouTube, TikTok, Bluesky, Threads media,
+account UI, Chrome. Instagram is Phase 18.
 
 ---
 
