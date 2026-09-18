@@ -22,7 +22,7 @@ import {
 } from "../artifacts/payloadSchemas";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 import type { LearningRecorder } from "./learning/record";
-import { ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
+import { ALLOWED_VIDEO_MIMES, ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
 
 export interface ArtifactDeps {
   artifacts: ContentStoragePort;
@@ -152,11 +152,20 @@ export async function createArtifact(
         `visual asset ${ref.visualAssetId} is "${asset.status}", not ready`,
       );
     }
-    if (!(ALLOWED_VISUAL_MIMES as readonly string[]).includes(asset.mime)) {
+    const allowedMimes =
+      input.format === "video" ? ALLOWED_VIDEO_MIMES : ALLOWED_VISUAL_MIMES;
+    if (!(allowedMimes as readonly string[]).includes(asset.mime)) {
       throw new ArtifactMediaReferenceError(
         input.format,
         ref.visualAssetId,
         `visual asset ${ref.visualAssetId} has disallowed mime "${asset.mime}"`,
+      );
+    }
+    if (input.format === "video" && asset.kind !== "video") {
+      throw new ArtifactMediaReferenceError(
+        input.format,
+        ref.visualAssetId,
+        `visual asset ${ref.visualAssetId} is not a video revision`,
       );
     }
     for (const [label, value] of [

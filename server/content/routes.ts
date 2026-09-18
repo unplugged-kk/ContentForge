@@ -197,6 +197,10 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   width: a.width,
   height: a.height,
   byteSize: a.byteSize,
+  durationMs: a.durationMs,
+  container: a.container,
+  codec: a.codec,
+  frameRate: a.frameRate,
   contentHash: a.contentHash,
   altText: a.altText,
   caption: a.caption,
@@ -1209,6 +1213,132 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const asset = await deps.content.getVisualAsset(id);
       if (!asset || asset.userId !== null && asset.userId !== (getUserId(req) ?? 1)) {
         return res.status(404).json({ message: "Visual asset not found" });
+      }
+      return res.json(serializeVisualAsset(asset));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // ── Video generations (Phase 19) — same VisualGeneration table, kind=video ──
+  router.post("/video-generations", async (req, res, next) => {
+    try {
+      const { generation, created } = await createVisualGeneration(
+        getUserId(req) ?? 1,
+        { ...(req.body ?? {}), kind: "video" },
+        { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
+      );
+      if (generation.status === "requested") {
+        try {
+          await deps.enqueueVisual(generation);
+        } catch (error) {
+          return res.status(503).json({
+            message: "Visual queue unavailable",
+            id: generation.id,
+            correlationId: generation.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      return res.status(created ? 201 : 200).json(serializeVisualGeneration(generation));
+    } catch (error) {
+      if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof VisualCapabilityUnsupportedError || error instanceof VisualModelUnsupportedError) {
+        return res.status(409).json({ message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  router.get("/video-generations/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid video generation id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const generation = await deps.content.getVisualGeneration(id);
+      if (
+        !generation ||
+        generation.kind !== "video" ||
+        (generation.userId !== null && generation.userId !== ownerId)
+      ) {
+        return res.status(404).json({ message: "Video generation not found" });
+      }
+      const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+      const owned = assets.filter((a) => a.userId === null || a.userId === ownerId);
+      return res.json({
+        ...serializeVisualGeneration(generation),
+        visualAssetId: owned[0]?.id ?? null,
+        assets: owned.map(serializeVisualAsset),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/video-assets/:id/refine", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid video asset id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const source = await deps.content.getVisualAsset(id);
+      if (
+        !source ||
+        source.kind !== "video" ||
+        (source.userId !== null && source.userId !== ownerId)
+      ) {
+        return res.status(404).json({ message: "Video asset not found" });
+      }
+      const instruction = typeof req.body?.instruction === "string" ? req.body.instruction : "";
+      const { generation, created } = await createVisualGeneration(
+        ownerId,
+        {
+          kind: "video",
+          providerId: (req.body?.providerId as string | undefined) ?? "local-video-fixture",
+          capability: "refine_video",
+          intent: { subject: "refinement", instruction },
+          sourceVisualAssetId: source.id,
+          instruction,
+          regenerate: true,
+        },
+        { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
+      );
+      if (generation.status === "requested") {
+        try {
+          await deps.enqueueVisual(generation);
+        } catch (error) {
+          return res.status(503).json({
+            message: "Visual queue unavailable",
+            id: generation.id,
+            correlationId: generation.correlationId,
+            detail: message(error),
+          });
+        }
+      }
+      return res.status(created ? 201 : 200).json(serializeVisualGeneration(generation));
+    } catch (error) {
+      if (error instanceof VisualServiceInputError || error instanceof InvalidVisualInputError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof VisualCapabilityUnsupportedError || error instanceof VisualModelUnsupportedError) {
+        return res.status(409).json({ message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  router.get("/video-assets/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid video asset id" });
+    try {
+      const asset = await deps.content.getVisualAsset(id);
+      if (
+        !asset ||
+        asset.kind !== "video" ||
+        (asset.userId !== null && asset.userId !== (getUserId(req) ?? 1))
+      ) {
+        return res.status(404).json({ message: "Video asset not found" });
       }
       return res.json(serializeVisualAsset(asset));
     } catch (error) {

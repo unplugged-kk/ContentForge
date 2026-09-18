@@ -122,6 +122,15 @@ const PROFILES: readonly FormatProfile[] = [
       "legible title text if any, no fine detail that collapses at 120px wide.",
     constraints: { maxCharacters: 280, maxUnits: 1, visual: "required", visualSpecId: "thumbnail" },
   },
+  {
+    format: "video",
+    channel: "x",
+    guidance:
+      "A short-form social video. Hook in the first seconds. One idea, readable captions if any, " +
+      "no invented data. Publishing this format is deferred — generation and Artifact attachment " +
+      "are the durable primitives.",
+    constraints: { maxUnits: 1, visual: "required", visualSpecId: "generic_social_video" },
+  },
 ];
 
 const byKey = new Map(PROFILES.map((p) => [`${p.format}:${p.channel}`, p]));

@@ -171,7 +171,7 @@ export function createXChannelAdapter(): ChannelAdapter {
   // deliberately NOT supported by this transport yet. `linkedin_post` shares
   // the `{ text }` payload with `x_post` so an existing Artifact can be
   // delivered on X without cloning the revision.
-  const supported = new Set(["x_post", "x_thread", "image", "thumbnail", "linkedin_post"]);
+  const supported = new Set(["x_post", "x_thread", "image", "thumbnail", "linkedin_post", "video"]);
 
   function unitsFor(format: string, payload: JsonRecord): string[] | null {
     if (format === "x_post" || format === "linkedin_post") {
@@ -304,6 +304,18 @@ export function createXChannelAdapter(): ChannelAdapter {
 
     async publish(request: PublishRequest): Promise<PublishOutcome> {
       if (!supported.has(request.format)) return unavailable(request.format, "x");
+
+      if (request.format === "video") {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: "x video publishing is not implemented",
+        };
+      }
 
       if (request.format === "image" || request.format === "thumbnail") {
         return publishWithMedia(request);

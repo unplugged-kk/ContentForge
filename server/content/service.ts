@@ -45,7 +45,7 @@ import {
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
-import { createFixtureVisualProvider } from "./visualFixture";
+import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { runVisualGeneration } from "./visualService";
 import { registerStyleAnalyzer } from "./style";
@@ -96,6 +96,7 @@ export function registerBuiltinVisualProviders(): void {
   // (OpenAI, local/self-hosted, any compatible endpoint) is AI_BASE_URL
   // configuration, never a branch in this file.
   registerVisualProvider(createOpenAiImageProvider());
+  registerVisualProvider(createFixtureVideoProvider());
 }
 
 export interface VisualRunDeps {

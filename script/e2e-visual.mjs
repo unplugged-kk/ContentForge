@@ -603,6 +603,139 @@ async function killApp(signal = "SIGKILL") {
     return `generation ${res.body.id} honored model preference, asset ${ready.visualAssetId}`;
   });
 
+  phase("Phase 19: video content production foundation");
+  let videoGenerationId = null;
+  let videoAssetId = null;
+  await check("Path A: POST /api/video-generations creates durable intent", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      intent: { subject: `${RUN} short social video`, aspectRatio: "9:16" },
+      durationMs: 1200,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(res.body.kind === "video", `kind=${res.body.kind}`);
+    assert(res.body.capability === "generate_video", `capability=${res.body.capability}`);
+    assert(res.body.status === "requested", `status=${res.body.status}`);
+    videoGenerationId = res.body.id;
+    return `video generation ${res.body.id} queued`;
+  });
+
+  await check("Path B: GET /api/video-generations/:id reports ready VideoAsset", async () => {
+    await waitFor(
+      async () => {
+        const rows = await q("select status, error_message from visual_generations where id = $1", [videoGenerationId]);
+        const row = rows[0];
+        if (!row) return false;
+        if (row.status === "ready") return row;
+        if (row.status === "failed") throw new Error(`video failed: ${row.error_message}`);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "video ready" },
+    );
+    const row = await http("GET", `/api/video-generations/${videoGenerationId}`);
+    assert(row.status === 200, `GET status ${row.status}`);
+    assert(row.body.status === "ready", `status=${row.body.status}`);
+    assert(Number.isInteger(row.body.visualAssetId), "no video asset");
+    videoAssetId = row.body.visualAssetId;
+    const asset = await http("GET", `/api/video-assets/${videoAssetId}`);
+    assert(asset.status === 200, `asset ${asset.status}`);
+    assert(asset.body.kind === "video", `kind=${asset.body.kind}`);
+    assert(asset.body.mime === "video/mp4", `mime=${asset.body.mime}`);
+    assert(asset.body.durationMs === 1200, `durationMs=${asset.body.durationMs}`);
+    assert(typeof asset.body.storageKey === "undefined", "storageKey must not leak on HTTP");
+    const [dbRow] = await q("select storage_key, mime, duration_ms from visual_assets where id = $1", [videoAssetId]);
+    assert(/^local:[0-9a-f]+$/.test(dbRow.storage_key), "bytes stored as storage_key");
+    return `video asset ${videoAssetId} duration=${asset.body.durationMs}`;
+  });
+
+  await check("Path C: duplicate POST retries the same VideoGeneration", async () => {
+    const again = await http("POST", "/api/video-generations", {
+      intent: { subject: `${RUN} short social video`, aspectRatio: "9:16" },
+      durationMs: 1200,
+    });
+    assert(again.status === 200, `expected 200, got ${again.status}`);
+    assert(again.body.id === videoGenerationId, "duplicate created a new generation");
+    const assets = await q("select id from visual_assets where visual_generation_id = $1", [videoGenerationId]);
+    assert(assets.length === 1, `duplicate assets: ${assets.length}`);
+    return `same generation ${videoGenerationId}`;
+  });
+
+  await check("Path D: explicit regenerate is a new VideoGeneration", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      intent: { subject: `${RUN} short social video`, aspectRatio: "9:16" },
+      durationMs: 1200,
+      regenerate: true,
+      regenerationNonce: "video-regen-1",
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}`);
+    assert(res.body.id !== videoGenerationId, "regenerate reused identity");
+    await waitFor(
+      async () => {
+        const rows = await q("select status from visual_generations where id = $1", [res.body.id]);
+        return rows[0]?.status === "ready" ? rows[0] : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 300, label: "video regen ready" },
+    );
+    const row = await http("GET", `/api/video-generations/${res.body.id}`);
+    assert(row.body.visualAssetId !== videoAssetId, "regenerate mutated the original asset");
+    return `regen generation ${res.body.id} asset ${row.body.visualAssetId}`;
+  });
+
+  await check("Path E: POST /api/video-assets/:id/refine leaves source immutable", async () => {
+    const before = await http("GET", `/api/video-assets/${videoAssetId}`);
+    const res = await http("POST", `/api/video-assets/${videoAssetId}/refine`, {
+      instruction: "Tighten the hook; do not change owner or channel",
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    await waitFor(
+      async () => {
+        const rows = await q("select status from visual_generations where id = $1", [res.body.id]);
+        return rows[0]?.status === "ready" ? rows[0] : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 300, label: "video refine ready" },
+    );
+    const row = await http("GET", `/api/video-generations/${res.body.id}`);
+    const after = await http("GET", `/api/video-assets/${videoAssetId}`);
+    assert(after.body.contentHash === before.body.contentHash, "source asset mutated");
+    assert(row.body.visualAssetId !== videoAssetId, "refine reused source id");
+    return `refined asset ${row.body.visualAssetId} from ${videoAssetId}`;
+  });
+
+  await check("Path F: Artifact attachment names the VideoAsset id", async () => {
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "video artifact",
+      objective: "attach",
+      format: "video",
+      channel: "x",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const created = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      format: "video",
+      channel: "x",
+      payload: { visualAssetId: videoAssetId },
+      attributionReason: "e2e fixture",
+    });
+    assert(created.status === 201, `artifact ${created.status}: ${created.text}`);
+    const attach = await http("POST", `/api/artifacts/${created.body.id}/visuals`, {
+      visualAssetId: videoAssetId,
+      role: "hero",
+    });
+    assert(attach.status === 201, `attach ${attach.status}: ${attach.text}`);
+    const listed = await http("GET", `/api/artifacts/${created.body.id}/visuals`);
+    assert(listed.body[0].visualAssetId === videoAssetId, "ref mismatch");
+    return `artifact ${created.body.id} → video asset ${videoAssetId}`;
+  });
+
+  await check("Path G: ownership isolation for video ids", async () => {
+    const imageAsVideo = await http("GET", `/api/video-generations/${visualGenerationId}`);
+    assert(imageAsVideo.status === 404, `image leaked as video: ${imageAsVideo.status}`);
+    const foreign = await http("GET", "/api/video-assets/99999999");
+    assert(foreign.status === 404, `expected 404, got ${foreign.status}`);
+    const refine = await http("POST", "/api/video-assets/99999999/refine", { instruction: "nope" });
+    assert(refine.status === 404, `refine leak ${refine.status}`);
+    return "foreign/missing video ids 404";
+  });
+
   phase("Restart/recovery: queued visual generation survives SIGKILL");
   await check("a queued visual generation survives a restart and completes", async () => {
     const res = await http("POST", "/api/visual-generations", {
@@ -639,6 +772,39 @@ async function killApp(signal = "SIGKILL") {
     );
     assert(Number.isInteger(row.visualAssetId), "no asset after restart");
     return `visual generation ${id} completed after restart → asset ${row.visualAssetId}`;
+  });
+
+  await check("Path H: queued VideoGeneration survives SIGKILL without duplicate assets", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      intent: { subject: `${RUN} video restart probe`, aspectRatio: "9:16" },
+      durationMs: 1100,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    const id = res.body.id;
+    await killApp("SIGKILL");
+    const [atKill] = await q("select status from visual_generations where id = $1", [id]);
+    record(
+      "VideoGeneration row survived the kill",
+      atKill && ["requested", "generating"].includes(atKill.status),
+      `status=${atKill?.status}`,
+    );
+    await startApp(xEnv);
+    await waitFor(
+      async () => {
+        const rows = await q("select status, error_message from visual_generations where id = $1", [id]);
+        const row = rows[0];
+        if (!row) return false;
+        if (row.status === "ready") return row;
+        if (row.status === "failed") throw new Error(`failed: ${row.error_message}`);
+        return false;
+      },
+      { timeoutMs: 120_000, intervalMs: 500, label: "post-restart video" },
+    );
+    const row = await http("GET", `/api/video-generations/${id}`);
+    const assets = await q("select id from visual_assets where visual_generation_id = $1", [id]);
+    assert(assets.length === 1, `duplicate video assets after restart: ${assets.length}`);
+    assert(Number.isInteger(row.body.visualAssetId), "no video asset after restart");
+    return `video generation ${id} completed after restart → asset ${row.body.visualAssetId}`;
   });
 
   const passed = results.filter((r) => r.ok).length;

@@ -148,6 +148,13 @@
       "when": 1789921800000,
       "tag": "0020_threads_connected_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790008200000,
+      "tag": "0021_video_asset_metadata",
+      "breakpoints": true
     }
   ]
 }

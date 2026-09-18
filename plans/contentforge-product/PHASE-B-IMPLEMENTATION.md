@@ -622,6 +622,64 @@ through `POST /api/artifacts/:id/publications`. Not automatic by default.
 follower/audience features, PNG→JPEG transcode, Facebook Login Graph path,
 UI, Chrome.
 
+## Phase 19 — Video Content Production Foundation (done)
+
+**The problem this closes**: video was a declared capability (`generate_video`)
+with no durable producer, no asset metadata, and no Story-derived path. This
+phase makes video a first-class **media primitive** on the existing visual
+architecture — not a second media system, and not YouTube/Reels publishing.
+
+```
+CreativeIntent / Story
+        → Opportunity(format=video) → GenerationPolicy → GenerationJob
+        → VideoGeneration (visual_generations.kind=video)
+        → VisualProviderPort.generate_video
+        → VideoAsset (visual_assets.kind=video, storage_key only)
+        → optional Artifact(format=video) { visualAssetId }
+```
+
+**Media abstraction.** `VisualProviderPort` is extended, not renamed.
+Capabilities now include `generate_video` and `refine_video`. Image fixtures
+still do **not** claim video. A dedicated `local-video-fixture` is the
+provider-boundary test double. `openai-image` remains image-only
+(`images.generate`). No `VideoProviderService`, no parallel queue.
+
+**Migration decision.** Additive `0021_video_asset_metadata.sql` adds
+`duration_ms`, `container`, `codec`, `frame_rate` on `visual_assets`. No new
+`video_generations` / `video_assets` tables — lineage, uniqueness, immutability
+triggers, and owner isolation stay on the existing Visual* model.
+
+**Validation.** One canonical layer: `validateVideoOutput` / `validateMediaOutput`
+(MIME, ftyp/EBML, duration, dimensions, size). Channel adapters do not
+re-validate core asset validity. Specs live in the Phase 15 registry:
+`generic_social_video`, `landscape_video`, `square_video`. Format `video` ×
+channel `x` maps to `generic_social_video`. No YouTube/Reels constants.
+
+**Retry ≠ regenerate.** Same `visual_generations` identity on retry; explicit
+`regenerate` / refine creates a new row with `source_visual_asset_id`. Source
+assets are never mutated. Video variations (`variationCount > 1`) are deferred.
+
+**Queue / storage.** Payload remains `{ visualGenerationId }`. Bytes live in
+`AssetStoragePort` (`local:<sha>`). PostgreSQL stores metadata + storage keys.
+
+**Publication.** X `supports("video")` so Story → Opportunity(video) can exist.
+`publish()` returns permanent `x video publishing is not implemented`
+(`providerCalled: false`). Instagram Reels / YouTube / X video posting are not
+implemented. Future path is the existing `Artifact → Publication → ChannelAdapter`.
+
+**HTTP.** `POST/GET /api/video-generations`, `GET /api/video-assets/:id`,
+`POST /api/video-assets/:id/refine`. Attachment uses existing
+`POST /api/artifacts/:id/visuals`. Asynchronous enqueue only.
+
+**Live vendor.** `Real video provider network smoke: BLOCKED — no verified video generation endpoint/credential` (OpenAI-compatible client is still-image only; no Sora/video API is wired). Restart proof used the fixture double with real queue/DB/HTTP.
+
+**Verification:** TypeScript 0 errors; unit 435/435; real Postgres 220/220; live E2E 145/145; visual E2E 28/28; fresh migrations 22 / 50 tables.
+
+**Deferred:** YouTube / Reels / Shorts / X / LinkedIn video publishing, live
+vendor execution, audio, lip-sync/avatars, timeline editing, clipping, video
+autopilot, video scripts as a separate subsystem, multi-video variations,
+automatic thumbnails, UI, Chrome.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

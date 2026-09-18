@@ -227,6 +227,10 @@ export interface InsertVisualAssetRow {
   mime: string;
   width?: number | null;
   height?: number | null;
+  durationMs?: number | null;
+  container?: string | null;
+  codec?: string | null;
+  frameRate?: number | null;
   byteSize?: number | null;
   contentHash?: string | null;
   altText?: string | null;
@@ -556,6 +560,10 @@ export class DatabaseContentStorage implements ContentStoragePort {
         mime: row.mime,
         width: row.width ?? null,
         height: row.height ?? null,
+        durationMs: row.durationMs ?? null,
+        container: row.container ?? null,
+        codec: row.codec ?? null,
+        frameRate: row.frameRate ?? null,
         byteSize: row.byteSize ?? null,
         contentHash: row.contentHash ?? null,
         altText: row.altText ?? null,

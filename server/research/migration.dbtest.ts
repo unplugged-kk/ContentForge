@@ -92,7 +92,7 @@ describeDb("migration chain (db)", () => {
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 21, "all twenty-one migrations recorded");
+      assert.equal(await migrationCount(pool), 22, "all twenty-two migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -199,12 +199,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0020 without a db:push.
+      // The forward migration must apply 0003-0021 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
       assert.equal(tables.length, 50, `expected 50 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 21, "0003-0020 recorded after upgrade");
+      assert.equal(await migrationCount(pool), 22, "0003-0021 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -224,6 +224,16 @@ describeDb("migration chain (db)", () => {
           where tablename = 'connected_accounts' and indexname = 'connected_accounts_user_platform_uq'`,
       );
       assert.equal(threadsIdx.rows.length, 1, "0020 adds connected_accounts (user_id, platform) unique");
+      const videoCols = await pool.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+          where table_name = 'visual_assets' and column_name in ('duration_ms','container','codec','frame_rate')
+          order by column_name`,
+      );
+      assert.deepEqual(
+        videoCols.rows.map((r) => r.column_name),
+        ["codec", "container", "duration_ms", "frame_rate"],
+        "0021 adds video metadata columns on visual_assets",
+      );
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

@@ -239,6 +239,13 @@ export type ImagePayload = z.infer<typeof imagePayloadSchema>;
 export type CarouselPayload = z.infer<typeof carouselPayloadSchema>;
 export type ThumbnailPayload = z.infer<typeof thumbnailPayloadSchema>;
 
+/**
+ * Video payload (Phase 19). Same reference shape as `image`: a durable
+ * VisualAsset (kind=video) id. Binary media never enters the payload JSON.
+ */
+export const videoPayloadSchema = imagePayloadSchema;
+export type VideoPayload = ImagePayload;
+
 export const payloadSchemaRegistry = new PayloadSchemaRegistry();
 
 payloadSchemaRegistry.register<XPostPayload>({
@@ -300,6 +307,21 @@ payloadSchemaRegistry.register<ThumbnailPayload>({
   version: 1,
   description: "Thumbnail referencing an immutable visual asset revision",
   schema: thumbnailPayloadSchema,
+  mediaRefs: (payload) => [
+    {
+      visualAssetId: payload.visualAssetId,
+      role: payload.role ?? null,
+      position: 0,
+      altText: payload.altText ?? null,
+    },
+  ],
+});
+
+payloadSchemaRegistry.register<VideoPayload>({
+  format: "video",
+  version: 1,
+  description: "Video referencing an immutable visual asset revision (kind=video)",
+  schema: videoPayloadSchema,
   mediaRefs: (payload) => [
     {
       visualAssetId: payload.visualAssetId,

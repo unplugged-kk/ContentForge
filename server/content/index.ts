@@ -290,13 +290,18 @@ export {
   resetVisualProviders,
   createLocalAssetStorage,
   validateVisualOutput,
+  validateVideoOutput,
+  validateMediaOutput,
   assertSafeStorageKey,
   hashIntent,
   visualGenerationIdempotencyKey,
   visualIntentSchema,
   ALLOWED_VISUAL_MIMES,
+  ALLOWED_VIDEO_MIMES,
   MAX_VISUAL_BYTES,
+  MAX_VIDEO_BYTES,
   MAX_VISUAL_DIMENSION,
+  MAX_VIDEO_DURATION_MS,
   modalityOfCapability,
   providerModalities,
   resolveProviderModel,
@@ -315,6 +320,8 @@ export {
 
 export {
   createFixtureVisualProvider,
+  createFixtureVideoProvider,
+  fixtureMp4Bytes,
 } from "./visualFixture";
 
 export {

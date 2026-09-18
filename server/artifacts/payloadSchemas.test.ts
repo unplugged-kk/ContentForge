@@ -15,6 +15,7 @@ describe("payload schema registry", () => {
       "image",
       "linkedin_post",
       "thumbnail",
+      "video",
       "x_post",
       "x_thread",
     ]);

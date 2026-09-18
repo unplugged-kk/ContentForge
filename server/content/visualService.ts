@@ -21,6 +21,7 @@ import {
   hashIntent,
   resolveProviderModel,
   validateVisualOutput,
+  validateMediaOutput,
   visualGenerationIdempotencyKey,
   InvalidVisualInputError,
   VisualCapabilityUnsupportedError,
@@ -58,10 +59,18 @@ export interface VisualServiceDeps {
 export const createVisualGenerationSchema = z.object({
   opportunityId: z.number().int().positive().optional(),
   generationJobId: z.number().int().positive().optional(),
-  kind: z.enum(["image", "carousel_slide", "thumbnail", "carousel"]),
-  providerId: z.string().trim().min(1).max(80).default("local-fixture"),
+  kind: z.enum(["image", "carousel_slide", "thumbnail", "carousel", "video"]),
+  providerId: z.string().trim().min(1).max(80).optional(),
   capability: z
-    .enum(["generate_image", "generate_image_variations", "refine_image", "edit_image", "generate_slide"])
+    .enum([
+      "generate_image",
+      "generate_image_variations",
+      "refine_image",
+      "edit_image",
+      "generate_slide",
+      "generate_video",
+      "refine_video",
+    ])
     .optional(),
   intent: z.record(z.unknown()),
   model: z.string().trim().min(1).max(120).optional(),
@@ -74,6 +83,7 @@ export const createVisualGenerationSchema = z.object({
   specId: z.string().trim().min(1).max(60).optional(),
   sourceVisualAssetId: z.number().int().positive().optional(),
   instruction: z.string().trim().min(1).max(MAX_VISUAL_PROMPT_CHARS).optional(),
+  durationMs: z.number().int().positive().max(10 * 60 * 1000).optional(),
 });
 
 export type CreateVisualGenerationInput = z.input<typeof createVisualGenerationSchema>;
@@ -103,6 +113,7 @@ export async function createVisualGeneration(
   }
   const body = parsed.data;
 
+  const isVideo = body.kind === "video";
   const isCarousel = body.kind === "carousel";
   const slideCount =
     body.slideCount ??
@@ -110,6 +121,10 @@ export async function createVisualGeneration(
   const variationCount =
     body.variationCount ??
     (isCarousel ? slideCount! : typeof body.intent.variationCount === "number" ? body.intent.variationCount : 1);
+
+  if (isVideo && variationCount !== 1) {
+    throw new VisualServiceInputError(["video variation generation is deferred; variationCount must be 1"]);
+  }
 
   if (isCarousel) {
     const slideIssue = validateCarouselSlideCount(variationCount);
@@ -127,28 +142,40 @@ export async function createVisualGeneration(
     if (source.status !== "ready") {
       throw new VisualServiceInputError([`source visual asset is "${source.status}", not ready`]);
     }
-  } else if (body.capability === "refine_image") {
-    throw new VisualServiceInputError(["refine_image requires sourceVisualAssetId"]);
+    if (isVideo && !source.mime.startsWith("video/")) {
+      throw new VisualServiceInputError(["video refinement requires a video source asset"]);
+    }
+    if (!isVideo && source.mime.startsWith("video/")) {
+      throw new VisualServiceInputError(["image refinement cannot use a video source asset"]);
+    }
+  } else if (body.capability === "refine_image" || body.capability === "refine_video") {
+    throw new VisualServiceInputError([`${body.capability} requires sourceVisualAssetId`]);
   }
 
   const capability: VisualCapability =
     body.capability ??
     (body.sourceVisualAssetId
-      ? "refine_image"
+      ? isVideo
+        ? "refine_video"
+        : "refine_image"
       : isCarousel
         ? "generate_slide"
-        : variationCount > 1
-          ? "generate_image_variations"
-          : "generate_image");
+        : isVideo
+          ? "generate_video"
+          : variationCount > 1
+            ? "generate_image_variations"
+            : "generate_image");
+
+  const providerId = body.providerId ?? (isVideo ? "local-video-fixture" : "local-fixture");
 
   let provider: VisualProviderPort;
   try {
-    provider = getVisualProvider(body.providerId);
+    provider = getVisualProvider(providerId);
   } catch {
-    throw new VisualServiceInputError([`unknown visual provider "${body.providerId}"`]);
+    throw new VisualServiceInputError([`unknown visual provider "${providerId}"`]);
   }
   if (!provider.capabilities.includes(capability)) {
-    throw new VisualCapabilityUnsupportedError(body.providerId, capability);
+    throw new VisualCapabilityUnsupportedError(providerId, capability);
   }
   resolveProviderModel(provider, body.model);
 
@@ -174,6 +201,12 @@ export async function createVisualGeneration(
     throw new VisualServiceInputError([describeError(error)]);
   }
 
+  const requestedDuration =
+    body.durationMs ?? (typeof body.intent.durationMs === "number" ? body.intent.durationMs : undefined);
+  if (isVideo && requestedDuration != null && spec.maxDurationMs && requestedDuration > spec.maxDurationMs) {
+    throw new VisualServiceInputError([`duration exceeds spec "${spec.id}" max of ${spec.maxDurationMs} ms`]);
+  }
+
   const instruction =
     body.instruction ?? (typeof body.intent.instruction === "string" ? body.intent.instruction : null);
   if (instruction && instruction.length > MAX_VISUAL_PROMPT_CHARS) {
@@ -191,6 +224,7 @@ export async function createVisualGeneration(
     ...(body.model ? { modelPreference: body.model } : {}),
     ...(instruction ? { instruction } : {}),
     ...(body.sourceVisualAssetId ? { sourceVisualAssetId: body.sourceVisualAssetId } : {}),
+    ...(isVideo && requestedDuration ? { durationMs: requestedDuration } : {}),
   };
 
   const regenerationNonce = body.regenerate
@@ -257,9 +291,10 @@ export interface VisualRunResult {
   failureMessage?: string;
 }
 
-function providerKind(kind: string): "image" | "carousel_slide" | "thumbnail" {
+function providerKind(kind: string): "image" | "carousel_slide" | "thumbnail" | "video" {
   if (kind === "carousel" || kind === "carousel_slide") return "carousel_slide";
   if (kind === "thumbnail") return "thumbnail";
+  if (kind === "video") return "video";
   return "image";
 }
 
@@ -344,7 +379,15 @@ export async function runVisualGeneration(
           source,
           instruction,
         });
-        validateVisualOutput(output);
+        validateMediaOutput(output, {
+          maxBytes: typeof (snapshot.spec as { maxBytes?: number } | undefined)?.maxBytes === "number"
+            ? (snapshot.spec as { maxBytes: number }).maxBytes
+            : undefined,
+          maxDurationMs:
+            typeof (snapshot.spec as { maxDurationMs?: number } | undefined)?.maxDurationMs === "number"
+              ? (snapshot.spec as { maxDurationMs: number }).maxDurationMs
+              : undefined,
+        });
         const stored = await deps.storage.put(output.bytes, output.mime);
         const asset = await deps.content.insertVisualAsset({
           userId: generation.userId ?? null,
@@ -354,6 +397,10 @@ export async function runVisualGeneration(
           mime: output.mime,
           width: output.width,
           height: output.height,
+          durationMs: output.durationMs ?? null,
+          container: output.container ?? null,
+          codec: output.codec ?? null,
+          frameRate: output.frameRate ?? null,
           byteSize: stored.byteSize,
           contentHash: stored.contentHash,
           altText: output.altText,
@@ -474,13 +521,23 @@ export async function runVisualGeneration(
  */
 export async function createVisualAssetRevision(
   priorAssetId: number,
-  output: { bytes: Buffer; mime: string; width: number | null; height: number | null; altText?: string | null },
+  output: {
+    bytes: Buffer;
+    mime: string;
+    width: number | null;
+    height: number | null;
+    durationMs?: number | null;
+    container?: string | null;
+    codec?: string | null;
+    frameRate?: number | null;
+    altText?: string | null;
+  },
   deps: VisualServiceDeps,
 ): Promise<ReturnType<VisualServiceDeps["content"]["insertVisualAsset"]>> {
   const prior = await deps.content.getVisualAsset(priorAssetId);
   if (!prior) throw new VisualServiceInputError([`visual asset ${priorAssetId} not found`]);
 
-  validateVisualOutput(output);
+  validateMediaOutput(output);
   const stored = await deps.storage.put(output.bytes, output.mime);
 
   return deps.content.insertVisualAsset({
@@ -491,6 +548,10 @@ export async function createVisualAssetRevision(
     mime: output.mime,
     width: output.width,
     height: output.height,
+    durationMs: output.durationMs ?? prior.durationMs ?? null,
+    container: output.container ?? prior.container ?? null,
+    codec: output.codec ?? prior.codec ?? null,
+    frameRate: output.frameRate ?? prior.frameRate ?? null,
     byteSize: stored.byteSize,
     contentHash: stored.contentHash,
     altText: output.altText ?? prior.altText,

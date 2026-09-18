@@ -79,3 +79,93 @@ export function createFixtureVisualProvider(
     },
   };
 }
+
+/** Minimal valid MP4 (ftyp isom) used by the video fixture / unit tests. */
+export function fixtureMp4Bytes(): Buffer {
+  const buf = Buffer.alloc(32);
+  buf.writeUInt32BE(24, 0);
+  buf.write("ftyp", 4, "ascii");
+  buf.write("isom", 8, "ascii");
+  buf.writeUInt32BE(0, 12);
+  buf.write("isom", 16, "ascii");
+  buf.write("mp41", 20, "ascii");
+  buf.writeUInt32BE(8, 24);
+  buf.write("mdat", 28, "ascii");
+  return buf;
+}
+
+/**
+ * Deterministic fixture video provider — the test/E2E double for video
+ * production. Emits a tiny MP4 with a valid ftyp box. Live vendor video
+ * generation is not registered: this double never pretends to be a real
+ * network provider.
+ */
+export function createFixtureVideoProvider(
+  options: {
+    providerId?: string;
+    failMode?: "none" | "transient" | "permanent" | "invalid";
+  } = {},
+): VisualProviderPort & { calls(): number } {
+  const providerId = options.providerId ?? "local-video-fixture";
+  let calls = 0;
+  const bytes = fixtureMp4Bytes();
+
+  return {
+    providerId,
+    providerVersion: "video-fixture-1",
+    capabilities: ["generate_video", "refine_video"],
+    modalities: ["video"],
+    calls: () => calls,
+    async generate(request) {
+      calls += 1;
+      const mode = options.failMode ?? "none";
+      if (mode === "transient") {
+        throw JobFailure.transient("fixture video provider unavailable");
+      }
+      if (mode === "permanent") {
+        throw JobFailure.permanent("fixture video provider rejected the request");
+      }
+      if (mode === "invalid") {
+        return {
+          bytes: Buffer.from("not-a-video", "utf8"),
+          mime: "application/octet-stream",
+          width: null,
+          height: null,
+          durationMs: null,
+          altText: null,
+          provider: providerId,
+          providerVersion: "video-fixture-1",
+          model: null,
+          cost: null,
+          usage: {},
+        };
+      }
+      const spec =
+        request.snapshot && typeof request.snapshot === "object"
+          ? (request.snapshot as { spec?: { width?: number; height?: number; container?: string } }).spec
+          : undefined;
+      const intentDuration =
+        request.snapshot && typeof request.snapshot === "object"
+          ? (request.snapshot as { intent?: { durationMs?: number } }).intent?.durationMs
+          : undefined;
+      return {
+        bytes: Buffer.from(bytes),
+        mime: "video/mp4",
+        width: spec?.width ?? 1080,
+        height: spec?.height ?? 1920,
+        durationMs: typeof intentDuration === "number" ? intentDuration : 1000,
+        container: spec?.container ?? "mp4",
+        codec: "avc1",
+        frameRate: 30,
+        altText: request.source
+          ? `Refined fixture video (source ${request.source.mime})`
+          : "Deterministic fixture video",
+        provider: providerId,
+        providerVersion: "video-fixture-1",
+        model: "fixture-video-model",
+        cost: null,
+        usage: { variationIndex: request.variationIndex ?? 0 },
+      };
+    },
+  };
+}

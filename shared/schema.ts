@@ -1214,7 +1214,7 @@ export const visualGenerations = pgTable(
      * requirements, slide count, role relative to the Artifact.
      */
     intent: jsonb("intent").$type<Record<string, unknown>>().notNull(),
-    /** image | carousel_slide | thumbnail — only implemented kinds may be requested. */
+    /** image | carousel_slide | thumbnail | carousel | video */
     kind: varchar("kind", { length: 30 }).notNull(),
     /** Provider + capability that produced (or will produce) the asset. */
     providerId: varchar("provider_id", { length: 80 }),
@@ -1262,14 +1262,22 @@ export const visualAssets = pgTable(
     id: serial("id").primaryKey(),
     userId: integer("user_id"),
     visualGenerationId: integer("visual_generation_id").references(() => visualGenerations.id),
-    /** image | carousel_slide | thumbnail */
+    /** image | carousel_slide | thumbnail | video */
     kind: varchar("kind", { length: 30 }).notNull(),
     /** Provider-agnostic storage reference (e.g. `local:<sha>`); never a filesystem path. */
     storageKey: varchar("storage_key", { length: 500 }).notNull(),
-    /** Validated MIME (image/png, image/jpeg, image/webp, image/gif). */
+    /** Validated MIME (image/* or video/mp4, video/webm). Binary bytes never live here. */
     mime: varchar("mime", { length: 60 }).notNull(),
     width: integer("width"),
     height: integer("height"),
+    /** Duration in milliseconds — video assets only; null for still images. */
+    durationMs: integer("duration_ms"),
+    /** Container label (mp4, webm) — video assets only. */
+    container: varchar("container", { length: 32 }),
+    /** Codec label when known (avc1, vp9) — video assets only. */
+    codec: varchar("codec", { length: 64 }),
+    /** Integer frames/sec when known — video assets only. */
+    frameRate: integer("frame_rate"),
     byteSize: integer("byte_size"),
     /** Content hash of the bytes (sha256 hex). */
     contentHash: varchar("content_hash", { length: 64 }),

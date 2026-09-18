@@ -15,6 +15,8 @@ export type VisualAspectRatio = "1:1" | "4:5" | "16:9" | "9:16";
 
 export interface VisualSpec {
   id: string;
+  /** Still image (default) or video — one registry, not a second allowlist. */
+  modality?: "image" | "video";
   /** Target usage label — not a publishing channel. */
   usage:
     | "generic_square"
@@ -24,12 +26,18 @@ export interface VisualSpec {
     | "x_image"
     | "linkedin_image"
     | "instagram_feed"
-    | "thumbnail";
+    | "thumbnail"
+    | "generic_social_video"
+    | "landscape_video"
+    | "square_video";
   width: number;
   height: number;
   aspectRatio: VisualAspectRatio;
-  mime: "image/png" | "image/jpeg" | "image/webp";
+  mime: "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm";
   maxBytes: number;
+  maxDurationMs?: number;
+  container?: "mp4" | "webm";
+  maxFrameRate?: number;
 }
 
 const SPECS: readonly VisualSpec[] = [
@@ -105,6 +113,45 @@ const SPECS: readonly VisualSpec[] = [
     mime: "image/jpeg",
     maxBytes: 8 * 1024 * 1024,
   },
+  {
+    id: "generic_social_video",
+    modality: "video",
+    usage: "generic_social_video",
+    width: 1080,
+    height: 1920,
+    aspectRatio: "9:16",
+    mime: "video/mp4",
+    maxBytes: 50 * 1024 * 1024,
+    maxDurationMs: 60_000,
+    container: "mp4",
+    maxFrameRate: 30,
+  },
+  {
+    id: "landscape_video",
+    modality: "video",
+    usage: "landscape_video",
+    width: 1920,
+    height: 1080,
+    aspectRatio: "16:9",
+    mime: "video/mp4",
+    maxBytes: 50 * 1024 * 1024,
+    maxDurationMs: 180_000,
+    container: "mp4",
+    maxFrameRate: 30,
+  },
+  {
+    id: "square_video",
+    modality: "video",
+    usage: "square_video",
+    width: 1080,
+    height: 1080,
+    aspectRatio: "1:1",
+    mime: "video/mp4",
+    maxBytes: 50 * 1024 * 1024,
+    maxDurationMs: 60_000,
+    container: "mp4",
+    maxFrameRate: 30,
+  },
 ];
 
 const byId = new Map(SPECS.map((s) => [s.id, s]));
@@ -117,6 +164,7 @@ const FORMAT_CHANNEL_SPEC: Record<string, string> = {
   "thumbnail:x": "thumbnail",
   "image:instagram": "instagram_feed",
   "carousel:instagram": "instagram_feed",
+  "video:x": "generic_social_video",
 };
 
 export function listVisualSpecs(): VisualSpec[] {
@@ -138,6 +186,12 @@ export function specForAspectRatio(aspect: unknown): VisualSpec {
   return byId.get("generic_square")!;
 }
 
+export function specForVideoAspectRatio(aspect: unknown): VisualSpec {
+  if (aspect === "16:9") return byId.get("landscape_video")!;
+  if (aspect === "1:1") return byId.get("square_video")!;
+  return byId.get("generic_social_video")!;
+}
+
 /**
  * Resolve a spec from explicit id, then format×channel, then aspect ratio.
  * Always returns a spec — never infers a channel from thin air.
@@ -157,6 +211,7 @@ export function resolveVisualSpec(input: {
     const mapped = specIdForFormatChannel(input.format, input.channel);
     if (mapped) return byId.get(mapped)!;
   }
+  if (input.format === "video") return specForVideoAspectRatio(input.aspectRatio);
   return specForAspectRatio(input.aspectRatio);
 }
 

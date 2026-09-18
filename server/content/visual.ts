@@ -28,7 +28,7 @@ export type MediaModality = "image" | "video" | "audio";
 
 /** Derives modality from the capability a provider/request names. */
 export function modalityOfCapability(capability: VisualCapability): MediaModality {
-  if (capability === "generate_video") return "video";
+  if (capability === "generate_video" || capability === "refine_video") return "video";
   if (capability === "generate_audio") return "audio";
   return "image";
 }
@@ -40,9 +40,9 @@ export type VisualCapability =
   | "refine_image"
   | "edit_image"
   | "generate_slide"
-  // Declared for capability-readiness only (Phase 9 §5/§23/§24) — no provider
-  // registers these yet, and none may claim to without a real implementation.
   | "generate_video"
+  | "refine_video"
+  // Declared for capability-readiness only — no provider registers audio yet.
   | "generate_audio";
 
 export interface VisualSourceImage {
@@ -53,7 +53,7 @@ export interface VisualSourceImage {
 }
 
 export interface VisualGenerationRequest {
-  kind: "image" | "carousel_slide" | "thumbnail";
+  kind: "image" | "carousel_slide" | "thumbnail" | "video";
   capability: VisualCapability;
   /** Frozen provider request (params + prompt). No business-table access. */
   snapshot: JsonRecord;
@@ -71,10 +71,14 @@ export interface VisualGenerationRequest {
 export interface VisualGenerationOutput {
   /** Raw bytes of the produced visual. */
   bytes: Buffer;
-  /** Validated MIME (image/png, image/jpeg, image/webp, image/gif). */
+  /** Validated MIME (image/* or video/mp4, video/webm). */
   mime: string;
   width: number | null;
   height: number | null;
+  durationMs?: number | null;
+  container?: string | null;
+  codec?: string | null;
+  frameRate?: number | null;
   altText: string | null;
   provider: string;
   providerVersion: string;
@@ -172,8 +176,11 @@ export function resetVisualProviders(): void {
 
 // ── Asset security (validate before anything durable) ─────────────────────────
 export const ALLOWED_VISUAL_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+export const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"] as const;
 export const MAX_VISUAL_BYTES = 10 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 export const MAX_VISUAL_DIMENSION = 8192;
+export const MAX_VIDEO_DURATION_MS = 180_000;
 
 export class InvalidVisualInputError extends Error {
   readonly issues: string[];
@@ -215,6 +222,79 @@ export function validateVisualOutput(output: {
   if (issues.length > 0) throw new InvalidVisualInputError(issues);
 }
 
+export function looksLikeMp4(bytes: Buffer): boolean {
+  return bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp";
+}
+
+export function looksLikeWebm(bytes: Buffer): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+}
+
+export function validateVideoOutput(output: {
+  bytes: Buffer;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  durationMs?: number | null;
+  maxBytes?: number;
+  maxDurationMs?: number;
+}): void {
+  const issues: string[] = [];
+  if (!(ALLOWED_VIDEO_MIMES as readonly string[]).includes(output.mime)) {
+    issues.push(`mime "${output.mime}" is not allowed for video`);
+  }
+  if (!Buffer.isBuffer(output.bytes) || output.bytes.length === 0) {
+    issues.push("empty video bytes");
+  } else {
+    const ceiling = output.maxBytes ?? MAX_VIDEO_BYTES;
+    if (output.bytes.length > ceiling) {
+      issues.push(`video exceeds the ${ceiling} byte limit`);
+    }
+    if (output.mime === "video/mp4" && !looksLikeMp4(output.bytes)) {
+      issues.push("video/mp4 is missing a valid ftyp box");
+    }
+    if (output.mime === "video/webm" && !looksLikeWebm(output.bytes)) {
+      issues.push("video/webm is missing an EBML header");
+    }
+  }
+  for (const [label, value] of [
+    ["width", output.width],
+    ["height", output.height],
+  ] as const) {
+    if (value !== null && (!Number.isInteger(value) || value <= 0 || value > MAX_VISUAL_DIMENSION)) {
+      issues.push(`${label} is out of range`);
+    }
+  }
+  const duration = output.durationMs ?? null;
+  if (duration === null || !Number.isInteger(duration) || duration <= 0) {
+    issues.push("duration is required and must be a positive integer");
+  } else {
+    const maxDuration = output.maxDurationMs ?? MAX_VIDEO_DURATION_MS;
+    if (duration > maxDuration) {
+      issues.push(`duration exceeds the ${maxDuration} ms limit`);
+    }
+  }
+  if (issues.length > 0) throw new InvalidVisualInputError(issues);
+}
+
+/** Dispatch still-image vs video validation. Channel adapters do not reimplement this. */
+export function validateMediaOutput(
+  output: {
+    bytes: Buffer;
+    mime: string;
+    width: number | null;
+    height: number | null;
+    durationMs?: number | null;
+  },
+  limits?: { maxBytes?: number; maxDurationMs?: number },
+): void {
+  if ((ALLOWED_VIDEO_MIMES as readonly string[]).includes(output.mime) || output.mime.startsWith("video/")) {
+    validateVideoOutput({ ...output, ...limits });
+    return;
+  }
+  validateVisualOutput(output);
+}
+
 /** Path-traversal-safe storage-key guard (keys are `local:<sha>` shaped). */
 export function assertSafeStorageKey(key: string): void {
   if (!/^local:[0-9a-f]{4,128}$/.test(key)) {
@@ -242,7 +322,7 @@ export function hashIntent(intent: Record<string, unknown>): string {
   return createHash("sha256").update(`{${entries.join(",")}}`, "utf8").digest("hex");
 }
 
-export type VisualKind = "image" | "carousel_slide" | "thumbnail" | "carousel";
+export type VisualKind = "image" | "carousel_slide" | "thumbnail" | "carousel" | "video";
 
 export function visualGenerationIdempotencyKey(input: {
   opportunityId?: number | null;

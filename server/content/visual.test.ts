@@ -135,6 +135,7 @@ describe("media modality (Phase 9 §5) — provider-agnostic capability model", 
     assert.equal(modalityOfCapability("edit_image"), "image");
     assert.equal(modalityOfCapability("generate_slide"), "image");
     assert.equal(modalityOfCapability("generate_video"), "video");
+    assert.equal(modalityOfCapability("refine_video"), "video");
     assert.equal(modalityOfCapability("generate_audio"), "audio");
   });
 
@@ -190,7 +191,8 @@ describe("visual specs and variation identity", () => {
     const { resolveVisualSpec, getVisualSpec, validateVariationCount, variationIdentityKey, validateCarouselSlideCount } =
       await import("./visualSpecs");
     assert.equal(resolveVisualSpec({ specId: "x_image" }).usage, "x_image");
-    assert.equal(resolveVisualSpec({ format: "image", channel: "instagram" }).id, "instagram_feed");
+    assert.equal(resolveVisualSpec({ format: "video", channel: "x" }).id, "generic_social_video");
+    assert.equal(resolveVisualSpec({ format: "video", aspectRatio: "16:9" }).id, "landscape_video");
     assert.equal(resolveVisualSpec({ aspectRatio: "16:9" }).id, "generic_landscape");
     assert.ok(getVisualSpec("social_portrait"));
     assert.equal(validateVariationCount(0), "variationCount must be an integer 1–8");

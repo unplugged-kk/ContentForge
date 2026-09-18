@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Artifact, Publication, Schedule } from "@shared/schema";
 import type { ContentStoragePort, InsertScheduleRow } from "./storage";
-import { channelSupportsFormat, registerBuiltinChannelAdapters } from "./adapters";
+import { channelSupportsFormat, getChannelAdapter, registerBuiltinChannelAdapters } from "./adapters";
 import { formatChannelError } from "./opportunity";
 import { ArtifactNotFoundError } from "./artifact";
 import { ArtifactNotSchedulableError, createSchedule, ScheduleInputError } from "./scheduling";
@@ -134,6 +134,24 @@ describe("format vs channel", () => {
     assert.equal(channelSupportsFormat("instagram", "x_thread"), false);
     assert.equal(channelSupportsFormat("instagram", "thumbnail"), false);
     assert.equal(channelSupportsFormat("threads", "image"), false);
+    assert.equal(channelSupportsFormat("x", "video"), true, "video is generation-ready on x");
+    assert.equal(channelSupportsFormat("instagram", "video"), false, "Reels publishing is deferred");
+  });
+
+  it("x adapter refuses to publish video without calling a provider", async () => {
+    registerBuiltinChannelAdapters();
+    const adapter = getChannelAdapter("x");
+    const outcome = await adapter.publish({
+      format: "video",
+      channel: "x",
+      payload: { visualAssetId: 1 },
+      correlationId: "c",
+      media: [],
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.equal(outcome.errorClass, "permanent");
+    assert.match(String(outcome.errorMessage), /not implemented/);
   });
 });
 
