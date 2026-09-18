@@ -5,10 +5,10 @@ Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 
 ## Phase 27.3 — Pluggable Media Provider Platform
 
-**Status:** PARTIALLY IMPLEMENTED. The provider-neutral platform and real local
-audio proof are implemented. A new cloud audio provider and an additional
-video-generation provider are blocked because no usable credentials are
-configured. HyperFrames Cloud remains deferred.
+**Status:** IMPLEMENTED. Real cloud audio (ElevenLabs) and an additional real
+video provider (fal.ai Wan 2.2) are integrated through the existing
+`VisualProviderPort` / `visual.run` / `AssetStoragePort` stack and live-certified
+with hard spend guards. HyperFrames Cloud remains deferred.
 
 ### Implemented
 
@@ -21,40 +21,39 @@ configured. HyperFrames Cloud remains deferred.
   state.
 - Audio generation uses `kind=audio` views over `visual_generations` and
   `visual_assets`, the existing `visual.run` pg-boss job, and
-  `AssetStoragePort`. WAV import validates container, duration, codec, sample
-  rate, channels, byte size, and content hash.
-- `macos-say` invokes `/usr/bin/say` without a shell, restricts voices to
-  configured IDs, normalizes with ffmpeg, and records objective provenance and
-  latency/usage metadata.
-- Generic agent tools are `generate_audio`, model-aware `generate_video`, and
-  `get_generation_status`. The workspace uses capability-driven provider,
-  model, and voice selectors. AudioAsset references can enter the existing
-  Artifact review/approval lifecycle; no publishing channel was added.
-- The six-step onboarding and certification contract is in
-  `docs/media-provider-onboarding.md`.
+  `AssetStoragePort`. WAV/MP3 import validates container, duration, codec,
+  sample rate, channels, byte size, and content hash.
+- `macos-say` remains the local TTS adapter.
+- `elevenlabs` cloud TTS (`providerId=elevenlabs`, model separate) with
+  certification spend guards.
+- `fal` cloud T2V (`providerId=fal`, model separate) with queue submit/status
+  reconciliation and certification spend guards.
+- Generic agent tools remain `generate_audio`, model-aware `generate_video`,
+  and `get_generation_status`. Workspace selectors stay capability-driven.
+- Paid calls require `CONTENTFORGE_REAL_MEDIA_E2E=1` +
+  `CONTENTFORGE_MEDIA_CERTIFICATION=1` and durable one-shot budgets. Ordinary
+  unit/db/browser suites never spend. See
+  `docs/media-provider-onboarding.md` and `npm run test:media:certify`.
 
-### Evidence
+### Live certification evidence (one paid call each)
 
-Real local HTTP restart proof: AudioGeneration `592` survived SIGKILL and was
-completed by pg-boss as AudioAsset `669`: WAV, 377656 bytes, 7.866s, PCM,
-24000 Hz mono, SHA-256
-`3590a0128f47468dfa7fe56f59c7e377fc76df68d8b18353a2782789aafec619`.
-An identical request reused generation `592`.
+| Provider | Generation | Asset | Notes |
+| --- | --- | --- | --- |
+| ElevenLabs | AudioGeneration `605` | AudioAsset `687` | `eleven_flash_v2_5`, voice `hpp4J3Vq…`, MP3 167645 B, 10.403s, 44100 Hz mono, SHA-256 `95e7a28a…` |
+| fal.ai | VideoGeneration `606` | VideoAsset `688` | model `fal-ai/wan/v2.2-a14b/text-to-video`, request `01a0b55f…`, MP4 122820 B, 1.063s, 854×480, SHA-256 `72e1252e…`; import via reconcile after status-URL fix (no second ContentForge budget consume) |
 
-Verification: TypeScript 0; build PASS; unit 539/539; PostgreSQL 263/263;
-provider contract 6/6 (including real local speech); audio DB 4/4; agent E2E
-22/22 (including `generate_audio` + generic status); workspace/browser E2E
-19/19; focused Playwright workspace render 2/2.
+Budget file: `elevenlabsCalls=1`, `falCalls=1`. Re-running certify refuses further paid submits.
 
-Video regression evidence remains valid and was re-probed: Video Factory
-`cfvg-9000271.mp4` is H.264 1080×1920, 2.000s, 126848 bytes, SHA-256
-`fa78ff28c00be603b8e55c9ac974197b15fb8f3626002b91fdabc6ce731dfa4b`.
-OpenShorts health is 200 and real job
-`10090da1-28cb-4045-8606-34410cdb4fd4` remains completed with three clips
-from Ollama `llama3.1:8b-16k`. Neither provider implementation was changed.
+### Verification
 
-No API key, base URL, upload URL, binary, or unrestricted voice-cloning input
-is exposed in discovery, agent payloads, events, or artifacts.
+TypeScript 0; fal/elevenlabs/mediaCertification/provider-contract unit tests
+pass (spend-free). Live certify + fal reconcile completed against
+`cf_e2e_live`. Video Factory / OpenShorts / macos-say adapters unchanged.
+
+### Deferred
+
+HyperFrames Cloud; additional aggregators; local Piper/Kokoro unless already
+installed.
 
 ## Phase 27.2 — Real OpenShorts Local Processing
 

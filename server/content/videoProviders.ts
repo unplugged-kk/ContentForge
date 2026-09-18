@@ -26,6 +26,7 @@ export const LOCAL_VIDEO_FIXTURE_ID = "local-video-fixture";
 export const PRODUCTION_VIDEO_PROVIDERS = new Set([
   VIDEO_FACTORY_PROVIDER_ID,
   HYPERFRAMES_CLOUD_PROVIDER_ID,
+  "fal",
 ]);
 
 export class VideoProviderUnavailableError extends Error {

@@ -48,6 +48,8 @@ import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { createMacosSayProvider } from "./visualProviders/macosSay";
+import { createElevenLabsProvider } from "./visualProviders/elevenlabs";
+import { createFalProvider } from "./visualProviders/fal";
 import { createConfiguredVideoFactoryProvider } from "./videoFactoryProvider";
 import { registerOptionalHyperframesCloudProvider } from "./videoProviders";
 import { runVisualGeneration } from "./visualService";
@@ -111,6 +113,10 @@ export function registerBuiltinVisualProviders(): void {
   // Real local TTS adapter. Registration is stable; health/configuration
   // decides whether it is selectable as processing-ready.
   registerVisualProvider(createMacosSayProvider());
+  // Cloud TTS / video adapters. Paid generate() requires explicit certification
+  // or CONTENTFORGE_ALLOW_PAID_MEDIA=1 — ordinary tests never spend quota.
+  registerVisualProvider(createElevenLabsProvider());
+  registerVisualProvider(createFalProvider());
   registerOptionalHyperframesCloudProvider();
 }
 

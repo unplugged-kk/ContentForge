@@ -1105,46 +1105,27 @@ Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
 **Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
 VideoTemplate revisions; editor; auto-publish.
 
-## Phase 27.3 — Pluggable Media Provider Platform (partial)
+## Phase 27.3 — Pluggable Media Provider Platform (done)
 
-**Architecture.** The existing `VisualProviderPort` is the canonical
-image/video/audio boundary. It now declares models, objective capabilities,
-voice bindings, normalized health, and normalized error classes. Provider and
-model choice are frozen configuration, not domain models. AudioGeneration and
-AudioAsset are typed `kind=audio` views over the existing durable
-`visual_generations` / immutable `visual_assets` tables and `visual.run`
-pg-boss job.
+**Status:** IMPLEMENTED.
 
-**Real audio.** The `macos-say` adapter runs `/usr/bin/say` without a shell,
-allows configured voice IDs only, converts to WAV through ffmpeg, probes media
-through ffprobe, validates bytes and stream metadata, and imports through
-`AssetStoragePort`. Live HTTP evidence produced AudioAsset 669 from
-AudioGeneration 592: 377656 bytes, 7.866s, 24000 Hz mono, content hash
-`3590a0128f47468dfa7fe56f59c7e377fc76df68d8b18353a2782789aafec619`.
-SIGKILL after durable accept recovered the same generation; duplicate request
-reused it.
+**Architecture.** Unchanged: `VisualProviderPort` + `visual_generations` /
+`visual_assets` + `visual.run` + `AssetStoragePort`. Provider/model separation
+intact. No second queue, domain tables, agent tools, or workspace panels.
 
-**Surfaces.** Registry-driven discovery is exposed at
-`/api/media/providers`, `/api/video/providers`, and `/api/audio/providers`.
-The agent uses `generate_audio`, model-aware `generate_video`, and generic
-`get_generation_status`. Workspace selection is provider/model/voice neutral.
-An `audio` Artifact payload can pin a ready AudioAsset for review/approval,
-but no audio publication channel or composition engine was added.
+**Cloud audio.** `elevenlabs` adapter — sync TTS, voice discovery, spend
+guards, observational `character-cost` metadata. Live: AudioGeneration `605` →
+AudioAsset `687` (MP3, 167645 B, 10.403s).
 
-**Verification.** TypeScript 0; build PASS; unit 539/539; PostgreSQL
-263/263; media provider contract 6/6; audio DB 4/4; agent live E2E 22/22;
-workspace/browser live E2E 19/19; focused Playwright 2/2.
+**Cloud video.** `fal` adapter — queue submit; status/result via app-namespace
+URLs + persisted request identity; certification budget. Live: VideoGeneration
+`606` / fal request `01a0b55f…` → VideoAsset `688` (MP4 854×480, 122820 B,
+1.063s) after reconcile (no second ContentForge budget consume).
 
-**Existing providers.** Video Factory and OpenShorts implementations remain
-unchanged. The real Video Factory MP4 and completed three-clip OpenShorts +
-Ollama job were re-probed as regression evidence.
+**Spend protection.** Dual flags + durable `MEDIA_CERT_MAX_*=1` + cert keys
+`phase27.3-*-certification-v1`. `npm run test:media:certify` is manual/opt-in.
 
-**Partial status.** No cloud audio credential and no additional
-video-generation provider credential is configured, so those two required
-live proofs are blocked. FAL, Replicate, Runway, Veo, Kling, Luma, and
-ElevenLabs are candidate configuration—not claimed integrations. HyperFrames
-Cloud remains deferred. See `docs/media-provider-onboarding.md` for the
-six-step adapter and certification contract.
+**Deferred.** HyperFrames Cloud; Phase 28.
 
 ## Phase 27.2 — Real OpenShorts Local Processing (done)
 
