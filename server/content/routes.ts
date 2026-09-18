@@ -75,7 +75,7 @@ import {
 import { publishArtifactToChannels, DistributionInputError } from "./distribution";
 import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
-import { requestStyleAnalysis, ReferenceNotFoundError, StyleServiceInputError } from "./styleService";
+import { requestStyleAnalysis, activateStyleProfile, publicReference, publicStyleProfile, ReferenceNotFoundError, StyleServiceInputError, StyleProfileNotFoundError } from "./styleService";
 import { listChannelAdapters } from "./adapters";
 import {
   createVisualGeneration,
@@ -1426,8 +1426,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   // ── Style intelligence (Phase 11) — minimal surface for real-post learning ──
   const createReferenceBody = z.object({
     text: z.string().trim().min(1).max(20_000),
-    sourceType: z.enum(["x_post", "linkedin_post", "manual"]).default("manual"),
+    sourceType: z
+      .enum(["x_post", "x_thread", "linkedin_post", "instagram_caption", "article", "document", "pasted_text", "manual"])
+      .default("manual"),
     title: z.string().trim().max(500).optional(),
+    sourceUrl: z.string().trim().url().max(2000).optional(),
+    sourcePlatform: z.string().trim().max(30).optional(),
   });
 
   /** Authored source content — the durable, owner-scoped input to style analysis. */
@@ -1441,15 +1445,34 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         rawContent: body.text,
         sourceType: body.sourceType,
         title: body.title ?? null,
+        sourceUrl: body.sourceUrl ?? null,
+        sourcePlatform: body.sourcePlatform ?? null,
+        provenance: "pasted_text",
       });
-      return res.status(201).json({ id: reference.id, sourceType: reference.sourceType, title: reference.title });
+      return res.status(201).json(publicReference(reference));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       return next(error);
     }
   });
 
+  router.get("/style/references", async (req, res, next) => {
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const userId = getUserId(req) ?? 1;
+      const rows = await deps.style.storage.listOwnedReferences(userId);
+      return res.json({ references: rows.map(publicReference) });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   const requestStyleAnalysisBody = z.object({
+    regenerate: z.boolean().optional(),
+  });
+
+  const requestCorpusAnalysisBody = z.object({
+    referenceIds: z.array(z.number().int().positive()).min(1).max(40),
     regenerate: z.boolean().optional(),
   });
 
@@ -1488,8 +1511,11 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid style analysis id" });
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
+      const userId = getUserId(req) ?? 1;
       const analysis = await deps.style.storage.getStyleAnalysis(id);
-      if (!analysis) return res.status(404).json({ message: "Style analysis not found" });
+      if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
+        return res.status(404).json({ message: "Style analysis not found" });
+      }
       const profile = await deps.style.storage.getStyleProfileByAnalysisId(id);
       return res.json({
         id: analysis.id,
@@ -1497,8 +1523,94 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         errorClass: analysis.errorClass,
         errorMessage: analysis.errorMessage,
         styleProfileId: profile?.id ?? null,
+        kind: (analysis.requestSnapshot as { kind?: string } | null)?.kind ?? "single",
+        sample: (analysis.requestSnapshot as { frozenReferences?: unknown[] } | null)?.frozenReferences?.length ?? 1,
       });
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/style-analyses/:id/observations", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid style analysis id" });
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const userId = getUserId(req) ?? 1;
+      const analysis = await deps.style.storage.getStyleAnalysis(id);
+      if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
+        return res.status(404).json({ message: "Style analysis not found" });
+      }
+      const observations = await deps.style.storage.listStyleObservations(id);
+      return res.json({
+        observations: observations.map((row) => ({
+          id: row.id,
+          category: row.category,
+          key: row.observationKey,
+          value: row.value,
+          confidence: row.confidence,
+          evidenceReferenceIds: row.evidenceReferenceIds,
+          analysisVersion: row.analysisVersion,
+        })),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/style/analyses", async (req, res, next) => {
+    if (!deps.style || !deps.enqueueStyleAnalysis) {
+      return res.status(503).json({ message: "Style analysis is not configured" });
+    }
+    try {
+      const body = requestCorpusAnalysisBody.parse(req.body ?? {});
+      const userId = getUserId(req) ?? 1;
+      const { analysis, created } = await requestStyleAnalysis(
+        userId,
+        { referenceIds: body.referenceIds, regenerate: body.regenerate },
+        deps.style,
+      );
+      if (analysis.status === "requested") {
+        try {
+          await deps.enqueueStyleAnalysis(analysis);
+        } catch (error) {
+          return res.status(503).json({ message: "Style analysis queue unavailable", id: analysis.id, detail: message(error) });
+        }
+      }
+      return res.status(created ? 201 : 200).json({
+        id: analysis.id,
+        status: analysis.status,
+        correlationId: analysis.correlationId,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      if (error instanceof ReferenceNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof StyleServiceInputError) return res.status(400).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/style/profiles", async (req, res, next) => {
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const userId = getUserId(req) ?? 1;
+      const rows = await deps.style.storage.listStyleProfiles(userId);
+      return res.json({ profiles: rows.map(publicStyleProfile) });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/style/profiles/:id/activate", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid style profile id" });
+    if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
+    try {
+      const userId = getUserId(req) ?? 1;
+      const profile = await activateStyleProfile(userId, id, deps.style);
+      return res.json(publicStyleProfile(profile));
+    } catch (error) {
+      if (error instanceof StyleProfileNotFoundError) return res.status(404).json({ message: error.message });
       return next(error);
     }
   });
@@ -1513,17 +1625,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!profile || (profile.userId !== null && profile.userId !== userId)) {
         return res.status(404).json({ message: "Style profile not found" });
       }
-      return res.json({
-        id: profile.id,
-        name: profile.name,
-        sourceReferenceId: profile.sourceReferenceId,
-        analysisId: profile.analysisId,
-        confidence: profile.confidence,
-        analyzerVersion: profile.analyzerVersion,
-        structuredObservation: profile.structuredObservation,
-        supersedesId: profile.supersedesId,
-        createdAt: profile.createdAt,
-      });
+      return res.json(publicStyleProfile(profile));
     } catch (error) {
       return next(error);
     }

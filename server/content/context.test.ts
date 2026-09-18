@@ -53,6 +53,7 @@ describe("context assembly — resolution and ordering", () => {
     assert.equal(result.sources[0].type, "profile");
     assert.equal(result.sources[0].id, "profile:1");
     assert.match(result.sources[0].content, /DevOps/);
+    assert.match(result.sources[0].content, /EXPLICIT PREFERENCE/);
     assert.match(result.sources[0].provenance, /user_profile#1/);
   });
 
@@ -97,6 +98,7 @@ describe("context assembly — resolution and ordering", () => {
     );
     assert.deepEqual(result.sources.map((s) => s.type), ["profile", "reference", "style"]);
     assert.deepEqual(result.sources.map((s) => s.id), ["profile:1", "vault:10", "style:20"]);
+    assert.match(result.sources[2].content, /OBSERVED STYLE/);
   });
 
   it("excludes anything not favorited — deterministic inclusion, not popularity/relevance", async () => {

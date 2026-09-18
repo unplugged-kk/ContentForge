@@ -39,7 +39,16 @@ import { DistributionInputError, publishArtifactToChannels } from "../content/di
 import { createVisualGeneration, VisualServiceInputError } from "../content/visualService";
 import { computeAnalyticsSummary } from "../content/learning/summary";
 import type { ContentStoragePort } from "../content/storage";
-import type { VisualGeneration, Artifact, GenerationJob, Publication } from "@shared/schema";
+import type { VisualGeneration, Artifact, GenerationJob, Publication, StyleAnalysis } from "@shared/schema";
+import {
+  activateStyleProfile,
+  publicStyleProfile,
+  requestStyleAnalysis,
+  ReferenceNotFoundError,
+  StyleProfileNotFoundError,
+  StyleServiceInputError,
+  type StyleServiceDeps,
+} from "../content/styleService";
 import { envelope, invalid, notFound } from "./envelope";
 import type { ToolDefinition, ToolEnvelope, ToolExecutionContext } from "./types";
 
@@ -70,6 +79,8 @@ export interface AgentDomainDeps {
   enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
   enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
   enqueuePublication: (publication: Publication) => Promise<boolean>;
+  style?: StyleServiceDeps;
+  enqueueStyleAnalysis?: (analysis: StyleAnalysis) => Promise<boolean>;
 }
 
 const positiveId = z.number().int().positive();
@@ -85,7 +96,9 @@ function mapDomainError(tool: string, error: unknown): ToolEnvelope {
     error instanceof StoryNotFoundError ||
     error instanceof ResearchJobNotFoundError ||
     error instanceof ArtifactNotFoundError ||
-    error instanceof OpportunityNotFoundError
+    error instanceof OpportunityNotFoundError ||
+    error instanceof ReferenceNotFoundError ||
+    error instanceof StyleProfileNotFoundError
   ) {
     return notFound(tool, "resource");
   }
@@ -96,7 +109,8 @@ function mapDomainError(tool: string, error: unknown): ToolEnvelope {
     error instanceof VisualServiceInputError ||
     error instanceof RepurposeInputError ||
     error instanceof ScheduleInputError ||
-    error instanceof DistributionInputError
+    error instanceof DistributionInputError ||
+    error instanceof StyleServiceInputError
   ) {
     return invalid(tool, error.message);
   }
@@ -352,6 +366,57 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
       requiresApproval: false,
       capabilityStatus: "partial",
       execute: (_input, ctx) => getAnalytics(ctx),
+    },
+    {
+      name: "list_style_references",
+      description: "List the caller's reference content used for style intelligence.",
+      inputSchema: z.object({}),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (_input, ctx) => listStyleReferences(deps, ctx),
+    },
+    {
+      name: "analyze_reference_content",
+      description: "Queue style analysis for an explicitly selected, frozen reference set. Does not generate content.",
+      inputSchema: z.object({
+        referenceIds: z.array(positiveId).min(1).max(40),
+        regenerate: z.boolean().optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => analyzeReferenceContent(deps, input, ctx),
+    },
+    {
+      name: "get_style_profile",
+      description: "Read an owned style profile revision, or the currently active corpus profile.",
+      inputSchema: z.object({ styleProfileId: positiveId.optional() }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getStyleProfileTool(deps, input, ctx),
+    },
+    {
+      name: "activate_style_profile",
+      description: "Activate a style profile revision for future ContextAssembly. Does not mutate historical GenerationJobs.",
+      inputSchema: z.object({ styleProfileId: positiveId }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => activateStyleProfileTool(deps, input, ctx),
     },
   ];
 }
@@ -870,6 +935,124 @@ async function getAnalytics(ctx: ToolExecutionContext): Promise<ToolEnvelope> {
     data: { ...summary, capability: "partial", ranking: false, bestTimes: false },
     capability: "partial",
   });
+}
+
+function styleUnavailable(tool: string): ToolEnvelope {
+  return envelope({
+    tool,
+    status: "invalid",
+    summary: "Style intelligence is not configured",
+    failureClass: "permanent",
+    error: "Style intelligence is not configured",
+  });
+}
+
+async function listStyleReferences(deps: AgentDomainDeps, ctx: ToolExecutionContext): Promise<ToolEnvelope> {
+  if (!deps.style) return styleUnavailable("list_style_references");
+  const rows = await deps.style.storage.listOwnedReferences(ctx.ownerId);
+  return envelope({
+    tool: "list_style_references",
+    status: "success",
+    summary: `${rows.length} reference(s)`,
+    refs: {},
+    data: {
+      references: rows.slice(0, 40).map((row) => ({
+        id: row.id,
+        sourceType: row.sourceType,
+        title: row.title,
+        isActive: row.isActive ?? true,
+      })),
+    },
+  });
+}
+
+async function analyzeReferenceContent(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  if (!deps.style || !deps.enqueueStyleAnalysis) return styleUnavailable("analyze_reference_content");
+  try {
+    const referenceIds = (input.referenceIds as number[]) ?? [];
+    const { analysis, created } = await requestStyleAnalysis(
+      ctx.ownerId,
+      { referenceIds, regenerate: input.regenerate === true },
+      deps.style,
+    );
+    if (analysis.status === "requested") await deps.enqueueStyleAnalysis(analysis);
+    return envelope({
+      tool: "analyze_reference_content",
+      status: analysis.status === "ready" ? "success" : "queued",
+      summary: created ? "StyleAnalysisJob queued" : "StyleAnalysisJob reused",
+      refs: { styleAnalysisId: analysis.id, agentRunId: ctx.agentRunId, toolCallId: ctx.toolCallId },
+      data: { status: analysis.status, created, referenceIds },
+    });
+  } catch (error) {
+    return mapDomainError("analyze_reference_content", error);
+  }
+}
+
+async function getStyleProfileTool(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  if (!deps.style) return styleUnavailable("get_style_profile");
+  try {
+    if (typeof input.styleProfileId === "number") {
+      const profile = await deps.style.storage.getStyleProfile(input.styleProfileId);
+      if (!profile || (profile.userId !== null && profile.userId !== ctx.ownerId)) {
+        return notFound("get_style_profile", "style_profile");
+      }
+      return envelope({
+        tool: "get_style_profile",
+        status: "success",
+        summary: `Style profile ${profile.id} (${profile.kind})`,
+        refs: { styleProfileId: profile.id, styleAnalysisId: profile.analysisId },
+        data: publicStyleProfile(profile),
+      });
+    }
+    const rows = await deps.style.storage.listStyleProfiles(ctx.ownerId);
+    const active = rows.find((row) => row.isActive && row.kind === "corpus") ?? rows.find((row) => row.isActive) ?? null;
+    if (!active) {
+      return envelope({
+        tool: "get_style_profile",
+        status: "success",
+        summary: "No active style profile",
+        refs: {},
+        data: { active: null },
+      });
+    }
+    return envelope({
+      tool: "get_style_profile",
+      status: "success",
+      summary: `Active style profile ${active.id}`,
+      refs: { styleProfileId: active.id, styleAnalysisId: active.analysisId },
+      data: publicStyleProfile(active),
+    });
+  } catch (error) {
+    return mapDomainError("get_style_profile", error);
+  }
+}
+
+async function activateStyleProfileTool(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  if (!deps.style) return styleUnavailable("activate_style_profile");
+  try {
+    const profile = await activateStyleProfile(ctx.ownerId, Number(input.styleProfileId), deps.style);
+    return envelope({
+      tool: "activate_style_profile",
+      status: "success",
+      summary: `Activated style profile ${profile.id} for future generation`,
+      refs: { styleProfileId: profile.id },
+      data: publicStyleProfile(profile),
+    });
+  } catch (error) {
+    return mapDomainError("activate_style_profile", error);
+  }
 }
 
 export { createOpportunityFromStory };

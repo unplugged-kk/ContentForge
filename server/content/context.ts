@@ -107,6 +107,11 @@ export interface ContextStorageReader {
       /** Phase 11: null for legacy/manual rows that predate structured observation. */
       confidence: string | null;
       analysisId: number | null;
+      kind?: string | null;
+      isActive?: boolean | null;
+      sampleCount?: number | null;
+      sampleChannels?: string[] | null;
+      channelOverlays?: Record<string, unknown> | null;
     }>
   >;
   /**
@@ -161,6 +166,12 @@ export function createDatabaseContextReader(
           usageCount: styleProfiles.usageCount,
           confidence: styleProfiles.confidence,
           analysisId: styleProfiles.analysisId,
+          kind: styleProfiles.kind,
+          isActive: styleProfiles.isActive,
+          sampleCount: styleProfiles.sampleCount,
+          sampleChannels: styleProfiles.sampleChannels,
+          channelOverlays: styleProfiles.channelOverlays,
+          isFavorite: styleProfiles.isFavorite,
         })
         .from(styleProfiles)
         .where(
@@ -175,8 +186,14 @@ export function createDatabaseContextReader(
         // is NULL-unsafe (SQL's three-valued logic would silently drop every
         // legacy row with no confidence column at all). `null`/`"strong"`/
         // `"weak"` all pass; only the literal `"insufficient"` is excluded.
-        .limit(limit * 2);
-      return rows.filter((r) => r.confidence !== "insufficient").slice(0, limit);
+        .limit(limit * 4);
+      const eligible = rows.filter((r) => r.confidence !== "insufficient");
+      const activeCorpus = eligible.filter((r) => r.kind === "corpus" && r.isActive);
+      if (activeCorpus.length > 0) {
+        const favorites = eligible.filter((r) => r.isFavorite && r.kind !== "corpus");
+        return [...activeCorpus, ...favorites].slice(0, limit);
+      }
+      return eligible.filter((r) => r.kind !== "corpus").slice(0, limit);
     },
     async listLearningSummary(ownerId) {
       const { learningSummaryForContext } = await import("./learning/summary");
@@ -216,16 +233,21 @@ function renderProfileSource(profile: NonNullable<Awaited<ReturnType<ContextStor
   return lines.join("\n");
 }
 
+export interface AssembleContextOptions {
+  /** When set, include a channel overlay from the active style profile if one exists. */
+  channel?: string;
+}
+
 /**
  * Resolve the current, owner-scoped context. Deterministic: fixed source
- * order (profile, then references, then style, then learning summary),
+ * order (explicit profile, then references, then observed style, then learning),
  * fixed per-source and total character budgets, no ranking/relevance
- * scoring, no embeddings. Learning is counts-only DATA and never mutates
- * profile/style/memory.
+ * scoring, no embeddings. Observed style never outranks explicit preference.
  */
 export async function assembleContext(
   ownerId: number | null,
   reader: ContextStorageReader,
+  options: AssembleContextOptions = {},
 ): Promise<ContextAssembly> {
   if (ownerId === null) {
     return { sources: [], sourceRefs: [], renderedBlock: "", contextHash: await sha256("{}") };
@@ -240,9 +262,12 @@ export async function assembleContext(
       id: `profile:${ownerId}`,
       type: "profile",
       ownerId,
-      content: truncate(profileText, MAX_CHARS_PER_SOURCE),
+      content: truncate(
+        `EXPLICIT PREFERENCE (authoritative, outranks observed style): ${profileText}`,
+        MAX_CHARS_PER_SOURCE,
+      ),
       provenance: `user_profile#${ownerId}@${profile!.updatedAt.toISOString()}`,
-      metadata: {},
+      metadata: { layer: "explicit" },
     });
   }
 
@@ -261,13 +286,32 @@ export async function assembleContext(
   const styleItems = await reader.listFavoriteStyleProfiles(ownerId, MAX_STYLE_SOURCES);
   for (const item of styleItems) {
     const confidenceLabel = item.confidence ? ` (${item.confidence} evidence)` : "";
+    const sampleLabel = item.sampleCount ? ` from ${item.sampleCount} references` : "";
+    const overlay =
+      options.channel && item.channelOverlays && typeof item.channelOverlays === "object"
+        ? (item.channelOverlays[options.channel] as { snippet?: string; sampleCount?: number } | undefined)
+        : undefined;
+    const overlayText =
+      overlay?.snippet && (overlay.sampleCount ?? 0) >= 2
+        ? ` | Channel overlay (${options.channel}): ${overlay.snippet}`
+        : "";
     sources.push({
       id: `style:${item.id}`,
       type: "style",
       ownerId,
-      content: truncate(`${item.name}${confidenceLabel}: ${item.stylePromptSnippet}`, MAX_CHARS_PER_SOURCE),
+      content: truncate(
+        `OBSERVED STYLE (evidence${sampleLabel}, does not override explicit preference)${confidenceLabel}: ${item.name}${overlayText}: ${item.stylePromptSnippet}`,
+        MAX_CHARS_PER_SOURCE,
+      ),
       provenance: item.analysisId ? `style_profiles#${item.id}(analysis#${item.analysisId})` : `style_profiles#${item.id}`,
-      metadata: { usageCount: item.usageCount ?? 0, confidence: item.confidence },
+      metadata: {
+        usageCount: item.usageCount ?? 0,
+        confidence: item.confidence,
+        layer: "observed",
+        kind: item.kind ?? "single",
+        sampleCount: item.sampleCount ?? null,
+        channel: options.channel ?? null,
+      },
     });
   }
 

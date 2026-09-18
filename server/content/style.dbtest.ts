@@ -24,6 +24,7 @@ import {
   references,
   stories,
   styleAnalyses,
+  styleObservations,
   styleProfiles,
 } from "@shared/schema";
 import { DatabaseContentStorage } from "./storage";
@@ -33,6 +34,7 @@ import { createGenerationJob, type GenerationModelPort } from "./generation";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createDatabaseContextReader, assembleContext } from "./context";
 import {
+  activateStyleProfile,
   createDatabaseStyleStorage,
   requestStyleAnalysis,
   runStyleAnalysis,
@@ -48,6 +50,8 @@ const describeDb = CONNECTION ? describe : describe.skip;
 const RUN = `sty${Date.now().toString(36)}`;
 const OWNER_A = 700_000 + (Date.now() % 90_000);
 const OWNER_B = OWNER_A + 1;
+const OWNER_PIN = OWNER_A + 2;
+const OWNER_CH = OWNER_A + 3;
 
 describeDb("style intelligence (db)", () => {
   let pool: pg.Pool;
@@ -82,9 +86,13 @@ describeDb("style intelligence (db)", () => {
     await db.delete(generationPolicies).where(like(generationPolicies.name, `${RUN}%`));
 
     // Style rows are scoped by the two sentinel owners, not by RUN tag.
-    const refRows = await db.select({ id: references.id }).from(references).where(inArray(references.userId, [OWNER_A, OWNER_B]));
+    const refRows = await db.select({ id: references.id }).from(references).where(inArray(references.userId, [OWNER_A, OWNER_B, OWNER_PIN, OWNER_CH]));
     const refIds = refRows.map((r) => r.id);
     if (refIds.length) {
+      await db.delete(styleObservations).where(inArray(styleObservations.referenceId, refIds));
+      const analysisRows = await db.select({ id: styleAnalyses.id }).from(styleAnalyses).where(inArray(styleAnalyses.referenceId, refIds));
+      const analysisIds = analysisRows.map((r) => r.id);
+      if (analysisIds.length) await db.delete(styleObservations).where(inArray(styleObservations.analysisId, analysisIds));
       await db.delete(styleProfiles).where(inArray(styleProfiles.sourceReferenceId, refIds));
       await db.delete(styleAnalyses).where(inArray(styleAnalyses.referenceId, refIds));
       await db.delete(references).where(inArray(references.id, refIds));
@@ -92,11 +100,11 @@ describeDb("style intelligence (db)", () => {
     await pool.end().catch(() => {});
   });
 
-  async function seedStory(suffix: string) {
+  async function seedStory(suffix: string, ownerId = OWNER_A) {
     const [story] = await db
       .insert(stories)
       .values({
-        userId: OWNER_A,
+        userId: ownerId,
         researchJobId: null,
         provenance: "human",
         title: `${RUN}-${suffix} story`,
@@ -284,4 +292,154 @@ describeDb("style intelligence (db)", () => {
     const reloaded = await content().getGenerationJob(jobA.job.id);
     assert.deepEqual(reloaded!.policySnapshot as any, frozenSnapshot, "the frozen snapshot never re-reads live style state");
   });
+
+  it("corpus analysis writes provenance-backed observations and requires activation to enter context", async () => {
+    const casual = "Gonna ship this. Short hook? Wow. 🔥 ".repeat(6);
+    const casual2 = "Dude this is the take. Another short line? ".repeat(6);
+    const styleDeps: StyleServiceDeps = { storage: styleStore() };
+    const a = await styleDeps.storage.insertReference({ userId: OWNER_A, rawContent: casual, sourceType: "x_post", title: `${RUN} casual a` });
+    const b = await styleDeps.storage.insertReference({ userId: OWNER_A, rawContent: casual2, sourceType: "x_post", title: `${RUN} casual b` });
+    const { analysis } = await requestStyleAnalysis(OWNER_A, { referenceIds: [a.id, b.id] }, styleDeps);
+    const run = await runStyleAnalysis(analysis.id, styleDeps);
+    assert.equal(run.status, "ready");
+    const observations = await styleDeps.storage.listStyleObservations(analysis.id);
+    assert.ok(observations.length >= 3, "structured observations persisted");
+    assert.ok(observations.every((row) => (row.evidenceReferenceIds ?? []).length >= 1), "every observation has provenance");
+
+    const before = await assembleContext(OWNER_A, createDatabaseContextReader(db));
+    const corpusInBefore = before.sources.find((s) => s.id === `style:${run.styleProfileId}`);
+    assert.equal(corpusInBefore, undefined, "inactive corpus profile must not enter context");
+
+    await activateStyleProfile(OWNER_A, run.styleProfileId!, styleDeps);
+    const after = await assembleContext(OWNER_A, createDatabaseContextReader(db));
+    const corpus = after.sources.find((s) => s.type === "style" && s.id === `style:${run.styleProfileId}`);
+    assert.ok(corpus, "activated corpus profile enters context");
+    assert.match(corpus!.content, /OBSERVED STYLE/);
+    assert.match(corpus!.content, /from 2 references/);
+  });
+
+  it("style v1 stays pinned on Job A after v2 is activated (real persistence)", async () => {
+    const { opportunity } = await seedStory("corpus-pin", OWNER_PIN);
+    const styleDeps: StyleServiceDeps = { storage: styleStore() };
+    const casualA = await styleDeps.storage.insertReference({
+      userId: OWNER_PIN,
+      rawContent: "Gonna ship a short take? Wow. Another punchy line. ".repeat(5),
+      sourceType: "x_post",
+      title: `${RUN} pin casual a`,
+    });
+    const casualB = await styleDeps.storage.insertReference({
+      userId: OWNER_PIN,
+      rawContent: "Dude another short hook? Ship it. ".repeat(5),
+      sourceType: "x_post",
+      title: `${RUN} pin casual b`,
+    });
+    const analysisA = await requestStyleAnalysis(OWNER_PIN, { referenceIds: [casualA.id, casualB.id] }, styleDeps);
+    const runA = await runStyleAnalysis(analysisA.analysis.id, styleDeps);
+    await activateStyleProfile(OWNER_PIN, runA.styleProfileId!, styleDeps);
+
+    const jobA = await createGenerationJob(opportunity.id, {}, generationDeps());
+    const snapshotA = jobA.job.policySnapshot as any;
+    assert.match(snapshotA.systemPrompt, /OBSERVED STYLE|strong evidence/);
+
+    const formalA = await styleDeps.storage.insertReference({
+      userId: OWNER_PIN,
+      rawContent:
+        "Therefore the executive stakeholders should furthermore evaluate the scheduling policy. This is a long formal paragraph without slang. ".repeat(4),
+      sourceType: "linkedin_post",
+      title: `${RUN} pin formal a`,
+    });
+    const formalB = await styleDeps.storage.insertReference({
+      userId: OWNER_PIN,
+      rawContent:
+        "Furthermore the professional narrative uses longer paragraphs and a closing invitation. ".repeat(4),
+      sourceType: "linkedin_post",
+      title: `${RUN} pin formal b`,
+    });
+    const analysisB = await requestStyleAnalysis(OWNER_PIN, { referenceIds: [formalA.id, formalB.id] }, styleDeps);
+    const runB = await runStyleAnalysis(analysisB.analysis.id, styleDeps);
+    await activateStyleProfile(OWNER_PIN, runB.styleProfileId!, styleDeps);
+
+    const jobB = await createGenerationJob(opportunity.id, { regenerate: true }, generationDeps());
+    assert.notEqual(jobA.job.policyId, jobB.job.policyId, "v2 activation must change policy identity");
+
+    const reloadedA = await content().getGenerationJob(jobA.job.id);
+    assert.deepEqual(reloadedA!.policySnapshot as any, snapshotA, "Job A remains pinned to v1");
+    const snapshotB = jobB.job.policySnapshot as any;
+    assert.notEqual(JSON.stringify(snapshotA.systemPrompt), JSON.stringify(snapshotB.systemPrompt));
+  });
+
+  it("explicit opportunity objective is preserved alongside observed style (precedence)", async () => {
+    const { opportunity } = await seedStory("override", OWNER_PIN);
+    await db
+      .update(opportunities)
+      .set({ objective: "Write this in formal executive language." })
+      .where(eq(opportunities.id, opportunity.id));
+    const styleDeps: StyleServiceDeps = { storage: styleStore() };
+    const casual = await styleDeps.storage.insertReference({
+      userId: OWNER_PIN,
+      rawContent: "Gonna keep this casual dude. Short take? ".repeat(6),
+      sourceType: "x_post",
+      title: `${RUN} override casual`,
+    });
+    const { analysis } = await requestStyleAnalysis(OWNER_PIN, { referenceId: casual.id }, styleDeps);
+    const run = await runStyleAnalysis(analysis.id, styleDeps);
+    await activateStyleProfile(OWNER_PIN, run.styleProfileId!, styleDeps);
+    const job = await createGenerationJob(opportunity.id, { regenerate: true }, generationDeps());
+    const snapshot = job.job.policySnapshot as any;
+    assert.match(snapshot.userPrompt, /formal executive language/);
+    assert.match(snapshot.systemPrompt, /outrank observed style/);
+  });
+
+  it("channel overlay is selected for the same story without a second research run", async () => {
+    const { story } = await seedStory("channel", OWNER_CH);
+    const xOpp = await createOpportunityFromStory(
+      story.id,
+      { concept: "channel x", objective: "x take", format: "x_post", channel: "x" },
+      { opportunities: content(), stories: storyStore() },
+    );
+    const liOpp = await createOpportunityFromStory(
+      story.id,
+      { concept: "channel li", objective: "li take", format: "linkedin_post", channel: "linkedin" },
+      { opportunities: content(), stories: storyStore() },
+    );
+    const styleDeps: StyleServiceDeps = { storage: styleStore() };
+    const x1 = await styleDeps.storage.insertReference({
+      userId: OWNER_CH,
+      rawContent: "Short X hook? Punchy. Another line. ".repeat(6),
+      sourceType: "x_post",
+      title: `${RUN} x1`,
+    });
+    const x2 = await styleDeps.storage.insertReference({
+      userId: OWNER_CH,
+      rawContent: "X take two? Keep it tight. ".repeat(6),
+      sourceType: "x_post",
+      title: `${RUN} x2`,
+    });
+    const li1 = await styleDeps.storage.insertReference({
+      userId: OWNER_CH,
+      rawContent:
+        "Therefore LinkedIn readers should consider the longer argument with professional framing and a closing invitation to discuss. ".repeat(4),
+      sourceType: "linkedin_post",
+      title: `${RUN} li1`,
+    });
+    const li2 = await styleDeps.storage.insertReference({
+      userId: OWNER_CH,
+      rawContent:
+        "Furthermore the executive narrative on LinkedIn uses longer paragraphs and a softer close for stakeholders. ".repeat(4),
+      sourceType: "linkedin_post",
+      title: `${RUN} li2`,
+    });
+    const { analysis } = await requestStyleAnalysis(OWNER_CH, { referenceIds: [x1.id, x2.id, li1.id, li2.id] }, styleDeps);
+    const run = await runStyleAnalysis(analysis.id, styleDeps);
+    const profile = await styleDeps.storage.getStyleProfile(run.styleProfileId!);
+    assert.ok((profile!.channelOverlays as any).x, "x overlay from sufficient sample");
+    assert.ok((profile!.channelOverlays as any).linkedin, "linkedin overlay from sufficient sample");
+    await activateStyleProfile(OWNER_CH, run.styleProfileId!, styleDeps);
+
+    const jobX = await createGenerationJob(xOpp.id, { regenerate: true }, generationDeps());
+    const jobLi = await createGenerationJob(liOpp.id, { regenerate: true }, generationDeps());
+    assert.match((jobX.job.policySnapshot as any).systemPrompt, /Channel overlay \(x\)/);
+    assert.match((jobLi.job.policySnapshot as any).systemPrompt, /Channel overlay \(linkedin\)/);
+  });
 });
+

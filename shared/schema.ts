@@ -150,6 +150,10 @@ export const references = pgTable("references", {
   notes: text("notes"),
   batchId: varchar("batch_id", { length: 50 }),
   batchSynthesisJson: jsonb("batch_synthesis_json"),
+  /** Phase 24: inactive references are excluded from analysis selection. */
+  isActive: boolean("is_active").default(true),
+  /** Phase 24: how this row entered the system (paste, import, connector). */
+  provenance: varchar("provenance", { length: 200 }),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -177,6 +181,19 @@ export const styleProfiles = pgTable("style_profiles", {
   sourceContentHash: varchar("source_content_hash", { length: 64 }),
   /** Immutable revision chain (never mutate an existing observation). */
   supersedesId: integer("supersedes_id").references((): AnyPgColumn => styleProfiles.id),
+  // ── Phase 24: versioned derived style profile (corpus or single) ───────────
+  /** false until explicitly activated; only the active corpus revision enters future assembly. */
+  isActive: boolean("is_active").default(false).notNull(),
+  /** single = one reference (Phase 11); corpus = frozen multi-reference analysis (Phase 24). */
+  kind: varchar("kind", { length: 20 }).default("single").notNull(),
+  /** Channel overlay identity (null = global). Never manufactured from unrelated content. */
+  channel: varchar("channel", { length: 40 }),
+  sampleCount: integer("sample_count").default(1),
+  sampleChannels: text("sample_channels").array(),
+  /** Algorithm identity (style-analysis-v1). Distinct from analyzerVersion (model wrapper). */
+  analysisVersion: varchar("analysis_version", { length: 40 }),
+  /** Bounded per-channel overlay snippets; empty when the sample cannot support overlays. */
+  channelOverlays: jsonb("channel_overlays").$type<Record<string, unknown>>().notNull().default({}),
 });
 
 /**
@@ -214,6 +231,34 @@ export const styleAnalyses = pgTable(
   ],
 );
 export type StyleAnalysis = typeof styleAnalyses.$inferSelect;
+
+/**
+ * StyleObservation (Phase 24) — one evidence-backed, structured signal produced
+ * by a StyleAnalysis. Never an opaque model paragraph. Provenance is the
+ * `evidence_reference_ids` set (and optional primary `reference_id`).
+ */
+export const styleObservations = pgTable(
+  "style_observations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    analysisId: integer("analysis_id").notNull().references(() => styleAnalyses.id),
+    styleProfileId: integer("style_profile_id").references(() => styleProfiles.id),
+    referenceId: integer("reference_id").references(() => references.id),
+    category: varchar("category", { length: 60 }).notNull(),
+    observationKey: varchar("observation_key", { length: 80 }).notNull(),
+    value: jsonb("value").$type<unknown>().notNull(),
+    confidence: varchar("confidence", { length: 20 }).notNull(),
+    evidenceReferenceIds: integer("evidence_reference_ids").array().notNull().default(sql`'{}'::integer[]`),
+    analysisVersion: varchar("analysis_version", { length: 40 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("style_observations_analysis_idx").on(table.analysisId),
+    index("style_observations_profile_idx").on(table.styleProfileId),
+  ],
+);
+export type StyleObservationRow = typeof styleObservations.$inferSelect;
 
 export const referenceContent = pgTable("reference_content", {
   id: serial("id").primaryKey(),
@@ -322,6 +367,7 @@ export const insertAiUsageLogSchema = createInsertSchema(aiUsageLog).omit({ id: 
 export const insertArticleSchema = createInsertSchema(articles).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertReferenceSchema = createInsertSchema(references).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertStyleProfileSchema = createInsertSchema(styleProfiles).omit({ id: true, createdAt: true });
+export const insertStyleObservationSchema = createInsertSchema(styleObservations).omit({ id: true, createdAt: true });
 export const insertReferenceContentSchema = createInsertSchema(referenceContent).omit({ id: true, createdAt: true });
 export const insertDiscoveredIdeaSchema = createInsertSchema(discoveredIdeas).omit({ id: true, discoveredAt: true });
 export const insertViralScoreSchema = createInsertSchema(viralScores).omit({ id: true, createdAt: true });
@@ -350,6 +396,7 @@ export type Reference = typeof references.$inferSelect;
 export type InsertReference = z.infer<typeof insertReferenceSchema>;
 export type StyleProfile = typeof styleProfiles.$inferSelect;
 export type InsertStyleProfile = z.infer<typeof insertStyleProfileSchema>;
+export type InsertStyleObservation = z.infer<typeof insertStyleObservationSchema>;
 export type ReferenceContent = typeof referenceContent.$inferSelect;
 export type InsertReferenceContent = z.infer<typeof insertReferenceContentSchema>;
 export type DiscoveredIdea = typeof discoveredIdeas.$inferSelect;

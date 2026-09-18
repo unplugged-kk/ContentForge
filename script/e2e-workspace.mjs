@@ -350,8 +350,22 @@ async function cookieHeader() {
     await page.locator('[data-testid="copilotkit-agent-workspace"]').waitFor();
     await page.locator('[data-testid="textarea-agent-composer"]').waitFor();
     await page.locator('[data-testid="panel-agent-capabilities"]').waitFor();
+    await page.locator('[data-testid="panel-style-intelligence"]').waitFor();
     await context.close();
-    return "workspace chrome visible";
+    return "workspace chrome + style panel visible";
+  });
+
+  await check("HTTP: operator can add reference content and list it", async () => {
+    const created = await httpCall("POST", "/api/references", {
+      text: `${RUN} Workspace style reference with enough characters to be meaningful for analysis.`,
+      sourceType: "manual",
+      title: `${RUN} ws-ref`,
+    });
+    assert(created.status === 201, `create ${created.status} ${created.text}`);
+    const listed = await httpCall("GET", "/api/style/references");
+    assert(listed.status === 200, `list ${listed.status}`);
+    assert(listed.body.references.some((r) => r.id === created.body.id), "reference missing from owner list");
+    return `reference ${created.body.id}`;
   });
 
   phase("Path B — compilePlan research journey + SSE");

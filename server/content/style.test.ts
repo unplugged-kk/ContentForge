@@ -192,6 +192,12 @@ function memoryStyleStorage(overrides: Partial<StyleStoragePort> = {}): StyleSto
     async getOwnedReference(id, ownerId) {
       return references.find((r) => r.id === id && r.userId === ownerId);
     },
+    async getOwnedReferences(ids, ownerId) {
+      return references.filter((r) => ids.includes(r.id) && r.userId === ownerId);
+    },
+    async listOwnedReferences(ownerId) {
+      return references.filter((r) => r.userId === ownerId);
+    },
     async claimStyleAnalysis(row) {
       const existing = analyses.find((a) => a.idempotencyKey === row.idempotencyKey);
       if (existing) return { analysis: existing, created: false };
@@ -236,6 +242,28 @@ function memoryStyleStorage(overrides: Partial<StyleStoragePort> = {}): StyleSto
     },
     async getStyleProfileByAnalysisId(analysisId) {
       return profiles.find((p) => p.analysisId === analysisId);
+    },
+    async getLatestCorpusProfile(ownerId, sourceContentHash) {
+      const rows = profiles.filter((p) => p.userId === ownerId && p.kind === "corpus" && p.sourceContentHash === sourceContentHash);
+      return rows[rows.length - 1];
+    },
+    async listStyleProfiles(ownerId) {
+      return profiles.filter((p) => p.userId === ownerId);
+    },
+    async activateStyleProfile(id, ownerId) {
+      const current = profiles.find((p) => p.id === id && p.userId === ownerId);
+      if (!current) return undefined;
+      for (const p of profiles) {
+        if (p.userId === ownerId && p.kind === current.kind) p.isActive = false;
+      }
+      current.isActive = true;
+      return current;
+    },
+    async insertStyleObservations(rows) {
+      return rows.map((row) => ({ id: nextId++, ...row, createdAt: new Date() }));
+    },
+    async listStyleObservations() {
+      return [];
     },
     ...overrides,
   };
@@ -354,3 +382,47 @@ describe("runStyleAnalysis — invalid output, transient failure, versioning", (
     resetStyleAnalyzers();
   });
 });
+
+describe("deterministic style statistics (Phase 24)", () => {
+  it("computes sentence and question rates from text, not from a model", async () => {
+    const { computeTextStatistics, capConfidence, deriveNegativeSignals } = await import("./styleStats");
+    const short = computeTextStatistics("Short hook?\n\nPunchy take. Another take.");
+    const long = computeTextStatistics(
+      "Therefore the platform team should furthermore consider executive stakeholders when designing the scheduling policy for multi-tenant clusters across regions.",
+    );
+    assert.ok(short.averageSentenceLength < long.averageSentenceLength);
+    assert.ok(short.questionMarkFrequency > 0);
+    assert.equal(capConfidence("strong", 2), "weak");
+    assert.equal(capConfidence("strong", 5), "weak");
+    assert.equal(capConfidence("strong", 1), "strong");
+    assert.equal(deriveNegativeSignals(short, 2).length, 0, "tiny samples must not produce negative conclusions");
+  });
+
+  it("corpus analysis of the same frozen set is idempotent", async () => {
+    const observation = validObservation();
+    resetStyleAnalyzers();
+    registerStyleAnalyzer({
+      providerId: "gateway-style",
+      providerVersion: "v1",
+      analyze: async () => ({ observation, model: "m", provider: "gateway-style", usage: {} }),
+    });
+    const storage = memoryStyleStorage();
+    const a = await storage.insertReference({ userId: 1, rawContent: "Casual hook? Gonna ship this. 🔥 ".repeat(4), sourceType: "x_post", title: "a" });
+    const b = await storage.insertReference({ userId: 1, rawContent: "Another short take. Wow this ships. ".repeat(4), sourceType: "x_post", title: "b" });
+    const first = await requestStyleAnalysis(1, { referenceIds: [a.id, b.id] }, { storage });
+    const second = await requestStyleAnalysis(1, { referenceIds: [b.id, a.id] }, { storage });
+    assert.equal(first.analysis.id, second.analysis.id);
+    assert.equal(second.created, false);
+    resetStyleAnalyzers();
+  });
+
+  it("explicit regenerate is a new analysis identity, not a duplicate delivery", async () => {
+    const storage = memoryStyleStorage();
+    const a = await storage.insertReference({ userId: 1, rawContent: "a".repeat(50), sourceType: "manual", title: null });
+    const b = await storage.insertReference({ userId: 1, rawContent: "b".repeat(50), sourceType: "manual", title: null });
+    const first = await requestStyleAnalysis(1, { referenceIds: [a.id, b.id] }, { storage });
+    const regen = await requestStyleAnalysis(1, { referenceIds: [a.id, b.id], regenerate: true }, { storage });
+    assert.notEqual(first.analysis.id, regen.analysis.id);
+  });
+});
+

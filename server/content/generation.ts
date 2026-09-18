@@ -214,9 +214,9 @@ export async function createGenerationJob(
 
   // Ticket 10: resolved ONCE here, then frozen into the policy spec and the
   // effective request — never re-read when the job later executes.
-  const contextAssembly = deps.contextReader
-    ? await assembleContext(opportunity.userId ?? null, deps.contextReader)
-    : EMPTY_CONTEXT_ASSEMBLY;
+    const contextAssembly = deps.contextReader
+      ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
+      : EMPTY_CONTEXT_ASSEMBLY;
 
   const resolved = await resolveGenerationPolicy(
     composeGenerationPolicyInput(

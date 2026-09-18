@@ -3,6 +3,80 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 24 — Real Voice + Style Intelligence
+
+**Status:** IMPLEMENTED (Timeplus live MCP remains ENVIRONMENTALLY BLOCKED;
+Video Factory HyperFrames render remains the Phase 21 BLOCKED boundary)
+
+**Verification:** TypeScript 0; unit 484/484; Postgres 244/244; live E2E 163/163;
+visual E2E 38/38; agent E2E 17/17; workspace/browser E2E 17/17.
+
+### Architecture
+
+```
+Real creator content
+        ↓
+ReferenceContent (`references`, generalized — not a second store)
+        ↓
+StyleAnalysisJob (`style_analyses` + pg-boss `style.analyze`)
+        ↓
+StyleObservation (`style_observations`, evidence-backed)
+        ↓
+StyleProfileRevision (`style_profiles`, immutable, versioned)
+        ↓
+ContextAssembly (explicit preference ≠ observed style)
+        ↓
+GenerationPolicy snapshot
+        ↓
+GenerationJob → Artifact
+```
+
+Explicit Voice / user_profile preferences are never overwritten by observations.
+Corpus profiles enter future assembly only after explicit activation. Historical
+GenerationJobs stay pinned to the context hash frozen at queue time.
+
+Deterministic text statistics are computed in-process. The existing
+`StyleAnalyzerPort` (AI gateway / fixture) is used only for validated semantic
+dimensions. No vector DB, no performance learning, no second queue.
+
+### Surfaces
+
+- `POST /api/references` (expanded source types), `GET /api/style/references`
+- `POST /api/style/analyses`, existing per-reference analysis path kept
+- `GET /api/style-analyses/:id`, `GET /api/style-analyses/:id/observations`
+- `GET /api/style/profiles`, `POST /api/style/profiles/:id/activate`
+- Agent tools: `list_style_references`, `analyze_reference_content`,
+  `get_style_profile`, `activate_style_profile`
+- `/agent` Style intelligence panel (add / select / analyze / activate;
+  explicit vs observed)
+
+### CannerAI parity
+
+| Item | Status |
+|---|---|
+| SB-1 voice profile | IMPLEMENTED (explicit `voices` / user_profile, unchanged) |
+| SB-2 real-post style analysis | IMPLEMENTED (corpus + provenance) |
+| SB-3 preferences | IMPLEMENTED (not overwritten) |
+| SB-4 brand knowledge | COMPATIBLE (profile + vault still assemble first) |
+| SB-6 niche/topic | COMPATIBLE |
+| SB-7 messaging pillars | COMPATIBLE |
+| SB-8 reusable context | IMPLEMENTED (ContextAssembly freeze) |
+| SB-9 feedback learning | DEFERRED (Phase 29) |
+| SB-10 approval/edit learning | DEFERRED (Phase 29) |
+
+### Known blockers (unchanged)
+
+- Timeplus live MCP: ENVIRONMENTALLY BLOCKED without `TIMEPLUS_MCP_URL`
+- HyperFrames Video Factory render: BLOCKED (Phase 21) — factory still requires
+  a prepared composition; ContentForge did not gain HyperFrames, a submit API,
+  or a second video queue in this phase.
+
+### Deferred
+
+Mass repurposing (Phase 25); vector semantic memory; automatic performance
+learning; automatic mutation of Voice/preferences; Video Factory composition
+builder / remote worker / HyperFrames Cloud-Lambda-Cloud Run selection.
+
 ## Phase 23 — CopilotKit + AG-UI Agent-Native Workspace
 
 **Status:** IMPLEMENTED (Timeplus live MCP remains ENVIRONMENTALLY BLOCKED;
@@ -57,7 +131,7 @@ No second conversation store.
 
 ### Deferred
 
-Phase 24 voice + style intelligence; mass repurposing (Phase 25); A2UI /
+Phase 25 mass repurposing; A2UI /
 MCP Apps; autonomous publishing as default; Chrome extension.
 
 ## Phase 22 — Agent Runtime + Agent Tool Layer

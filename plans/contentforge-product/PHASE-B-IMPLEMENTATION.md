@@ -935,8 +935,54 @@ UNTRUSTED text. Foreign runs 404.
 Paths A–C, G, I, J, K plus OpenAI-compatible and AG-UI remote through
 configuration). Timeplus MCP and HyperFrames remain environmental blockers.
 
-**Deferred:** Phase 24 voice + style intelligence, mass repurposing, A2UI,
+**Deferred:** Phase 24 voice + style intelligence (now done), mass repurposing, A2UI,
 unrestricted MCP Apps, autonomous publishing as default.
+
+## Phase 24 — Real Voice + Style Intelligence (done)
+
+**The problem this closes**: personalization was still mostly explicit Voice /
+user_profile notes plus one-reference Phase 11 observations. Generation quality
+now needs an evidence-backed, versioned representation of how the creator
+actually writes, without collapsing that into preferences, snapshots, or
+future performance learning.
+
+```
+ReferenceContent (`references`)
+        ↓
+StyleAnalysisJob (`style_analyses`, pg-boss `style.analyze`)
+        ↓
+StyleObservation[] (`style_observations`)
+        ↓
+StyleProfileRevision (`style_profiles`, immutable)
+        ↓
+ContextAssembly → frozen GenerationPolicy → GenerationJob → Artifact
+```
+
+Phase 11 primitives were generalized, not replaced. `references` is still the
+durable authored-source store. `style_analyses` now freezes an explicit
+reference *set*. Deterministic statistics live in `styleStats.ts`. The existing
+`StyleAnalyzerPort` remains the only model seam and is schema-validated before
+anything durable is written.
+
+**Separation (locked):** explicit Voice/preferences ≠ observed StyleObservation
+≠ derived StyleProfileRevision ≠ frozen ContextSnapshot ≠ Phase 29 learning.
+Observed style cannot overwrite current instructions. Corpus revisions are
+activated explicitly; activation affects only future policy construction.
+
+**Channel overlays** are derived only when a channel has enough frozen
+references (`MIN_CHANNEL_OVERLAY = 2`). They are selected at ContextAssembly
+time from `opportunity.channel`, never by a second retrieval path inside the
+model.
+
+**Video Factory** was not modified. The Phase 21 composition-generation blocker
+is unchanged.
+
+**Verification:** TypeScript 0; unit 484/484; Postgres 244/244; live E2E
+163/163; visual 38/38; agent 17/17; workspace 17/17. Snapshot proof: Style v1
+→ Job A remains pinned after Style v2 is activated.
+
+**Deferred:** mass repurposing (Phase 25), vector memory, automatic performance
+learning, Video Factory composition/submit/render-backend work.
 
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 

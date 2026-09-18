@@ -12,6 +12,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { subscribeAgentStream } from "@/lib/agui-stream";
 import { ArtifactReviewCard } from "@/components/agent/artifact-review";
 import { AgentCopilotProvider } from "@/components/agent/copilot-provider";
+import { StyleIntelligencePanel } from "@/components/agent/style-panel";
 import {
   AgentRunCard,
   OpportunityCard,
@@ -362,7 +363,8 @@ function AgentWorkspaceInner() {
           </ScrollArea>
         </section>
 
-        <aside className="border-l p-3 overflow-y-auto">
+        <aside className="border-l p-3 overflow-y-auto space-y-3">
+          <StyleIntelligencePanel />
           <h2 className="text-sm font-semibold mb-2">Artifact review</h2>
           {selectedArtifactId ? (
             <ArtifactReviewCard artifactId={selectedArtifactId} />

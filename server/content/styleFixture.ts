@@ -46,8 +46,29 @@ export function createFixtureStyleAnalyzer(
       if (mode === "invalid") {
         return { observation: { confidence: "strong" } as unknown as StyleObservation, model: "fixture-model", provider: providerId, usage: {} };
       }
-      void content;
-      return { observation, model: "fixture-model", provider: providerId, usage: {} };
+      const casual = /gonna|lol|🔥|btw|dude|wow/i.test(content.text);
+      const formal = /therefore|furthermore|executive|hereby|pursuant|stakeholders/i.test(content.text);
+          const questions = (content.text.match(/\?/g) ?? []).length;
+          const hasEmoji = /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(content.text);
+      return {
+        observation: {
+          ...observation,
+          confidenceReason: casual
+            ? "fixture: casual sample markers"
+            : formal
+              ? "fixture: formal sample markers"
+              : observation.confidenceReason,
+          dimensions: {
+            ...observation.dimensions,
+            tone: casual ? "casual, conversational" : formal ? "formal, executive" : observation.dimensions.tone,
+            questionUsage: questions > 0 ? "frequent questions" : observation.dimensions.questionUsage,
+            emojiTendencies: hasEmoji ? "present" : "none",
+          },
+        },
+        model: "fixture-model",
+        provider: providerId,
+        usage: {},
+      };
     },
   };
 }

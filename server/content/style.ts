@@ -78,7 +78,19 @@ export function validateStyleObservation(raw: unknown): StyleObservation {
 }
 
 // ── Analyzer contract (Phase 11 §5/§6) — one canonical abstraction ──────────
-export type AuthoredSourceType = "x_post" | "linkedin_post" | "manual";
+export const authoredSourceTypeEnum = z.enum([
+  "x_post",
+  "x_thread",
+  "linkedin_post",
+  "instagram_caption",
+  "article",
+  "document",
+  "pasted_text",
+  "manual",
+]);
+export type AuthoredSourceType = z.infer<typeof authoredSourceTypeEnum>;
+
+export { STYLE_ANALYSIS_VERSION } from "./styleStats";
 
 export interface AuthoredContent {
   /** Normalized text — platform mechanics stay in metadata, never a branch here. */
@@ -139,6 +151,11 @@ export class InvalidAuthoredContentError extends Error {
 }
 
 /** Normalize + bound-check untrusted authored text before it ever reaches an analyzer. */
+export function coerceAuthoredSourceType(raw: string | null | undefined): AuthoredSourceType {
+  const parsed = authoredSourceTypeEnum.safeParse(raw);
+  return parsed.success ? parsed.data : "manual";
+}
+
 export function normalizeAuthoredText(raw: string): string {
   const text = raw.replace(/\r\n/g, "\n").trim();
   const issues: string[] = [];

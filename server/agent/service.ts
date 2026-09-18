@@ -6,9 +6,11 @@ import {
   contentStorage,
   generationDeps,
   visualAssetStorage,
+  styleServiceDeps,
   GENERATION_RUN_JOB_TYPE,
   PUBLICATION_RUN_JOB_TYPE,
   VISUAL_RUN_JOB_TYPE,
+  STYLE_ANALYZE_JOB_TYPE,
   registerContentJobs,
 } from "../content/service";
 import { AgentToolRegistry } from "./registry";
@@ -81,6 +83,17 @@ async function enqueuePublication(publication: Publication): Promise<boolean> {
   return !result.deduplicated;
 }
 
+async function enqueueStyleAnalysis(analysis: { id: number; correlationId: string; idempotencyKey: string }): Promise<boolean> {
+  const { getJobRuntime } = await import("../jobs/bootstrap");
+  const result = await getJobRuntime().enqueue({
+    jobType: STYLE_ANALYZE_JOB_TYPE,
+    payload: { styleAnalysisId: analysis.id },
+    correlationId: analysis.correlationId,
+    idempotencyKey: analysis.idempotencyKey,
+  });
+  return !result.deduplicated;
+}
+
 export function registerAgentTools(): void {
   if (toolsRegistered) return;
   registerContentJobs();
@@ -103,6 +116,8 @@ export function registerAgentTools(): void {
     enqueueGeneration,
     enqueueVisual,
     enqueuePublication,
+    style: styleServiceDeps,
+    enqueueStyleAnalysis,
   })) {
     agentRegistry.register(tool);
   }
