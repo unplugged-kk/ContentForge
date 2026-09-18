@@ -208,6 +208,9 @@ app.use((req, res, next) => {
   const { createDefaultLearningRouter } = await import("./content/learning/http");
   app.use("/api/learning", await createDefaultLearningRouter());
 
+  const { createDefaultAgentRouter } = await import("./agent/routes");
+  app.use("/api/agent", await createDefaultAgentRouter());
+
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 

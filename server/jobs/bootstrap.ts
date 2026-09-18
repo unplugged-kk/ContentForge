@@ -10,6 +10,8 @@ import { registerBuiltinProviders } from "../research/bootstrap";
 import { registerResearchRunJob } from "../research/job";
 import { researchEngine, researchStorage } from "../research/service";
 import { registerContentJobs } from "../content/service";
+import { registerAgentRunJob } from "../agent/job";
+import { getAgentRuntime, registerAgentTools } from "../agent/service";
 import { JobRuntime } from "./runtime";
 
 let runtime: JobRuntime | null = null;
@@ -30,6 +32,8 @@ export function registerRuntimeJobs(): void {
   registerBuiltinProviders();
   registerResearchRunJob({ engine: researchEngine, storage: researchStorage });
   registerContentJobs();
+  registerAgentTools();
+  registerAgentRunJob(() => getAgentRuntime());
 }
 
 export interface StartJobRuntimeOptions {

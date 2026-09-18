@@ -1,0 +1,875 @@
+import { z } from "zod";
+import type { ResearchJob } from "@shared/schema";
+import { db } from "../db";
+import {
+  createStoryFromResearch,
+  InvalidStoryInputError,
+  ResearchJobHasNoEvidenceError,
+  ResearchJobNotCompleteError,
+  ResearchJobNotFoundError,
+  type CreateStoryDeps,
+} from "../story/service";
+import {
+  createGenerationJob,
+  GenerationInputError,
+  OpportunityKilledError,
+  OpportunityNotFoundError,
+} from "../content/generation";
+import {
+  createOpportunityFromStory,
+  InvalidOpportunityInputError,
+  StoryNotFoundError,
+  StoryNotUsableError,
+  type OpportunityDeps,
+} from "../content/opportunity";
+import { repurposeStory, RepurposeInputError, type RepurposeDeps } from "../content/repurposing";
+import {
+  approveArtifact,
+  ArtifactNotFoundError,
+  ArtifactStateError,
+  submitArtifactForReview,
+} from "../content/artifact";
+import {
+  ArtifactNotSchedulableError,
+  createSchedule,
+  dispatchDueOccurrences,
+  ScheduleInputError,
+} from "../content/scheduling";
+import { DistributionInputError, publishArtifactToChannels } from "../content/distribution";
+import { createVisualGeneration, VisualServiceInputError } from "../content/visualService";
+import { computeAnalyticsSummary } from "../content/learning/summary";
+import type { ContentStoragePort } from "../content/storage";
+import type { VisualGeneration, Artifact, GenerationJob, Publication } from "@shared/schema";
+import { envelope, invalid, notFound } from "./envelope";
+import type { ToolDefinition, ToolEnvelope, ToolExecutionContext } from "./types";
+
+export interface AgentResearchPort {
+  claimJob(input: {
+    correlationId: string;
+    idempotencyKey: string;
+    kind: "directed" | "autonomous" | "human_input";
+    query?: string | null;
+    providerIds: readonly string[];
+    initiation: Record<string, unknown>;
+    userId?: number | null;
+  }): Promise<{ job: ResearchJob; created: boolean }>;
+  getJob(jobId: number): Promise<ResearchJob | undefined>;
+  listSources(jobId: number): Promise<Array<{ id: number; canonicalUrl?: string | null; title?: string | null }>>;
+  listEvidence(jobId: number): Promise<Array<{ id: number; excerpt: string; kind: string }>>;
+  enqueueResearchRun(job: ResearchJob): Promise<void>;
+}
+
+export interface AgentDomainDeps {
+  research: AgentResearchPort;
+  stories: CreateStoryDeps;
+  opportunities: OpportunityDeps;
+  generation: Parameters<typeof createGenerationJob>[2];
+  repurpose: RepurposeDeps;
+  content: ContentStoragePort;
+  visualStorage: Parameters<typeof createVisualGeneration>[2]["storage"];
+  enqueueGeneration: (job: GenerationJob) => Promise<boolean>;
+  enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
+  enqueuePublication: (publication: Publication) => Promise<boolean>;
+}
+
+const positiveId = z.number().int().positive();
+
+function owned<T extends { userId?: number | null }>(row: T | undefined, ownerId: number): T | undefined {
+  if (!row) return undefined;
+  if (row.userId != null && row.userId !== ownerId) return undefined;
+  return row;
+}
+
+function mapDomainError(tool: string, error: unknown): ToolEnvelope {
+  if (
+    error instanceof StoryNotFoundError ||
+    error instanceof ResearchJobNotFoundError ||
+    error instanceof ArtifactNotFoundError ||
+    error instanceof OpportunityNotFoundError
+  ) {
+    return notFound(tool, "resource");
+  }
+  if (
+    error instanceof InvalidStoryInputError ||
+    error instanceof InvalidOpportunityInputError ||
+    error instanceof GenerationInputError ||
+    error instanceof VisualServiceInputError ||
+    error instanceof RepurposeInputError ||
+    error instanceof ScheduleInputError ||
+    error instanceof DistributionInputError
+  ) {
+    return invalid(tool, error.message);
+  }
+  if (
+    error instanceof ResearchJobNotCompleteError ||
+    error instanceof ResearchJobHasNoEvidenceError ||
+    error instanceof StoryNotUsableError ||
+    error instanceof OpportunityKilledError ||
+    error instanceof ArtifactStateError ||
+    error instanceof ArtifactNotSchedulableError
+  ) {
+    return envelope({
+      tool,
+      status: "conflict",
+      summary: error.message,
+      failureClass: "permanent",
+      error: error.message,
+    });
+  }
+  return envelope({
+    tool,
+    status: "failed",
+    summary: error instanceof Error ? error.message : String(error),
+    failureClass: "transient",
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[] {
+  return [
+    {
+      name: "research_topic",
+      description: "Start a directed research job through the existing ResearchEngine.",
+      inputSchema: z.object({
+        query: z.string().trim().min(1).max(2000),
+        providerIds: z.array(z.string().trim().min(1)).min(1).max(8).optional(),
+        idempotencyKey: z.string().trim().min(1).max(300).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => researchTopic(deps, input, ctx),
+    },
+    {
+      name: "research_url",
+      description: "Research a URL through the SSRF-guarded web provider.",
+      inputSchema: z.object({
+        url: z.string().trim().url().max(2000),
+        idempotencyKey: z.string().trim().min(1).max(300).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => researchUrl(deps, input, ctx),
+    },
+    {
+      name: "get_research_job",
+      description: "Read an owned ResearchJob and bounded source/evidence counts.",
+      inputSchema: z.object({ researchJobId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getResearchJob(deps, input, ctx),
+    },
+    {
+      name: "create_story",
+      description: "Create a Story from a completed ResearchJob. Does not re-run research.",
+      inputSchema: z.object({
+        researchJobId: positiveId,
+        title: z.string().trim().min(1).max(500),
+        insightBody: z.string().trim().min(1).max(8000),
+        angles: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: false,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => createStory(deps, input, ctx),
+    },
+    {
+      name: "get_story",
+      description: "Read owned Story metadata.",
+      inputSchema: z.object({ storyId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getStory(deps, input, ctx),
+    },
+    {
+      name: "find_opportunities",
+      description: "List Opportunities derived from an owned Story.",
+      inputSchema: z.object({ storyId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => findOpportunities(deps, input, ctx),
+    },
+    {
+      name: "repurpose_story",
+      description: "Thin Story→Opportunity orchestration over existing repurposeStory.",
+      inputSchema: z.object({
+        storyId: positiveId,
+        targets: z
+          .array(
+            z.object({
+              format: z.string().trim().min(1).max(50),
+              channel: z.string().trim().min(1).max(50),
+              generate: z.boolean().optional(),
+            }),
+          )
+          .min(1)
+          .max(8),
+        requestKey: z.string().trim().min(1).max(200).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => repurpose(deps, input, ctx),
+    },
+    {
+      name: "generate_artifact",
+      description: "Create a GenerationJob through GenerationPolicy and frozen ContextAssembly.",
+      inputSchema: z.object({
+        opportunityId: positiveId,
+        regenerate: z.boolean().optional(),
+        objective: z.string().trim().min(1).max(2000).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => generateArtifact(deps, input, ctx),
+    },
+    {
+      name: "generate_image",
+      description: "Create a VisualGeneration through VisualProviderPort.",
+      inputSchema: z.object({
+        subject: z.string().trim().min(1).max(2000),
+        opportunityId: positiveId.optional(),
+        providerId: z.string().trim().min(1).max(80).optional(),
+        regenerate: z.boolean().optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => generateImage(deps, input, ctx),
+    },
+    {
+      name: "generate_video",
+      description: "Create a VideoGeneration via provider video-factory and video-factory.contract.v1.",
+      inputSchema: z.object({
+        subject: z.string().trim().min(1).max(2000),
+        opportunityId: positiveId.optional(),
+        regenerate: z.boolean().optional(),
+        durationMs: z.number().int().positive().max(600_000).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => generateVideo(deps, input, ctx),
+    },
+    {
+      name: "approve_artifact",
+      description: "Approve an Artifact revision. Privileged: tool presence is not authorization.",
+      inputSchema: z.object({ artifactId: positiveId }),
+      access: "privileged",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: true,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => approve(deps, input, ctx),
+    },
+    {
+      name: "schedule_publication",
+      description: "Create a Schedule for an approved Artifact using existing occurrence semantics.",
+      inputSchema: z.object({
+        artifactId: positiveId,
+        startAt: z.string().datetime().optional(),
+        channel: z.string().trim().min(1).max(50).optional(),
+      }),
+      access: "write",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => schedulePublication(deps, input, ctx),
+    },
+    {
+      name: "publish_now",
+      description: "Privileged immediate distribution of an approved Artifact.",
+      inputSchema: z.object({
+        artifactId: positiveId,
+        channel: z.string().trim().min(1).max(50).optional(),
+      }),
+      access: "privileged",
+      ownerScoped: true,
+      idempotent: true,
+      async: true,
+      requiresApproval: true,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => publishNow(deps, input, ctx),
+    },
+    {
+      name: "get_publication_status",
+      description: "Read Publication and Result state for an owned publication.",
+      inputSchema: z.object({ publicationId: positiveId }),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "implemented",
+      execute: (input, ctx) => getPublicationStatus(deps, input, ctx),
+    },
+    {
+      name: "get_analytics",
+      description: "Owner-scoped descriptive analytics currently supported by ContentForge.",
+      inputSchema: z.object({}),
+      access: "read",
+      ownerScoped: true,
+      idempotent: true,
+      async: false,
+      requiresApproval: false,
+      capabilityStatus: "partial",
+      execute: (_input, ctx) => getAnalytics(ctx),
+    },
+  ];
+}
+
+async function researchTopic(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const query = String(input.query);
+  const providerIds = Array.isArray(input.providerIds)
+    ? (input.providerIds as string[])
+    : ["rss"];
+  const idempotencyKey =
+    typeof input.idempotencyKey === "string" ? input.idempotencyKey : ctx.idempotencyKey;
+  try {
+    const { job, created } = await deps.research.claimJob({
+      correlationId: `agent-run-${ctx.agentRunId}`,
+      idempotencyKey,
+      kind: "directed",
+      query,
+      providerIds,
+      userId: ctx.ownerId,
+      initiation: { kind: "directed", query, providerIds, agentRunId: ctx.agentRunId },
+    });
+    if (job.status !== "complete") await deps.research.enqueueResearchRun(job);
+    return envelope({
+      tool: "research_topic",
+      status: job.status === "complete" ? "success" : "queued",
+      summary: created ? "ResearchJob queued" : "ResearchJob reused",
+      refs: { researchJobId: job.id, agentRunId: ctx.agentRunId, toolCallId: ctx.toolCallId },
+      data: { status: job.status, created },
+    });
+  } catch (error) {
+    return mapDomainError("research_topic", error);
+  }
+}
+
+async function researchUrl(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const url = String(input.url);
+  const idempotencyKey =
+    typeof input.idempotencyKey === "string" ? input.idempotencyKey : ctx.idempotencyKey;
+  try {
+    const { job, created } = await deps.research.claimJob({
+      correlationId: `agent-run-${ctx.agentRunId}`,
+      idempotencyKey,
+      kind: "directed",
+      query: url,
+      providerIds: ["web"],
+      userId: ctx.ownerId,
+      initiation: {
+        kind: "directed",
+        query: url,
+        providerIds: ["web"],
+        providerConfig: { web: { urls: [url] } },
+        agentRunId: ctx.agentRunId,
+      },
+    });
+    if (job.status !== "complete") await deps.research.enqueueResearchRun(job);
+    return envelope({
+      tool: "research_url",
+      status: job.status === "complete" ? "success" : "queued",
+      summary: "URL research queued through SSRF-guarded web provider",
+      refs: { researchJobId: job.id },
+      data: { status: job.status, created, retrievedContentIsData: true },
+    });
+  } catch (error) {
+    return mapDomainError("research_url", error);
+  }
+}
+
+async function getResearchJob(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const job = owned(await deps.research.getJob(Number(input.researchJobId)), ctx.ownerId);
+  if (!job) return notFound("get_research_job", "research job");
+  const [sources, evidence] = await Promise.all([
+    deps.research.listSources(job.id),
+    deps.research.listEvidence(job.id),
+  ]);
+  return envelope({
+    tool: "get_research_job",
+    status: job.status === "running" || job.status === "queued" ? "in_progress" : "success",
+    summary: `ResearchJob is ${job.status}`,
+    refs: { researchJobId: job.id },
+    data: {
+      status: job.status,
+      query: job.query,
+      sourceCount: sources.length,
+      evidenceCount: evidence.length,
+      retrievedContentIsData: true,
+    },
+  });
+}
+
+async function createStory(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const job = owned(await deps.research.getJob(Number(input.researchJobId)), ctx.ownerId);
+    if (!job) return notFound("create_story", "research job");
+    const story = await createStoryFromResearch(
+      job.id,
+      {
+        title: String(input.title),
+        insightBody: String(input.insightBody),
+        ...(Array.isArray(input.angles) ? { angles: input.angles as string[] } : {}),
+      },
+      deps.stories,
+    );
+    return envelope({
+      tool: "create_story",
+      status: "success",
+      summary: "Story created from completed research",
+      refs: { storyId: story.id, researchJobId: job.id },
+      data: { title: story.title, status: story.status },
+    });
+  } catch (error) {
+    return mapDomainError("create_story", error);
+  }
+}
+
+async function getStory(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const story = owned(await deps.stories.stories.getStory(Number(input.storyId)), ctx.ownerId);
+  if (!story) return notFound("get_story", "story");
+  return envelope({
+    tool: "get_story",
+    status: "success",
+    summary: story.title,
+    refs: { storyId: story.id, researchJobId: story.researchJobId },
+    data: { title: story.title, status: story.status, provenance: story.provenance },
+  });
+}
+
+async function findOpportunities(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const story = owned(await deps.stories.stories.getStory(Number(input.storyId)), ctx.ownerId);
+  if (!story) return notFound("find_opportunities", "story");
+  const rows = await deps.content.listOpportunitiesByStory(story.id);
+  const ownedRows = rows.filter((row) => row.userId == null || row.userId === ctx.ownerId);
+  return envelope({
+    tool: "find_opportunities",
+    status: "success",
+    summary: `${ownedRows.length} opportunities`,
+    refs: { storyId: story.id, opportunityIds: ownedRows.map((row) => row.id) },
+    data: {
+      opportunities: ownedRows.map((row) => ({
+        opportunityId: row.id,
+        format: row.format,
+        channel: row.channel,
+        status: row.status,
+      })),
+    },
+  });
+}
+
+async function repurpose(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const result = await repurposeStory(
+      Number(input.storyId),
+      {
+        requestKey: typeof input.requestKey === "string" ? input.requestKey : ctx.idempotencyKey,
+        targets: (input.targets as Array<{ format: string; channel: string; generate?: boolean }>).map((target) => ({
+          format: target.format,
+          channel: target.channel,
+          generate: target.generate === true ? true : false,
+        })),
+      },
+      deps.repurpose,
+      ctx.ownerId,
+    );
+    const jobs: GenerationJob[] = [];
+    for (const outcome of result.outcomes) {
+      if (outcome.job?.status === "queued") {
+        await deps.enqueueGeneration(outcome.job);
+        jobs.push(outcome.job);
+      }
+    }
+    return envelope({
+      tool: "repurpose_story",
+      status: "success",
+      summary: `Repurposed into ${result.outcomes.length} target(s)`,
+      refs: {
+        storyId: result.storyId,
+        opportunityIds: result.outcomes.map((o) => o.opportunity?.id).filter(Boolean),
+        generationJobIds: result.outcomes.map((o) => o.job?.id).filter(Boolean),
+      },
+      data: {
+        outcomes: result.outcomes.map((o) => ({
+          format: o.format,
+          channel: o.channel,
+          status: o.status,
+          opportunityId: o.opportunity?.id,
+          generationJobId: o.job?.id,
+          error: o.error,
+        })),
+        enqueued: jobs.length,
+      },
+    });
+  } catch (error) {
+    return mapDomainError("repurpose_story", error);
+  }
+}
+
+async function generateArtifact(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const opportunity = owned(
+      await deps.content.getOpportunity(Number(input.opportunityId)),
+      ctx.ownerId,
+    );
+    if (!opportunity) return notFound("generate_artifact", "opportunity");
+    const { job, created } = await createGenerationJob(
+      opportunity.id,
+      {
+        ...(typeof input.objective === "string" ? { objective: input.objective } : {}),
+        ...(input.regenerate === true ? { regenerate: true } : {}),
+      },
+      deps.generation,
+    );
+    if (job.status === "queued") await deps.enqueueGeneration(job);
+    const artifact = await deps.content.getArtifactByGenerationJob(job.id);
+    const snapshot = job.policySnapshot as { context?: unknown } | null;
+    return envelope({
+      tool: "generate_artifact",
+      status: job.status === "succeeded" ? "success" : "queued",
+      summary: created ? "GenerationJob queued" : "GenerationJob reused",
+      refs: {
+        opportunityId: opportunity.id,
+        generationJobId: job.id,
+        artifactId: artifact?.id ?? null,
+        generationPolicyId: job.policyId,
+      },
+      data: {
+        created,
+        status: job.status,
+        contextAssemblyFrozen: snapshot != null && typeof snapshot === "object",
+      },
+    });
+  } catch (error) {
+    return mapDomainError("generate_artifact", error);
+  }
+}
+
+async function generateImage(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    if (input.opportunityId != null) {
+      const opportunity = owned(await deps.content.getOpportunity(Number(input.opportunityId)), ctx.ownerId);
+      if (!opportunity) return notFound("generate_image", "opportunity");
+    }
+    const { generation, created } = await createVisualGeneration(
+      ctx.ownerId,
+      {
+        kind: "image",
+        capability: "generate_image",
+        providerId: typeof input.providerId === "string" ? input.providerId : "local-fixture",
+        intent: { subject: String(input.subject), aspectRatio: "1:1", style: "flat", role: "hero" },
+        ...(input.opportunityId != null ? { opportunityId: Number(input.opportunityId) } : {}),
+        ...(input.regenerate === true ? { regenerate: true } : {}),
+      },
+      {
+        content: deps.content,
+        storage: deps.visualStorage,
+        contextReader: deps.generation.contextReader,
+      },
+    );
+    if (generation.status === "requested") await deps.enqueueVisual(generation);
+    const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+    return envelope({
+      tool: "generate_image",
+      status: generation.status === "ready" ? "success" : "queued",
+      summary: created ? "VisualGeneration queued" : "VisualGeneration reused",
+      refs: {
+        visualGenerationId: generation.id,
+        visualAssetId: assets[0]?.id ?? null,
+        opportunityId: generation.opportunityId,
+      },
+      data: { status: generation.status, created, providerId: generation.providerId },
+    });
+  } catch (error) {
+    return mapDomainError("generate_image", error);
+  }
+}
+
+async function generateVideo(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    if (input.opportunityId != null) {
+      const opportunity = owned(await deps.content.getOpportunity(Number(input.opportunityId)), ctx.ownerId);
+      if (!opportunity) return notFound("generate_video", "opportunity");
+    }
+    const { generation, created } = await createVisualGeneration(
+      ctx.ownerId,
+      {
+        kind: "video",
+        capability: "generate_video",
+        providerId: "video-factory",
+        intent: {
+          subject: String(input.subject),
+          aspectRatio: "9:16",
+          durationMs: typeof input.durationMs === "number" ? input.durationMs : 3000,
+        },
+        ...(input.opportunityId != null ? { opportunityId: Number(input.opportunityId) } : {}),
+        ...(input.regenerate === true ? { regenerate: true } : {}),
+        ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
+      },
+      {
+        content: deps.content,
+        storage: deps.visualStorage,
+        contextReader: deps.generation.contextReader,
+      },
+    );
+    if (generation.status === "requested") await deps.enqueueVisual(generation);
+    const snapshot = (generation.requestSnapshot ?? {}) as Record<string, unknown>;
+    const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
+    return envelope({
+      tool: "generate_video",
+      status: generation.status === "ready" ? "success" : "queued",
+      summary: created ? "VideoGeneration submitted to video-factory" : "VideoGeneration reused",
+      refs: {
+        visualGenerationId: generation.id,
+        videoGenerationId: generation.id,
+        videoAssetId: assets[0]?.id ?? null,
+        externalJobId: snapshot.externalJobId ?? `cfvg-${generation.id}`,
+      },
+      data: {
+        status: generation.status,
+        created,
+        providerId: generation.providerId,
+        contractVersion: "video-factory.contract.v1",
+      },
+    });
+  } catch (error) {
+    return mapDomainError("generate_video", error);
+  }
+}
+
+async function approve(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const artifact = await deps.content.getArtifactForOwner(Number(input.artifactId), ctx.ownerId);
+    if (!artifact) return notFound("approve_artifact", "artifact");
+    if (artifact.readiness === "approved") {
+      return envelope({
+        tool: "approve_artifact",
+        status: "success",
+        summary: "Artifact already approved",
+        refs: { artifactId: artifact.id },
+        data: { readiness: artifact.readiness },
+      });
+    }
+    let current: Artifact = artifact;
+    if (current.readiness === "draft") {
+      current = await submitArtifactForReview(current.id, { artifacts: deps.content });
+    }
+    const approved = await approveArtifact(current.id, { artifacts: deps.content });
+    return envelope({
+      tool: "approve_artifact",
+      status: "success",
+      summary: "Artifact approved",
+      refs: { artifactId: approved.id },
+      data: { readiness: approved.readiness },
+    });
+  } catch (error) {
+    return mapDomainError("approve_artifact", error);
+  }
+}
+
+async function schedulePublication(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const artifact = await deps.content.getArtifactForOwner(Number(input.artifactId), ctx.ownerId);
+    if (!artifact) return notFound("schedule_publication", "artifact");
+    const schedule = await createSchedule(
+      artifact.id,
+      {
+        ...(typeof input.startAt === "string" ? { startAt: input.startAt } : {}),
+        ...(typeof input.channel === "string" ? { channel: input.channel } : {}),
+      },
+      { content: deps.content },
+    );
+    const dispatched = await dispatchDueOccurrences(new Date(), {
+      content: deps.content,
+      enqueuePublication: deps.enqueuePublication,
+    });
+    const publications = dispatched.publications.filter((p) => p.scheduleId === schedule.id);
+    return envelope({
+      tool: "schedule_publication",
+      status: publications.length > 0 ? "queued" : "accepted",
+      summary: "Schedule created",
+      refs: {
+        artifactId: artifact.id,
+        scheduleId: schedule.id,
+        publicationIds: publications.map((p) => p.id),
+        occurrenceIds: publications.map((p) => p.occurrenceId),
+      },
+      data: { status: schedule.status, dispatched: dispatched.enqueued },
+    });
+  } catch (error) {
+    return mapDomainError("schedule_publication", error);
+  }
+}
+
+async function publishNow(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  try {
+    const artifact = await deps.content.getArtifactForOwner(Number(input.artifactId), ctx.ownerId);
+    if (!artifact) return notFound("publish_now", "artifact");
+    const channel = typeof input.channel === "string" ? input.channel : artifact.channel;
+    const result = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel, startAt: new Date().toISOString() }] },
+      { content: deps.content, enqueuePublication: deps.enqueuePublication },
+      ctx.ownerId,
+    );
+    await dispatchDueOccurrences(new Date(), {
+      content: deps.content,
+      enqueuePublication: deps.enqueuePublication,
+    });
+    return envelope({
+      tool: "publish_now",
+      status: "queued",
+      summary: "Publication dispatched",
+      refs: {
+        artifactId: artifact.id,
+        scheduleIds: result.outcomes.map((o) => o.schedule?.id).filter(Boolean),
+        publicationIds: result.outcomes.map((o) => o.publication?.id).filter(Boolean),
+      },
+      data: {
+        outcomes: result.outcomes.map((o) => ({
+          channel: o.channel,
+          status: o.status,
+          scheduleId: o.schedule?.id,
+          publicationId: o.publication?.id,
+          error: o.error,
+        })),
+      },
+    });
+  } catch (error) {
+    return mapDomainError("publish_now", error);
+  }
+}
+
+async function getPublicationStatus(
+  deps: AgentDomainDeps,
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolEnvelope> {
+  const publication = await deps.content.getPublicationForOwner(Number(input.publicationId), ctx.ownerId);
+  if (!publication) return notFound("get_publication_status", "publication");
+  const result = await deps.content.getResultByPublication(publication.id);
+  return envelope({
+    tool: "get_publication_status",
+    status: "success",
+    summary: `Publication is ${publication.state}`,
+    refs: {
+      publicationId: publication.id,
+      artifactId: publication.artifactId,
+      resultId: result?.id ?? null,
+      occurrenceId: publication.occurrenceId,
+    },
+    data: {
+      state: publication.state,
+      channel: publication.channel,
+      outcome: result?.outcome ?? null,
+      externalId: result?.externalId ?? null,
+    },
+  });
+}
+
+async function getAnalytics(ctx: ToolExecutionContext): Promise<ToolEnvelope> {
+  const summary = await computeAnalyticsSummary(db, ctx.ownerId);
+  return envelope({
+    tool: "get_analytics",
+    status: "success",
+    summary: "Descriptive analytics currently supported by ContentForge",
+    refs: {},
+    data: { ...summary, capability: "partial", ranking: false, bestTimes: false },
+    capability: "partial",
+  });
+}
+
+export { createOpportunityFromStory };

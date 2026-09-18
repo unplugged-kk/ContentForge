@@ -61,6 +61,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Multi-brand / collaboration | identity model | DEFERRED |
 | Notifications, search, activity feed | new surfaces | DEFERRED |
 | Billing / subscriptions | — | DEFERRED (out of scope by design) |
+| Agent-operated pipeline | AgentRuntime → AgentToolRegistry → existing domain services | IMPLEMENTED — interchangeable backends (OpenAI-compatible / AG-UI remote / fixture) invoke governed tools only. CopilotKit workspace UI: DEFERRED Phase 23. Timeplus: telemetry seam only; live MCP ENVIRONMENTALLY BLOCKED without `TIMEPLUS_MCP_URL` |
 
 ## Video Factory boundary (contract only)
 

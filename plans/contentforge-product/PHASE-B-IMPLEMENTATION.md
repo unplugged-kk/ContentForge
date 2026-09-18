@@ -837,6 +837,62 @@ LinkedIn video, Facebook video, advanced editing, timeline, automatic clipping,
 audio outside Video Factory, avatar/lip-sync, autonomous video, video autopilot,
 UI, Chrome, HyperFrames composition generation inside ContentForge.
 
+## Phase 22 — Agent Runtime + Agent Tool Layer (done)
+
+**The problem this closes**: ContentForge's durable pipeline (Story → Opportunity →
+GenerationJob → Artifact → Publication → Result) was only operable through HTTP
+controllers and automation. This phase adds a governed **Agent Runtime** so
+interchangeable brains (OpenAI-compatible HTTP, remote AG-UI, deterministic
+fixture) can drive the same pipeline through **domain tools**, never SQL, never
+a second queue, never a second generation abstraction.
+
+```
+LLM / local / cloud / AG-UI agent
+        ↓
+ContentForge Agent Runtime  (AgentRun + AgentToolCall, pg-boss `agent.run`)
+        ↓
+AgentToolRegistry + tool policy (read / write / privileged)
+        ↓
+existing domain services (research, story, generation, visual, schedule, publish)
+        ↓
+PostgreSQL + pg-boss
+```
+
+**AgentBackendPort.** One port: `fixture`, `openai-compatible` (`AGENT_BACKEND_BASE_URL` /
+`AGENT_BACKEND_API_KEY` / `AGENT_MODEL`), `agui-remote` (`AGENT_AGUI_URL`). Switching
+from OpenAI to a local OpenAI-compatible endpoint is configuration only.
+
+**Durable state.** Additive tables `agent_runs` / `agent_tool_calls` (migration
+`0022_agent_runtime`). Tool retries reuse `idempotency_key`; explicit regenerate
+is a new semantic request. Process restart recovers the run and does not duplicate
+domain rows.
+
+**Tools.** Structured schemas only. Owner identity is injected by the runtime;
+agent-supplied `ownerId` / credentials are stripped. Privileged tools
+(`approve_artifact`, `publish_now`) require an explicit grant — tool presence is
+not authorization. Retrieved research is DATA. `generate_video` still uses
+`provider=video-factory` and `cfvg-{VisualGeneration.id}`.
+
+**AG-UI.** Backend event reconstruction (`RUN_STARTED` … `RUN_FINISHED`) at
+`GET /api/agent/runs/:id/events`. CopilotKit workspace UI is Phase 23.
+
+**ExternalToolProviderPort.** Generic MCP HTTP JSON-RPC seam. Timeplus is the
+first integration, **telemetry only**, with semantic read-only tools. Unrestricted
+`run_sql` is not advertised to the content agent. When `TIMEPLUS_MCP_URL` is
+unset, tools return ContentForge-local operational metrics and the transactional
+pipeline still works.
+
+**Verification:** TypeScript 0 errors; unit 470/470; real Postgres 240/240;
+live E2E 154/154; visual E2E 38/38; agent E2E 17/17 (Paths A–N);
+Timeplus live MCP ENVIRONMENTALLY BLOCKED (`TIMEPLUS_MCP_URL` unset — Path N
+returned ContentForge-local metrics); Video Factory HyperFrames render remains
+the Phase 21 blocker; fresh migrations 23 / 52 tables.
+
+**Deferred:** CopilotKit/AG-UI workspace UI (Phase 23), mass repurposing
+intelligence (Phase 25), style learning, autonomous publishing as default,
+Chrome, YouTube/TikTok connectors, vector memory, Timeplus as a live telemetry
+cluster (needs `TIMEPLUS_MCP_URL`).
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

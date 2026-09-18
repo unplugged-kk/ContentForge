@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 50, `expected 50 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 22, "all twenty-two migrations recorded");
+      assert.equal(tables.length, 52, `expected 52 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 23, "all twenty-three migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -117,6 +117,8 @@ describeDb("migration chain (db)", () => {
         "learning_signals",
         "performance_signals",
         "rss_sources",
+        "agent_runs",
+        "agent_tool_calls",
       ]) {
         assert.ok(tables.includes(table), `missing ${table}`);
       }
@@ -199,12 +201,12 @@ describeDb("migration chain (db)", () => {
       }
       assert.equal(await migrationCount(pool), 3, "three migrations recorded before upgrade");
 
-      // The forward migration must apply 0003-0021 without a db:push.
+      // The forward migration must apply 0003-0022 without a db:push.
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 50, `expected 50 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 22, "0003-0021 recorded after upgrade");
+      assert.equal(tables.length, 52, `expected 52 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 23, "0003-0022 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -234,6 +236,8 @@ describeDb("migration chain (db)", () => {
         ["codec", "container", "duration_ms", "frame_rate"],
         "0021 adds video metadata columns on visual_assets",
       );
+      assert.ok(tables.includes("agent_runs"), "0022 table created on the upgrade path");
+      assert.ok(tables.includes("agent_tool_calls"), "0022 table created on the upgrade path");
 
       // The upgraded schema must match a freshly bootstrapped one.
       const freshPool = new pg.Pool({ connectionString: databaseUrl(FRESH_DB) });

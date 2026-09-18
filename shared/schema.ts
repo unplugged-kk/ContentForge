@@ -1637,3 +1637,76 @@ export type LearningSignal = typeof learningSignals.$inferSelect;
 export type InsertLearningSignal = z.infer<typeof insertLearningSignalSchema>;
 export type LearningSignalType = "edit" | "approval" | "publication" | "performance" | "derived";
 export type PerformanceAvailability = "observed" | "not_available";
+
+// ── AGENT RUNTIME (Phase 22) ─────────────────────────────────────────────────
+// Durable agent execution identity. Agents never write domain tables; they
+// create AgentRun / AgentToolCall rows and invoke existing domain services.
+
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    backendId: varchar("backend_id", { length: 80 }).notNull(),
+    providerSnapshot: jsonb("provider_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    objective: text("objective").notNull(),
+    /** requested | running | waiting | completed | failed | cancelled */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    currentStep: integer("current_step").notNull().default(0),
+    attempt: integer("attempt").notNull().default(1),
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull().unique(),
+    correlationId: varchar("correlation_id", { length: 100 }).notNull(),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    cancellationRequested: boolean("cancellation_requested").notNull().default(false),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("agent_runs_user_idx").on(table.userId),
+    index("agent_runs_status_idx").on(table.status),
+  ],
+);
+
+export const agentToolCalls = pgTable(
+  "agent_tool_calls",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    agentRunId: integer("agent_run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    toolName: varchar("tool_name", { length: 80 }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull(),
+    inputHash: varchar("input_hash", { length: 64 }).notNull(),
+    input: jsonb("input").$type<Record<string, unknown>>().notNull().default({}),
+    /** requested | running | queued | completed | denied | failed */
+    status: varchar("status", { length: 20 }).notNull().default("requested"),
+    result: jsonb("result").$type<Record<string, unknown>>().notNull().default({}),
+    resourceRefs: jsonb("resource_refs").$type<Record<string, unknown>>().notNull().default({}),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_tool_calls_idempotency_uq").on(table.idempotencyKey),
+    index("agent_tool_calls_run_idx").on(table.agentRunId),
+    index("agent_tool_calls_user_idx").on(table.userId),
+  ],
+);
+
+export const insertAgentRunSchema = createInsertSchema(agentRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertAgentToolCallSchema = createInsertSchema(agentToolCalls).omit({
+  id: true,
+  createdAt: true,
+});
+export type AgentRun = typeof agentRuns.$inferSelect;
+export type InsertAgentRun = z.infer<typeof insertAgentRunSchema>;
+export type AgentToolCall = typeof agentToolCalls.$inferSelect;
+export type InsertAgentToolCall = z.infer<typeof insertAgentToolCallSchema>;
