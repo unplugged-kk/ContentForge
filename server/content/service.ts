@@ -47,6 +47,7 @@ import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
+import { createConfiguredVideoFactoryProvider } from "./videoFactoryProvider";
 import { runVisualGeneration } from "./visualService";
 import { registerStyleAnalyzer } from "./style";
 import { createGatewayStyleAnalyzer } from "./styleAnalyzer";
@@ -97,6 +98,10 @@ export function registerBuiltinVisualProviders(): void {
   // configuration, never a branch in this file.
   registerVisualProvider(createOpenAiImageProvider());
   registerVisualProvider(createFixtureVideoProvider());
+  // Video Factory stays a separate system. This adapter is the only ContentForge
+  // registration — selected explicitly via providerId `video-factory`. Default
+  // video generation remains `local-video-fixture` so existing callers are unchanged.
+  registerVisualProvider(createConfiguredVideoFactoryProvider());
 }
 
 export interface VisualRunDeps {

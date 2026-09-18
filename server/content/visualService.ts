@@ -378,6 +378,7 @@ export async function runVisualGeneration(
           variationCount: wanted,
           source,
           instruction,
+          generationId: generation.id,
         });
         validateMediaOutput(output, {
           maxBytes: typeof (snapshot.spec as { maxBytes?: number } | undefined)?.maxBytes === "number"
@@ -411,6 +412,15 @@ export async function runVisualGeneration(
             providerVersion: output.providerVersion,
             model: output.model,
             variationIndex: position,
+            ...(typeof output.usage.contractVersion === "string"
+              ? { contractVersion: output.usage.contractVersion }
+              : {}),
+            ...(typeof output.usage.externalJobId === "string"
+              ? { externalJobId: output.usage.externalJobId }
+              : {}),
+            ...(typeof output.usage.outputIdentity === "string"
+              ? { outputIdentity: output.usage.outputIdentity }
+              : {}),
           },
           supersedesId: null,
           provenance: "generated",

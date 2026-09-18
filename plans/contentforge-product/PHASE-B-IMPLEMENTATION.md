@@ -747,6 +747,96 @@ live E2E 154/154; visual E2E 28/28; fresh migrations 22 / 50 tables.
 Stories / Live, advanced Reel editing, automatic clipping, automatic cover
 generation, audio, avatars/lip-sync, video autopilot, UI, Chrome/capture.
 
+## Phase 21 — Video Factory integration contract (done)
+
+**The problem this closes**: Phase 19 made `kind=video` a durable ContentForge
+generation, and Phase 20 can publish an imported VideoAsset as an Instagram
+Reel. Rendering still lived in a **separate** local Video Factory
+(HyperFrames filesystem queue). This phase adds a versioned provider contract
+and adapter so ContentForge can submit, reconcile, and import — without merging
+the factory, copying TTS/renderer/dashboard, or inventing a remote API the
+factory does not have.
+
+```
+Story → Opportunity(format=video) → GenerationPolicy → GenerationJob
+     → VideoGeneration(provider=video-factory)
+     → video-factory.contract.v1
+     → VideoFactoryTransport (filesystem today; HTTP later)
+     → external factory execution
+     → MP4 bytes
+     → AssetStoragePort → VideoAsset → optional Artifact
+```
+
+**Separation.** ContentForge owns VideoGeneration, VideoAsset, Artifact,
+GenerationJob, GenerationPolicy, Story, Opportunity, ownership, approval.
+Video Factory owns HyperFrames project construction, TTS (Chatterbox/`say`),
+rendering (`npx hyperframes@0.7.60 render`), local queue concurrency, dashboard,
+and its filesystem state. The factory repo is not modified.
+
+**Provider.** One registration: `providerId=video-factory` on the existing
+`VisualProviderPort` (`generate_video` only; `refine_video` is permanently
+unsupported). Default video generation remains `local-video-fixture`. No
+VideoFactoryService, HyperFramesService, RenderQueueService, or second queue.
+
+**Contract.** `video-factory.contract.v1` — documented in
+`plans/contentforge-product/video-factory-contract-v1.md`. Bounded textual
+files (Option A): `CONTRACT.json`, factory-native `job.json`, `BRIEF.md`,
+optional `SCRIPT.md` / `STORYBOARD.md`. Large scripts stay in Postgres; pg-boss
+still carries only `{ visualGenerationId }`. ContextAssembly, credentials,
+publication, analytics, and automation state never cross the boundary.
+Storyboard/`index.html` are not fabricated — missing HyperFrames composition is
+an honest gap.
+
+**Transport.** Transport-neutral `submit` / `getStatus` / `getOutput`. Current
+adapter is a filesystem bridge (`VIDEO_FACTORY_ROOT`) matching
+`building/ → queue/ → work/ → done|failed` plus `output/` and `state/`.
+`manifest.json` is observational, not generation truth. Absolute factory paths
+are never domain identity.
+
+**Identity / retry / regenerate.** External job id is `cfvg-{VisualGeneration.id}`.
+Retry reconciles the same folder. Unknown state does not mint a new id.
+Explicit regenerate creates a new ContentForge generation and therefore a new
+factory job. `accepted` ≠ `ready`. `done` ≠ VideoAsset until import+validation.
+
+**Output import.** Factory MP4 → validate (`ftyp`, MIME, dimensions, duration,
+bytes) → `AssetStoragePort.put` → `VideoAsset.storage_key = local:<sha>`.
+Import is idempotent on `(visualGenerationId, position)`. After import,
+ContentForge does not need the factory online to publish that asset.
+
+**Security.** Job ids are `cfvg-[1-9][0-9]*` only (path traversal rejected).
+Render options are `{ quality: draft|medium|high }` — never `renderArgs` arrays
+or shell strings. Intent cannot set `jobId`, callback URLs, or output paths.
+Scripts are DATA. Remote HTTP auth is not applicable: there is no remote submit
+API. Local bridge stays inside the configured root.
+
+**Health.** Registry health reports `registered`, `generate_video`,
+`transportConfigured`, and `reachable` of the bridge directory. Configuration
+is not a live render.
+
+**Live render.** `Real Video Factory render smoke: BLOCKED — hyperframes@0.7.60 is not installed in this environment; ContentForge does not emit a HyperFrames composition (index.html); the factory has no versioned remote submission API.`
+
+**Remote.** `Video Factory remote integration: BLOCKED — current factory has no versioned remote submission API` (dashboard `:4300` is pause/resume/retry/cancel + `manifest.json` only).
+
+**Migration.** None. Phase 19 `visual_generations` / `visual_assets` already
+hold provider id, frozen snapshot, and asset metadata (`contractVersion`,
+`externalJobId`, `outputIdentity`).
+
+**Verification:** TypeScript 0 errors; unit 460/460; real Postgres 235/235;
+live E2E 154/154; visual E2E 38/38 (Phase 21 Paths A–I green; Path J documented
+blocker); fresh migrations 22 / 50 tables.
+
+**CannerAI parity (reassessed).** Visuals: contract+import ready, actual
+HyperFrames render blocked. Distribution: imported VideoAsset can still flow
+into the Phase 20 Instagram Reel adapter; YouTube/X/LinkedIn video publishing
+not added. Personalization: ContextAssembly snapshot frozen in ContentForge,
+not sent to the factory. Automation: no default video autopilot. Research,
+repurposing, analytics unchanged. Workspace/UI and Chrome still deferred.
+
+**Deferred:** remote Video Factory HTTP submit API, YouTube / Shorts, X video,
+LinkedIn video, Facebook video, advanced editing, timeline, automatic clipping,
+audio outside Video Factory, avatar/lip-sync, autonomous video, video autopilot,
+UI, Chrome, HyperFrames composition generation inside ContentForge.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

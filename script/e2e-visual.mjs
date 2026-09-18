@@ -28,7 +28,8 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import nodeHttp from "node:http";
 import path from "node:path";
 import process from "node:process";
@@ -183,6 +184,29 @@ async function startApp(extraEnv = {}) {
  * else (HTTP app, Postgres, pg-boss, publication/media-resolution logic) is
  * real, exactly like `e2e/fixture/rss-fixture.mjs` is to `e2e-live.mjs`.
  */
+function fixtureMp4Bytes() {
+  const buf = Buffer.alloc(32);
+  buf.writeUInt32BE(24, 0);
+  buf.write("ftyp", 4, "ascii");
+  buf.write("isom", 8, "ascii");
+  buf.writeUInt32BE(0, 12);
+  buf.write("isom", 16, "ascii");
+  buf.write("mp41", 20, "ascii");
+  buf.writeUInt32BE(8, 24);
+  buf.write("mdat", 28, "ascii");
+  return buf;
+}
+
+function completeFactoryJob(root, jobId) {
+  mkdirSync(path.join(root, "output"), { recursive: true });
+  mkdirSync(path.join(root, "state"), { recursive: true });
+  writeFileSync(path.join(root, "output", `${jobId}.mp4`), fixtureMp4Bytes());
+  writeFileSync(
+    path.join(root, "state", `${jobId}.json`),
+    JSON.stringify({ id: jobId, status: "done", error: null }),
+  );
+}
+
 function startXFixture() {
   let tweetSeq = 0;
   let mediaSeq = 0;
@@ -246,12 +270,18 @@ async function killApp(signal = "SIGKILL") {
 
   xFixtureHandle = startXFixture();
   const xFixturePort = await xFixtureHandle.start();
+  const vfRoot = mkdtempSync(path.join(os.tmpdir(), "cf-e2e-vf-"));
+  for (const folder of ["building", "queue", "work", "done", "failed", "output", "state"]) {
+    mkdirSync(path.join(vfRoot, folder), { recursive: true });
+  }
   const xEnv = {
     XQUICK_API_BASE_URL: `http://127.0.0.1:${xFixturePort}`,
     XQUICK_API_KEY: "fixture-key",
     XQUICK_ACCOUNT: "cf_test",
     XQUICK_TIMEOUT_MS: "5000",
+    VIDEO_FACTORY_ROOT: vfRoot,
   };
+  console.log(`  vf root:  ${vfRoot}`);
 
   phase("Startup");
   await startApp(xEnv);
@@ -805,6 +835,187 @@ async function killApp(signal = "SIGKILL") {
     assert(assets.length === 1, `duplicate video assets after restart: ${assets.length}`);
     assert(Number.isInteger(row.body.visualAssetId), "no video asset after restart");
     return `video generation ${id} completed after restart → asset ${row.body.visualAssetId}`;
+  });
+
+  phase("Phase 21: Video Factory integration contract");
+  let factoryGenerationId = null;
+  let factoryAssetId = null;
+  await check("Path A: POST /api/video-generations providerId=video-factory", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      providerId: "video-factory",
+      intent: { subject: `${RUN} factory video`, aspectRatio: "9:16" },
+      durationMs: 1400,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    assert(res.body.providerId === "video-factory", `providerId=${res.body.providerId}`);
+    factoryGenerationId = res.body.id;
+    return `factory generation ${factoryGenerationId}`;
+  });
+
+  await check("Path B: adapter submits a filesystem job folder", async () => {
+    const jobId = `cfvg-${factoryGenerationId}`;
+    const folder = await waitFor(
+      () => (existsSync(path.join(vfRoot, "queue", jobId)) ? path.join(vfRoot, "queue", jobId) : false),
+      { timeoutMs: 30_000, intervalMs: 200, label: "video-factory queue folder" },
+    );
+    assert(existsSync(path.join(folder, "CONTRACT.json")), "CONTRACT.json missing");
+    assert(existsSync(path.join(folder, "BRIEF.md")), "BRIEF.md missing");
+    return `submitted ${jobId}`;
+  });
+
+  await check("Path C: observational external state is queued until output exists", async () => {
+    const jobId = `cfvg-${factoryGenerationId}`;
+    const [row] = await q("select status from visual_generations where id = $1", [factoryGenerationId]);
+    assert(["requested", "generating", "failed"].includes(row.status), `status=${row.status}`);
+    assert(row.status !== "ready", "queued factory job must not be ready");
+    assert(existsSync(path.join(vfRoot, "queue", jobId)), "factory job folder missing");
+    return `generation ${factoryGenerationId} not ready while factory job is queued`;
+  });
+
+  await check("Path D/E: complete factory output → import VideoAsset in ContentForge storage", async () => {
+    const jobId = `cfvg-${factoryGenerationId}`;
+    completeFactoryJob(vfRoot, jobId);
+    await waitFor(
+      async () => {
+        const rows = await q("select status, error_message from visual_generations where id = $1", [
+          factoryGenerationId,
+        ]);
+        const row = rows[0];
+        if (!row) return false;
+        if (row.status === "ready") return row;
+        if (row.status === "failed" && row.error_message && /permanent|invalid visual/i.test(row.error_message)) {
+          throw new Error(`factory import failed: ${row.error_message}`);
+        }
+        return false;
+      },
+      { timeoutMs: 180_000, intervalMs: 500, label: "video-factory import ready" },
+    );
+    const row = await http("GET", `/api/video-generations/${factoryGenerationId}`);
+    assert(row.body.status === "ready", `status=${row.body.status}`);
+    factoryAssetId = row.body.visualAssetId;
+    const [dbRow] = await q(
+      "select storage_key, mime, duration_ms, metadata from visual_assets where id = $1",
+      [factoryAssetId],
+    );
+    assert(/^local:[0-9a-f]+$/.test(dbRow.storage_key), `storage_key=${dbRow.storage_key}`);
+    assert(!String(dbRow.storage_key).includes(vfRoot), "factory path leaked into storage_key");
+    assert(dbRow.mime === "video/mp4", `mime=${dbRow.mime}`);
+    assert(dbRow.metadata?.externalJobId === `cfvg-${factoryGenerationId}`, "external job id missing");
+    assert(dbRow.metadata?.contractVersion === "video-factory.contract.v1", "contract version missing");
+    return `imported asset ${factoryAssetId} storage=${dbRow.storage_key}`;
+  });
+
+  await check("Path F: duplicate POST reuses the same VideoGeneration and one VideoAsset", async () => {
+    const again = await http("POST", "/api/video-generations", {
+      providerId: "video-factory",
+      intent: { subject: `${RUN} factory video`, aspectRatio: "9:16" },
+      durationMs: 1400,
+    });
+    assert(again.status === 200, `expected 200, got ${again.status}`);
+    assert(again.body.id === factoryGenerationId, "duplicate created a new generation");
+    const assets = await q("select id from visual_assets where visual_generation_id = $1", [factoryGenerationId]);
+    assert(assets.length === 1, `duplicate assets: ${assets.length}`);
+    return `same generation ${factoryGenerationId}`;
+  });
+
+  await check("Path G: unknown factory state reconciles the same job id", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      providerId: "video-factory",
+      intent: { subject: `${RUN} factory unknown`, aspectRatio: "9:16" },
+      durationMs: 1300,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    const jobId = `cfvg-${res.body.id}`;
+    await waitFor(
+      () => existsSync(path.join(vfRoot, "queue", jobId)),
+      { timeoutMs: 30_000, intervalMs: 200, label: "unknown-path queue folder" },
+    );
+    completeFactoryJob(vfRoot, jobId);
+    await waitFor(
+      async () => {
+        const rows = await q("select status from visual_generations where id = $1", [res.body.id]);
+        return rows[0]?.status === "ready" ? rows[0] : false;
+      },
+      { timeoutMs: 180_000, intervalMs: 500, label: "unknown reconcile ready" },
+    );
+    const assets = await q("select id from visual_assets where visual_generation_id = $1", [res.body.id]);
+    assert(assets.length === 1, `expected 1 asset, got ${assets.length}`);
+    return `reconciled ${jobId} → asset ${assets[0].id}`;
+  });
+
+  await check("Path H: SIGKILL after factory submit reconciles the same job without duplicates", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      providerId: "video-factory",
+      intent: { subject: `${RUN} factory restart`, aspectRatio: "9:16" },
+      durationMs: 1200,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    const id = res.body.id;
+    const jobId = `cfvg-${id}`;
+    await killApp("SIGKILL");
+    const [atKill] = await q("select status from visual_generations where id = $1", [id]);
+    record(
+      "Video Factory VideoGeneration row survived the kill",
+      atKill && ["requested", "generating", "failed"].includes(atKill.status),
+      `status=${atKill?.status}`,
+    );
+    await startApp(xEnv);
+    await waitFor(
+      () => existsSync(path.join(vfRoot, "queue", jobId)) || existsSync(path.join(vfRoot, "building", jobId)),
+      { timeoutMs: 60_000, intervalMs: 250, label: "post-restart factory queue folder" },
+    );
+    completeFactoryJob(vfRoot, jobId);
+    await waitFor(
+      async () => {
+        const rows = await q("select status, error_message from visual_generations where id = $1", [id]);
+        const row = rows[0];
+        if (!row) return false;
+        if (row.status === "ready") return row;
+        if (row.status === "failed" && /permanent|invalid visual/i.test(row.error_message ?? "")) {
+          throw new Error(`failed after restart: ${row.error_message}`);
+        }
+        return false;
+      },
+      { timeoutMs: 180_000, intervalMs: 500, label: "post-restart factory import" },
+    );
+    const assets = await q("select id, storage_key from visual_assets where visual_generation_id = $1", [id]);
+    assert(assets.length === 1, `duplicate factory assets after restart: ${assets.length}`);
+    assert(/^local:[0-9a-f]+$/.test(assets[0].storage_key), "storage_key not ContentForge-owned");
+    return `factory generation ${id} recovered → asset ${assets[0].id}`;
+  });
+
+  await check("Path I: owner isolation hides another user's Video Factory generation", async () => {
+    const res = await http("POST", "/api/video-generations", {
+      providerId: "video-factory",
+      intent: { subject: `${RUN} factory owner`, aspectRatio: "9:16" },
+      durationMs: 1100,
+    });
+    assert(res.status === 201, `expected 201, got ${res.status}: ${res.text}`);
+    await q("update visual_generations set user_id = 99 where id = $1", [res.body.id]);
+    const hidden = await http("GET", `/api/video-generations/${res.body.id}`);
+    assert(hidden.status === 404, `expected 404, got ${hidden.status}`);
+    await q("update visual_generations set user_id = 1 where id = $1", [res.body.id]);
+    return `generation ${res.body.id} hidden from non-owner`;
+  });
+
+  await check("Path J: real HyperFrames Video Factory render", async () => {
+    const vfRepo = "/Users/kishore/git/video-factory";
+    const runner = path.join(vfRepo, "runner.mjs");
+    if (!existsSync(runner)) {
+      return "BLOCKED — Video Factory runner.mjs is not present at the audited path";
+    }
+    const composition = path.join(vfRepo, "done", "ai-tools-2026-9x16", "index.html");
+    if (!existsSync(composition)) {
+      return "BLOCKED — no HyperFrames composition exists for a ContentForge-authored job (ContentForge does not generate index.html)";
+    }
+    const npx = spawnSync("npx", ["--no-install", "hyperframes@0.7.60", "--help"], {
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    if (npx.status !== 0) {
+      return `BLOCKED — hyperframes@0.7.60 is not executable here (${(npx.stderr || npx.stdout || "no output").slice(0, 180)})`;
+    }
+    return "BLOCKED — current factory has no versioned remote submission API and ContentForge does not emit a HyperFrames composition; filesystem contract is ready but a live render would require modifying/running the separate factory against a pre-built project";
   });
 
   const passed = results.filter((r) => r.ok).length;

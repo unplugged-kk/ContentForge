@@ -315,7 +315,10 @@ export {
   type VisualGenerationOutput,
   type VisualGenerationRequest,
   type VisualKind,
+  type VisualProviderHealth,
   type VisualProviderPort,
+  listVisualProviders,
+  visualProviderHealth,
 } from "./visual";
 
 export {
@@ -323,6 +326,29 @@ export {
   createFixtureVideoProvider,
   fixtureMp4Bytes,
 } from "./visualFixture";
+
+export {
+  VIDEO_FACTORY_CONTRACT_VERSION,
+  VIDEO_FACTORY_PROVIDER_ID,
+  assertSafeVideoFactoryJobId,
+  buildVideoFactoryJobRequest,
+  classifyVideoFactoryState,
+  parseVideoFactoryJobRequest,
+  serializeVideoFactoryJobRequest,
+  validateVideoFactoryRenderSpec,
+  videoFactoryJobId,
+} from "./videoFactoryContract";
+
+export {
+  createFilesystemVideoFactoryTransport,
+  createMemoryVideoFactoryTransport,
+  videoFactoryRootFromEnv,
+} from "./videoFactoryTransport";
+
+export {
+  createConfiguredVideoFactoryProvider,
+  createVideoFactoryProvider,
+} from "./videoFactoryProvider";
 
 export {
   MAX_VARIATION_COUNT,

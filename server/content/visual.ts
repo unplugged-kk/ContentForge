@@ -66,6 +66,12 @@ export interface VisualGenerationRequest {
   source?: VisualSourceImage;
   /** User instruction treated as DATA, never as worker execution. */
   instruction?: string | null;
+  /**
+   * Durable VisualGeneration id. Async providers (Video Factory) derive
+   * external job identity from this — never a fresh id on retry, never a
+   * queue payload.
+   */
+  generationId?: number;
 }
 
 export interface VisualGenerationOutput {
@@ -103,7 +109,21 @@ export interface VisualProviderPort {
   readonly models?: readonly string[];
   /** Whether `generate()` returns the final output synchronously (default true). */
   readonly synchronous?: boolean;
+  /** Optional registry health. Configuration is not proof of a live generation. */
+  health?(): VisualProviderHealth | Promise<VisualProviderHealth>;
   generate(request: VisualGenerationRequest): Promise<VisualGenerationOutput>;
+}
+
+export interface VisualProviderHealth {
+  providerId: string;
+  registered: true;
+  capabilities: readonly VisualCapability[];
+  modalities?: readonly MediaModality[];
+  synchronous: boolean;
+  transportConfigured?: boolean;
+  /** Reachability of the configured transport — not "a generation is healthy". */
+  reachable?: boolean;
+  notes?: readonly string[];
 }
 
 /** The modalities a provider actually supports (declared, or derived from capabilities). */
@@ -172,6 +192,29 @@ export function getVisualProvider(providerId: string): VisualProviderPort {
 
 export function resetVisualProviders(): void {
   visualRegistry.clear();
+}
+
+export function listVisualProviders(): VisualProviderPort[] {
+  return Array.from(visualRegistry.values());
+}
+
+export async function visualProviderHealth(provider: VisualProviderPort): Promise<VisualProviderHealth> {
+  const base: VisualProviderHealth = {
+    providerId: provider.providerId,
+    registered: true,
+    capabilities: provider.capabilities,
+    modalities: providerModalities(provider),
+    synchronous: provider.synchronous !== false,
+  };
+  if (!provider.health) return base;
+  const extra = await provider.health();
+  return {
+    ...base,
+    ...extra,
+    providerId: provider.providerId,
+    registered: true,
+    capabilities: extra.capabilities ?? provider.capabilities,
+  };
 }
 
 // ── Asset security (validate before anything durable) ─────────────────────────
