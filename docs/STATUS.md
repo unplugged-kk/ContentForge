@@ -1,6 +1,6 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-18 (Phase 20) · Branch reviewed: `replit` @ `2230cf2` (implementation landed)
+Last updated: 2026-09-18 (Phase 21) · Branch reviewed: `replit` @ `181fbb8` (implementation landed)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -13,14 +13,16 @@ summary kept in the review PR.
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npm run test:unit` | **445 passed / 0 failed** (107 suites) |
-| `npm test` | **445 passed** |
-| `npm run test:db` (real PostgreSQL) | **228 passed / 0 failed / 0 skipped** (27 suites) |
-| `npm run test:e2e:live` (real running app) | **154 passed / 0 failed** (154 checks). Phase 20 Reels Paths A–I green (Path H SIGKILL, no duplicate Publication). Phase 18 image/carousel A–K remained green |
-| `npm run test:e2e:visual` (real running app) | **28 passed / 0 failed** (28 checks). Phase 19 video Paths A–H remained green |
+| `npm run test:unit` | **460 passed / 0 failed** (110 suites) |
+| `npm test` | **460 passed** |
+| `npm run test:db` (real PostgreSQL) | **235 passed / 0 failed / 0 skipped** (28 suites) |
+| `npm run test:e2e:live` (real running app) | **154 passed / 0 failed** (154 checks). Phase 20 Reels Paths A–I remained green. Phase 18 image/carousel A–K remained green |
+| `npm run test:e2e:visual` (real running app) | **38 passed / 0 failed** (38 checks). Phase 21 Video Factory Paths A–I green (Path H SIGKILL, one VideoAsset). Phase 19 video Paths A–H remained green. Path J documented blocker |
 | `npm run build` (production CJS bundle) | **succeeds**; live/visual E2E boot `dist/index.cjs` |
-| Fresh DB migration | **22 migrations / 50 tables** from zero (no new Instagram/Reel tables) |
+| Fresh DB migration | **22 migrations / 50 tables** from zero (no new Video Factory tables) |
 | Existing DB migration | upgrades a 0000–0002 database to the same schema including `0021` |
+| Real Video Factory render smoke | **BLOCKED — hyperframes@0.7.60 is not installed here; ContentForge does not emit HyperFrames composition; factory has no versioned remote submit API** |
+| Video Factory remote integration | **BLOCKED — current factory has no versioned remote submission API** |
 | Real Instagram Reels network smoke | **BLOCKED — professional publishing credentials/account unavailable** |
 | Real video provider network smoke | **BLOCKED — no verified video generation endpoint/credential** |
 | Real Instagram image/carousel network verification | **BLOCKED — credential/account unavailable** |
@@ -28,11 +30,42 @@ summary kept in the review PR.
 | Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
 | External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
 
-Baseline before this phase: 435 unit / 220 DB / 145 live E2E / 28 visual E2E / 22 migrations / 50 tables.
+Baseline before this phase: 445 unit / 228 DB / 154 live E2E / 28 visual E2E / 22 migrations / 50 tables.
 
 ---
 
-## Instagram Reels Video Publishing (new in this phase — Phase 20)
+## Video Factory Integration Contract (new in this phase — Phase 21)
+
+**PARTIALLY IMPLEMENTED — versioned `video-factory.contract.v1` + `VisualProviderPort` adapter + filesystem transport + ContentForge import are real; live HyperFrames render and remote HTTP submit are blocked.**
+
+```
+Story → Opportunity(format=video) → GenerationPolicy → GenerationJob
+     → VideoGeneration(provider=video-factory)
+     → video-factory.contract.v1
+     → VideoFactoryTransport (filesystem today)
+     → external Video Factory (separate process)
+     → MP4 bytes → AssetStoragePort → VideoAsset → optional Artifact
+```
+
+`Video Factory filesystem contract: IMPLEMENTED`
+`Video Factory remote HTTP submit: BLOCKED — current factory has no versioned remote submission API`
+`Real HyperFrames render smoke: BLOCKED — hyperframes@0.7.60 missing; no ContentForge composition generator`
+
+**Separation.** Video Factory remains a separate repo. ContentForge does not copy TTS, HyperFrames rendering, the dashboard, or factory filesystem state into its database. The factory implementation was not modified.
+
+**Provider.** `providerId=video-factory` on the existing `VisualProviderPort` (`generate_video` only). Default video generation is still `local-video-fixture`. No second queue, AI gateway, or media abstraction.
+
+**Contract / transport.** Bounded textual job folder (`CONTRACT.json`, `job.json`, `BRIEF.md`, optional `SCRIPT.md`/`STORYBOARD.md`). `VIDEO_FACTORY_ROOT` filesystem bridge matches `building/ → queue/ → work/ → done|failed`. `manifest.json` is observational. A future HTTP transport can implement `submit` / `getStatus` / `getOutput` without changing media semantics.
+
+**Identity.** External job id is `cfvg-{VisualGeneration.id}`. Retry reconciles the same job. Unknown does not mint a new id. Explicit regenerate creates a new ContentForge generation. `accepted` ≠ `ready`. `done` ≠ VideoAsset until validated import.
+
+**Import.** Factory MP4 is copied into `AssetStoragePort` (`local:<sha>`). Factory absolute paths are not `storage_key`. Import is idempotent. After import, publishing does not require the factory to stay online. Phase 20 Instagram Reel adapter can consume that VideoAsset.
+
+**Not in this phase:** remote Video Factory HTTP API, YouTube/Shorts, X/LinkedIn/Facebook video, HyperFrames composition generation, TTS inside ContentForge, video autopilot, UI, Chrome.
+
+---
+
+## Instagram Reels Video Publishing (previous — Phase 20)
 
 **PARTIALLY IMPLEMENTED — `format=video + channel=instagram` publishes through the existing Instagram ChannelAdapter and Publication lifecycle; live professional Reel network smoke is credential-blocked.**
 
@@ -1332,10 +1365,12 @@ evidence corpus; it does not apply it.
 - **Visuals**: still-image generation, variations, refinement, and carousel
   remain on `VisualProviderPort`. A real image vendor is implemented but
   **unverified live** in this environment. **Video is a durable primitive**
-  (Phase 19: kind=video generations/assets, specs, refine, Artifact refs) but
-  **live video vendor execution is blocked** — only the fixture double has run
-  through real queue/DB/HTTP. Audio remains capability-declared only. No
-  editor UI, no brand-asset system, no YouTube/Reels publishing.
+  (Phase 19) with **Phase 21 Video Factory contract + filesystem import**.
+  Live HyperFrames render is blocked (CLI not installed; no ContentForge
+  composition generator). Audio remains capability-declared only. No editor UI,
+  no brand-asset system. Instagram Reels publishing exists for imported
+  VideoAssets (Phase 20, live Meta smoke credential-blocked). YouTube / X /
+  LinkedIn video publishing are not implemented.
 - **Reddit**: provider and credentialed seam implemented and tested, but Reddit
   returns **403 to anonymous scripted clients** on many networks. Production use
   needs `REDDIT_ACCESS_TOKEN`; the app never performs or rotates OAuth.
@@ -1345,7 +1380,10 @@ evidence corpus; it does not apply it.
 - **Autonomous discovery** has no topic ranking and can never bypass approval.
 - last30days / Agent-Reach remain references — nothing vendored, no AGPL code.
 - Generation `cost` stays `null`; no authoring/editing UI exists.
-- **Video Factory**: no rendering, no integration — contract only.
+- **Video Factory**: separate system. ContentForge has `video-factory.contract.v1`
+  + filesystem transport + import into AssetStoragePort. The factory still owns
+  TTS/render/dashboard. No remote submit API. No HyperFrames composition
+  generator inside ContentForge.
 - **X reconciliation**: bounded at 5 attempts per Publication before being
   left `unknown` permanently for an operator; xQuick's read-lookup fallback
   (`fetchTweetTextByIdViaOfficialApi`) depends on a configured read endpoint
@@ -1363,13 +1401,14 @@ Automatic style mutation / drift / re-analysis, autonomous ranking, topic
 recommendation, best-time intelligence, automatic personalization of profile /
 memoryJson / brandingJson, analytics UI / workspace, Chrome extension,
 additional channels, visual automation, vector search / embeddings,
-unrestricted autopilot, all authoring UI, YouTube / Instagram Reels / Shorts /
-X video / LinkedIn video publishing, live video vendor execution, audio /
-lip-sync / timeline editing, video autopilot, LinkedIn media/articles/comments,
-billing, collaboration, notifications, full iCalendar/RRULE recurrence.
+unrestricted autopilot, all authoring UI, YouTube / Shorts / X video /
+LinkedIn video publishing, remote Video Factory HTTP submit, live HyperFrames
+render in this environment, audio / lip-sync / timeline editing, video
+autopilot, LinkedIn media/articles/comments, billing, collaboration,
+notifications, full iCalendar/RRULE recurrence.
 
 ## Next boundary
 
-Not decided here. Phase 19 is landed on `replit` (`73951c8`). The next
+Not decided here. Phase 21 is landed on `replit` (`181fbb8`). The next
 implementation phase is selected externally after review of this status. Do not
-start Phase 20 from this document.
+start Phase 22 from this document.
