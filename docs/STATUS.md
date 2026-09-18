@@ -1,6 +1,79 @@
 # ContentForge — implementation status
 
-Last updated: 2026-09-18 (Phase 18) · Branch reviewed: `replit` @ `b9e090b` (implementation landed)
+Last updated: 2026-09-18 (Phase 19) · Branch reviewed: `replit` @ `73951c8` (implementation landed)
+
+This file is the single status artifact for the implementation work. All code,
+migrations, tests and planning documents live on `replit`; this document is the
+summary kept in the review PR.
+
+---
+
+## Verification (exact, current tree — re-verified this session)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | **0 errors** |
+| `npm run test:unit` | **435 passed / 0 failed** (107 suites) |
+| `npm test` | **435 passed** |
+| `npm run test:db` (real PostgreSQL) | **220 passed / 0 failed / 0 skipped** (27 suites) |
+| `npm run test:e2e:live` (real running app) | **145 passed / 0 failed** (145 checks). Phase 18 Instagram Paths A–K green. Phase 17 Threads remained green. No YouTube/Reels paths added |
+| `npm run test:e2e:visual` (real running app) | **28 passed / 0 failed** (28 checks). Phase 19 Paths A–H green (Path H SIGKILL, no duplicate VideoAsset) |
+| `npm run build` (production CJS bundle) | **succeeds**; live/visual E2E boot `dist/index.cjs` |
+| Fresh DB migration | **22 migrations / 50 tables** from zero (additive `visual_assets` video columns; no new tables) |
+| Existing DB migration | upgrades a 0000–0002 database to the same schema including `0021` |
+| Real video provider network smoke | **BLOCKED — no verified video generation endpoint/credential** |
+| Real Instagram network verification | **BLOCKED — credential/account unavailable** |
+| Real Threads network verification | **BLOCKED — credential unavailable** |
+| Real image vendor smoke | **BLOCKED** — OpenRouter `openai/dall-e-3` 404 (unchanged) |
+| External smoke (non-gating) | green this session (hnrss.org, 20 real sources) |
+
+Baseline before this phase: 427 unit / 211 DB / 145 live E2E / 19 visual E2E / 21 migrations / 50 tables.
+
+---
+
+## Video Content Production Foundation (new in this phase — Phase 19)
+
+**PARTIALLY IMPLEMENTED — durable VideoGeneration/VideoAsset on the existing visual architecture; live video vendor execution blocked; no channel video publishing.**
+
+```
+CreativeIntent / Story
+        → Opportunity(format=video) → GenerationPolicy → GenerationJob
+        → VideoGeneration (visual_generations.kind=video)
+        → VisualProviderPort (generate_video / refine_video)
+        → VideoAsset (visual_assets.kind=video; storage_key, not bytes)
+        → optional Artifact(format=video) { visualAssetId }
+```
+
+**Abstraction.** One provider port: `VisualProviderPort` gained `generate_video`
+and `refine_video`. Image fixtures do not claim video. `local-video-fixture` is
+the true external-boundary double. `openai-image` remains `images.generate` only.
+
+**Migration.** Additive `0021_video_asset_metadata.sql`: `duration_ms`,
+`container`, `codec`, `frame_rate` on `visual_assets`. No second asset table.
+
+**Invariants preserved.** One AI abstraction, one pg-boss queue (`{ visualGenerationId }`),
+one ContextAssembly freeze at create, immutable assets + `supersedes_id` /
+`source_visual_asset_id` lineage, owner isolation, retry ≠ regenerate, IDs not
+blobs, PostgreSQL durability + AssetStoragePort bytes.
+
+**Specs / validation.** Registry entries `generic_social_video`, `landscape_video`,
+`square_video`. Canonical `validateVideoOutput` (MIME, ftyp/EBML, duration,
+dimensions, size). Channel-specific limits stay in adapters (none for video yet).
+
+**Publication readiness.** Format `video` × `x` can create Opportunities. X
+`publish("video")` is permanent `not implemented`. No YouTube, Reels, Shorts,
+X video, or LinkedIn video adapter.
+
+**HTTP.** `POST/GET /api/video-generations`, `GET /api/video-assets/:id`,
+`POST /api/video-assets/:id/refine`. Attachment: existing `/api/artifacts/:id/visuals`.
+
+**Not in this phase:** live vendor video, video scripts subsystem, multi-video
+variations, automatic thumbnails, audio/lip-sync/editing, video autopilot, UI,
+Chrome, any video channel publishing.
+
+---
+
+## Instagram Channel + Visual Publishing (previous — Phase 18)
 
 This file is the single status artifact for the implementation work. All code,
 migrations, tests and planning documents live on `replit`; this document is the
@@ -1202,11 +1275,13 @@ evidence corpus; it does not apply it.
 - **Recurrence**: the `every:<n><unit>` grammar is fixed-interval only — no
   calendar-aware recurrence (e.g. "every Monday at 9am local"), since nothing
   in the existing Schedule model resolved wall-clock/DST semantics either.
-- **Visuals**: a real image provider (OpenAI-compatible) is implemented
-  (Phase 9), but **no credential is available in this environment**, so it
-  has never executed against real network traffic — only against a local
-  HTTP double. Video/audio remain capability-ready, not implemented. There
-  is no editor UI, no brand-asset system, and no sizing/derivation policy.
+- **Visuals**: still-image generation, variations, refinement, and carousel
+  remain on `VisualProviderPort`. A real image vendor is implemented but
+  **unverified live** in this environment. **Video is a durable primitive**
+  (Phase 19: kind=video generations/assets, specs, refine, Artifact refs) but
+  **live video vendor execution is blocked** — only the fixture double has run
+  through real queue/DB/HTTP. Audio remains capability-declared only. No
+  editor UI, no brand-asset system, no YouTube/Reels publishing.
 - **Reddit**: provider and credentialed seam implemented and tested, but Reddit
   returns **403 to anonymous scripted clients** on many networks. Production use
   needs `REDDIT_ACCESS_TOKEN`; the app never performs or rotates OAuth.
@@ -1234,12 +1309,13 @@ Automatic style mutation / drift / re-analysis, autonomous ranking, topic
 recommendation, best-time intelligence, automatic personalization of profile /
 memoryJson / brandingJson, analytics UI / workspace, Chrome extension,
 additional channels, visual automation, vector search / embeddings,
-unrestricted autopilot, all authoring UI, Threads / Instagram publishing,
-LinkedIn media/articles/video/comments, billing, collaboration, notifications,
-full iCalendar/RRULE recurrence.
+unrestricted autopilot, all authoring UI, YouTube / Instagram Reels / Shorts /
+X video / LinkedIn video publishing, live video vendor execution, audio /
+lip-sync / timeline editing, video autopilot, LinkedIn media/articles/comments,
+billing, collaboration, notifications, full iCalendar/RRULE recurrence.
 
 ## Next boundary
 
-Not decided here. Phase 16 is landed on `replit` (`2dc29c2`). The next
+Not decided here. Phase 19 is landed on `replit` (`73951c8`). The next
 implementation phase is selected externally after review of this status. Do not
-start Phase 17 from this document.
+start Phase 20 from this document.
