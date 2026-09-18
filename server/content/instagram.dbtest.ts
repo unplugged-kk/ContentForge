@@ -43,6 +43,7 @@ import { publishArtifactToChannels } from "./distribution";
 import { ingestNormalizedOutcome } from "./learning/refresh";
 import { PERFORMANCE_SCHEMA_VERSION } from "./learning/constants";
 import { createLocalAssetStorage } from "./visual";
+import { fixtureMp4Bytes } from "./visualFixture";
 
 const CONNECTION = process.env.TEST_DATABASE_URL;
 const describeDb = CONNECTION ? describe : describe.skip;
@@ -54,9 +55,10 @@ const JPEG = Buffer.from(
 );
 
 function startInstagramFixture() {
-  const containers = new Map<string, { caption: string; status: string }>();
+  const containers = new Map<string, { caption: string; status: string; mediaType?: string }>();
   const media = new Map<string, { caption: string }>();
   const listed: Array<{ id: string; caption: string; timestamp: string; permalink: string }> = [];
+  const creates: URLSearchParams[] = [];
   let mode: "ok" | "drop-publish" = "ok";
   let seq = 0;
 
@@ -85,9 +87,14 @@ function startInstagramFixture() {
     }
     if (req.method === "POST" && url.pathname.endsWith("/media") && !url.pathname.endsWith("/media_publish")) {
       collect((body) => {
+        creates.push(body);
         seq += 1;
         const id = `c${RUN}-${seq}`;
-        containers.set(id, { caption: body.get("caption") ?? "", status: "FINISHED" });
+        containers.set(id, {
+          caption: body.get("caption") ?? "",
+          status: "FINISHED",
+          mediaType: body.get("media_type") ?? undefined,
+        });
         send(200, { id });
       });
       return;
@@ -158,6 +165,7 @@ function startInstagramFixture() {
       });
       media.set(id, { caption });
     },
+    creates,
   };
 }
 
@@ -346,6 +354,110 @@ describeDb("instagram channel adapter (db)", () => {
         format,
         channel: "instagram",
         payload,
+        attribution: [{ kind: "research_evidence", researchJobId: job.id, evidenceIds: [] }],
+        provenance: "generated",
+      },
+      { artifacts: store },
+    );
+    await submitArtifactForReview(artifact.id, { artifacts: store });
+    const approved = await approveArtifact(artifact.id, { artifacts: store });
+    return { artifact: approved, store, hero };
+  }
+
+  async function seedVideoAsset(ownerId: number, suffix: string) {
+    const stored = await assetStorage.put(fixtureMp4Bytes(), "video/mp4");
+    return content().insertVisualAsset({
+      userId: ownerId,
+      kind: "video",
+      storageKey: stored.storageKey,
+      mime: "video/mp4",
+      width: 1080,
+      height: 1920,
+      durationMs: 5_000,
+      container: "mp4",
+      codec: "avc1",
+      frameRate: 30,
+      byteSize: stored.byteSize,
+      contentHash: stored.contentHash,
+      altText: `${RUN} ${suffix}`,
+      position: 0,
+      provenance: "generated",
+    });
+  }
+
+  async function seedVideoArtifact(suffix: string, ownerId = 1) {
+    const tag = `${RUN}-${suffix}`;
+    const [job] = await db
+      .insert(researchJobs)
+      .values({
+        userId: ownerId,
+        correlationId: tag,
+        idempotencyKey: `${tag}-idem`,
+        kind: "directed",
+        query: "instagram reel",
+        status: "complete",
+        providerIds: ["rss"],
+        finishedAt: new Date(),
+      })
+      .returning();
+    const [source] = await db
+      .insert(researchSources)
+      .values({
+        jobId: job.id,
+        provider: "rss",
+        backend: "rss-parser",
+        kind: "article",
+        nativeId: `${tag}-src`,
+        canonicalUrl: `https://example.com/${tag}`,
+        contentHash: "c".repeat(64),
+        retrievedAt: new Date(),
+      })
+      .returning();
+    const [evidence] = await db
+      .insert(researchEvidence)
+      .values({
+        jobId: job.id,
+        sourceId: source.id,
+        kind: "excerpt",
+        origin: "sourced",
+        excerpt: "instagram reel",
+        excerptHash: `${tag}`.padEnd(64, "0").slice(0, 64),
+        retrievedAt: new Date(),
+      })
+      .returning();
+    const [story] = await db
+      .insert(stories)
+      .values({
+        userId: ownerId,
+        researchJobId: job.id,
+        provenance: "researched",
+        title: `${tag} story`,
+        insightBody: "Video Artifact, Instagram Reel publication.",
+        angles: [],
+        evidenceRefs: [evidence.id],
+        status: "ready",
+      })
+      .returning();
+    const store = content();
+    const opportunity = await createOpportunityFromStory(
+      story.id,
+      { concept: "instagram reel", objective: "educate", format: "video", channel: "instagram" },
+      { opportunities: store, stories: storyStore() },
+    );
+    const hero = await seedVideoAsset(ownerId, suffix);
+    const artifact = await createArtifact(
+      {
+        userId: ownerId,
+        generationJobId: null,
+        opportunityId: opportunity.id,
+        format: "video",
+        channel: "instagram",
+        payload: {
+          visualAssetId: hero.id,
+          caption: `${RUN} ${suffix}`,
+          altText: `${RUN} ${suffix}`,
+          aspectRatio: "9:16" as const,
+        },
         attribution: [{ kind: "research_evidence", researchJobId: job.id, evidenceIds: [] }],
         provenance: "generated",
       },
@@ -698,5 +810,201 @@ describeDb("instagram channel adapter (db)", () => {
     assert.equal(again.outcomes[0].publication!.id, pubId);
     const count = await db.select().from(publications).where(eq(publications.artifactId, artifact.id));
     assert.equal(count.filter((p) => p.channel === "instagram").length, 1);
+  });
+
+  it("video Artifact creates an Instagram Reel Publication on the same lifecycle", async () => {
+    const { artifact, store, hero } = await seedVideoArtifact("reel");
+    const result = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    assert.equal(result.outcomes[0].status, "created");
+    const pub = result.outcomes[0].publication!;
+    assert.equal(pub.channel, "instagram");
+    assert.equal(pub.artifactId, artifact.id);
+    const run = await runPublication(pub.id, pubDeps());
+    assert.equal(run.status, "published");
+    assert.ok(run.externalId?.startsWith("m"));
+    const reelCreate = fixture.creates.find((b) => b.get("media_type") === "REELS");
+    assert.ok(reelCreate);
+    assert.ok(reelCreate?.get("video_url"));
+    assert.equal(reelCreate?.has("cover_url"), false);
+    const [artRow] = await db.select().from(artifacts).where(eq(artifacts.id, artifact.id));
+    assert.equal(artRow.id, artifact.id);
+    const [assetRow] = await db.select().from(visualAssets).where(eq(visualAssets.id, hero.id));
+    assert.equal(assetRow.kind, "video");
+    assert.equal(assetRow.mime, "video/mp4");
+    assert.equal(assetRow.durationMs, 5_000);
+    const [resultRow] = await db.select().from(results).where(eq(results.publicationId, pub.id));
+    assert.equal(resultRow.outcome, "published");
+    assert.equal(resultRow.publicationId, pub.id);
+    const metricsText = JSON.stringify(resultRow.metrics ?? {});
+    assert.equal(metricsText.includes("local:"), false);
+    assert.match(String(run.externalUrl), /instagram\.com/);
+  });
+
+  it("duplicate Instagram video target is idempotent; explicit republish creates a new Publication", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-idem");
+    const first = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }, { channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    assert.equal(first.outcomes.filter((o) => o.status === "created").length, 1);
+    assert.equal(first.outcomes.filter((o) => o.status === "reused").length, 1);
+    const again = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    assert.ok(again.outcomes.every((o) => o.status === "reused"));
+    const repub = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }], republishKey: "again" },
+      { content: store, enqueuePublication: async () => true },
+    );
+    assert.equal(repub.outcomes[0].status, "created");
+    assert.notEqual(repub.outcomes[0].publication?.id, first.outcomes[0].publication?.id);
+  });
+
+  it("Instagram video scheduling is independent of a later sibling startAt", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-sched");
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const result = await publishArtifactToChannels(
+      artifact.id,
+      {
+        targets: [
+          { channel: "instagram", startAt: past },
+          { channel: "x", startAt: future },
+        ],
+      },
+      { content: store, enqueuePublication: async () => true },
+    );
+    const ig = result.outcomes.find((o) => o.channel === "instagram")!;
+    const x = result.outcomes.find((o) => o.channel === "x")!;
+    assert.ok(ig.publication);
+    assert.equal(x.publication, undefined);
+  });
+
+  it("foreign VideoAsset cannot be attached by another owner's Artifact", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-own");
+    const other = await seedVideoAsset(2, "foreign-video");
+    await assert.rejects(
+      () =>
+        createArtifact(
+          {
+            userId: 1,
+            generationJobId: null,
+            opportunityId: artifact.opportunityId,
+            format: "video",
+            channel: "instagram",
+            payload: { visualAssetId: other.id },
+            attribution: [],
+            provenance: "generated",
+            attributionReason: "ownership probe",
+          },
+          { artifacts: store },
+        ),
+      ArtifactMediaReferenceError,
+    );
+  });
+
+  it("foreign Instagram video fan-out is non-leaking", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-own2", 2);
+    await assert.rejects(
+      () =>
+        publishArtifactToChannels(
+          artifact.id,
+          { targets: [{ channel: "instagram" }] },
+          { content: store, enqueuePublication: async () => true },
+          1,
+        ),
+      ArtifactNotFoundError,
+    );
+  });
+
+  it("ambiguous Instagram Reel publish reconciles the SAME Result", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-recon");
+    const fan = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    fixture.armDropPublish();
+    await runPublication(fan.outcomes[0].publication!.id, pubDeps());
+    const [before] = await db.select().from(results).where(eq(results.publicationId, fan.outcomes[0].publication!.id));
+    assert.equal(before.outcome, "unknown");
+    fixture.recordListed(`m${RUN}-reel-listed`, `${RUN} reel-recon`);
+    const resolved = await reconcileUnknownPublications(new Date(), reconcileDeps(), 5000);
+    assert.ok(resolved.resolved >= 1);
+    const resultRows = await db
+      .select()
+      .from(results)
+      .where(eq(results.publicationId, fan.outcomes[0].publication!.id));
+    assert.equal(resultRows.length, 1);
+    assert.equal(resultRows[0].id, before.id);
+    assert.equal(resultRows[0].outcome, "published");
+  });
+
+  it("PerformanceSignal + LearningSignal lineage follows an Instagram Reel Publication", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-learn");
+    const fan = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    await runPublication(fan.outcomes[0].publication!.id, pubDeps());
+    const pub = (await store.getPublication(fan.outcomes[0].publication!.id))!;
+    const t1 = new Date("2026-01-01T01:00:00.000Z");
+    const metric = (value: number) => [
+      { metric: "impressions" as const, value, availability: "observed" as const },
+      { metric: "likes" as const, value: 1, availability: "observed" as const },
+      { metric: "comments" as const, value: null, availability: "not_available" as const },
+      { metric: "shares" as const, value: null, availability: "not_available" as const },
+      { metric: "clicks" as const, value: null, availability: "not_available" as const },
+      { metric: "saves" as const, value: null, availability: "not_available" as const },
+      { metric: "replies" as const, value: null, availability: "not_available" as const },
+      { metric: "followers_gained" as const, value: null, availability: "not_available" as const },
+      { metric: "engagement_rate" as const, value: null, availability: "not_available" as const },
+    ];
+    const first = await ingestNormalizedOutcome(
+      pub,
+      {
+        ok: true,
+        provider: "instagram",
+        retrievedAt: t1,
+        observedAt: t1,
+        measurementWindow: "t1",
+        externalId: pub.externalId ?? "m",
+        normalizationVersion: PERFORMANCE_SCHEMA_VERSION,
+        metrics: metric(10),
+        unmapped: { reach: 8 },
+      },
+      { content: store, learning: learning(), database: db },
+    );
+    assert.ok(first.created > 0);
+    const snaps = await db.select().from(performanceSignals).where(eq(performanceSignals.publicationId, pub.id));
+    assert.ok(snaps.every((s) => s.publicationId === pub.id));
+    const learned = await db.select().from(learningSignals).where(eq(learningSignals.publicationId, pub.id));
+    assert.ok(learned.every((r) => r.publicationId === pub.id));
+  });
+
+  it("X still cannot publish the same video Artifact", async () => {
+    const { artifact, store } = await seedVideoArtifact("reel-x");
+    const fan = await publishArtifactToChannels(
+      artifact.id,
+      { targets: [{ channel: "x" }, { channel: "instagram" }] },
+      { content: store, enqueuePublication: async () => true },
+    );
+    const byChannel = Object.fromEntries(fan.outcomes.map((o) => [o.channel, o]));
+    assert.equal(byChannel.instagram.status, "created");
+    assert.equal(byChannel.x.status, "created");
+    const xRun = await runPublication(byChannel.x.publication!.id, pubDeps());
+    assert.equal(xRun.status, "failed");
+    assert.match(String(xRun.message), /not implemented/);
+    const igRun = await runPublication(byChannel.instagram.publication!.id, pubDeps());
+    assert.equal(igRun.status, "published");
   });
 });

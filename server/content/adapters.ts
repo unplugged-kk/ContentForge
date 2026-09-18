@@ -77,6 +77,9 @@ export interface PublishMedia {
   providerFetchUrl?: string | null;
   width?: number | null;
   height?: number | null;
+  durationMs?: number | null;
+  byteSize?: number | null;
+  kind?: string | null;
 }
 
 export interface PublishRequest {
@@ -860,13 +863,13 @@ export function classifyInstagramFailure(message: string): AdapterFailureClass {
 }
 
 /**
- * Instagram adapter — professional-account image and carousel publishing.
+ * Instagram adapter — professional-account image, carousel, and Reel publishing.
  * Text formats (`x_post`, `linkedin_post`) are not registered: Instagram feed
- * publishing is media-first (JPEG URL). Stories/Reels are not registered.
+ * publishing is media-first. Stories / Live remain unregistered.
  * Provider has no documented idempotency key.
  */
 export function createInstagramChannelAdapter(): ChannelAdapter {
-  const supported = new Set(["image", "carousel"]);
+  const supported = new Set(["image", "carousel", "video"]);
 
   function captionFor(payload: JsonRecord): string {
     const caption = typeof payload.caption === "string" ? payload.caption : "";
@@ -907,7 +910,7 @@ export function createInstagramChannelAdapter(): ChannelAdapter {
       }
       try {
         const result = await postMediaToInstagram(
-          { format: request.format as "image" | "carousel", caption, media },
+          { format: request.format as "image" | "carousel" | "video", caption, media },
           request.ownerUserId,
         );
         return {
@@ -935,7 +938,7 @@ export function createInstagramChannelAdapter(): ChannelAdapter {
           };
         }
         const raw = error instanceof Error ? error.message : String(error);
-        const providerCalled = !/INSTAGRAM_CONFIG_MISSING|INSTAGRAM_ACCOUNT_UNSUPPORTED|INSTAGRAM_MEDIA_URL_MISSING|instagram requires|instagram image|instagram caption|instagram carousel/i.test(
+        const providerCalled = !/INSTAGRAM_CONFIG_MISSING|INSTAGRAM_ACCOUNT_UNSUPPORTED|INSTAGRAM_MEDIA_URL_MISSING|instagram requires|instagram image|instagram caption|instagram carousel|instagram video|instagram reel/i.test(
           raw,
         );
         return {

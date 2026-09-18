@@ -10,7 +10,9 @@ import type { AddressInfo } from "node:net";
 import {
   buildCarouselParentBody,
   buildImageContainerBody,
+  buildReelContainerBody,
   INSTAGRAM_OAUTH_SCOPES,
+  INSTAGRAM_REEL_MAX_BYTES,
   instagramAuthorizationUrl,
   isJpegMime,
   isProfessionalAccountType,
@@ -23,6 +25,7 @@ import {
   validateInstagramPublishMedia,
   InstagramPublishAmbiguousError,
 } from "../social/instagram";
+import { fixtureMp4Bytes } from "./visualFixture";
 import {
   classifyInstagramFailure,
   createInstagramChannelAdapter,
@@ -49,16 +52,47 @@ function jpegMedia(position = 0, extra: Partial<PublishMedia> = {}): PublishMedi
     bytes: JPEG,
     width: 1080,
     height: 1080,
+    kind: "image",
     ...extra,
   };
 }
 
+function videoMedia(extra: Partial<PublishMedia> = {}): PublishMedia {
+  return {
+    visualAssetId: 99,
+    mime: "video/mp4",
+    role: null,
+    position: 0,
+    altText: null,
+    bytes: fixtureMp4Bytes(),
+    width: 1080,
+    height: 1920,
+    durationMs: 5_000,
+    kind: "video",
+    ...extra,
+  };
+}
+
+type DoubleMode =
+  | "ok"
+  | "drop-publish"
+  | "500-publish"
+  | "personal"
+  | "in-progress"
+  | "error-container"
+  | "expired-container"
+  | "400-create"
+  | "401-create"
+  | "403-create"
+  | "429-create";
+
 function startInstagramDouble() {
-  const containers = new Map<string, { caption: string; status: string; children?: string }>();
+  const containers = new Map<string, { caption: string; status: string; children?: string; mediaType?: string }>();
   const media = new Map<string, { caption: string; permalink: string }>();
   const listed: Array<{ id: string; caption: string; timestamp: string; permalink: string }> = [];
   const staged: string[] = [];
-  let mode: "ok" | "drop-publish" | "500-publish" | "personal" | "in-progress" = "ok";
+  const creates: URLSearchParams[] = [];
+  let mode: DoubleMode = "ok";
   let seq = 0;
 
   const server = http.createServer((req, res) => {
@@ -99,12 +133,38 @@ function startInstagramDouble() {
 
     if (req.method === "POST" && url.pathname.endsWith("/media") && !url.pathname.endsWith("/media_publish")) {
       collect((body) => {
+        creates.push(body);
+        if (mode === "400-create") {
+          mode = "ok";
+          return send(400, { error: { message: "invalid video" } });
+        }
+        if (mode === "401-create") {
+          mode = "ok";
+          return send(401, { error: { message: "invalid token" } });
+        }
+        if (mode === "403-create") {
+          mode = "ok";
+          return send(403, { error: { message: "ACCESS_DENIED" } });
+        }
+        if (mode === "429-create") {
+          mode = "ok";
+          return send(429, { error: { message: "rate limit" } });
+        }
         seq += 1;
         const id = `c${seq}`;
+        const status =
+          mode === "in-progress"
+            ? "IN_PROGRESS"
+            : mode === "error-container"
+              ? "ERROR"
+              : mode === "expired-container"
+                ? "EXPIRED"
+                : "FINISHED";
         containers.set(id, {
           caption: body.get("caption") ?? "",
-          status: mode === "in-progress" ? "IN_PROGRESS" : "FINISHED",
+          status,
           children: body.get("children") ?? undefined,
+          mediaType: body.get("media_type") ?? undefined,
         });
         send(200, { id });
       });
@@ -182,6 +242,7 @@ function startInstagramDouble() {
     },
     listed,
     staged,
+    creates,
   };
 }
 
@@ -205,6 +266,27 @@ describe("instagram contract helpers", () => {
     assert.match(String(validateInstagramCaption("x".repeat(2201))), /2200/);
   });
 
+  it("rejects invalid Reel MIME, dimensions, duration, and size without calling a provider", () => {
+    assert.match(String(validateInstagramPublishMedia("video", [])), /exactly one/);
+    assert.match(String(validateInstagramPublishMedia("video", [videoMedia({ mime: "video/webm" })])), /video\/mp4/);
+    assert.match(String(validateInstagramPublishMedia("video", [videoMedia({ mime: "image/jpeg" })])), /video\/mp4/);
+    assert.match(
+      String(validateInstagramPublishMedia("video", [videoMedia({ width: 1920, height: 1080 })])),
+      /9:16/,
+    );
+    assert.match(String(validateInstagramPublishMedia("video", [videoMedia({ durationMs: 1000 })])), /minimum/);
+    assert.match(
+      String(validateInstagramPublishMedia("video", [videoMedia({ durationMs: 16 * 60 * 1000 })])),
+      /maximum/,
+    );
+    assert.match(
+      String(validateInstagramPublishMedia("video", [videoMedia({ byteSize: INSTAGRAM_REEL_MAX_BYTES + 1 })])),
+      /bytes/,
+    );
+    assert.match(String(validateInstagramPublishMedia("video", [videoMedia({ durationMs: null })])), /duration/);
+    assert.equal(validateInstagramPublishMedia("video", [videoMedia()]), null);
+  });
+
   it("builds image and carousel Graph bodies without tokens", () => {
     const image = buildImageContainerBody({ imageUrl: "https://example.com/a.jpg", caption: "hi", altText: "alt" });
     assert.equal(image.get("image_url"), "https://example.com/a.jpg");
@@ -214,6 +296,16 @@ describe("instagram contract helpers", () => {
     assert.equal(parent.get("media_type"), "CAROUSEL");
     assert.equal(parent.get("children"), "c1,c2");
     assert.equal(parseGraphId({ id: "1788" }), "1788");
+  });
+
+  it("builds a Reel container with video_url and no cover", () => {
+    const reel = buildReelContainerBody({ videoUrl: "https://example.com/v.mp4", caption: "reel" });
+    assert.equal(reel.get("media_type"), "REELS");
+    assert.equal(reel.get("video_url"), "https://example.com/v.mp4");
+    assert.equal(reel.get("caption"), "reel");
+    assert.equal(reel.has("cover_url"), false);
+    assert.equal(reel.has("thumb_offset"), false);
+    assert.equal(reel.has("access_token"), false);
   });
 
   it("maps insights without treating reach as impressions", () => {
@@ -239,17 +331,20 @@ describe("instagram contract helpers", () => {
     assert.equal(classifyInstagramFailure("bad jpeg"), "permanent");
   });
 
-  it("registers image and carousel only", () => {
+  it("registers image, carousel, and video (Reels) through the same adapter", () => {
     const adapter = createInstagramChannelAdapter();
     assert.equal(adapter.supports("image"), true);
     assert.equal(adapter.supports("carousel"), true);
+    assert.equal(adapter.supports("video"), true);
     assert.equal(adapter.supports("x_post"), false);
     assert.equal(adapter.supports("x_thread"), false);
     assert.equal(channelSupportsFormat("instagram", "image"), true);
     assert.equal(channelSupportsFormat("instagram", "carousel"), true);
+    assert.equal(channelSupportsFormat("instagram", "video"), true);
     assert.equal(channelSupportsFormat("instagram", "x_post"), false);
     assert.equal(channelSupportsFormat("instagram", "thumbnail"), false);
     assert.equal(formatChannelError("image", "instagram"), null);
+    assert.equal(formatChannelError("video", "instagram"), null);
     assert.match(String(formatChannelError("x_post", "instagram")), /cannot target channel/);
   });
 
@@ -284,6 +379,8 @@ describe("instagram HTTP double", () => {
       INSTAGRAM_ACCESS_TOKEN: process.env.INSTAGRAM_ACCESS_TOKEN,
       INSTAGRAM_USER_ID: process.env.INSTAGRAM_USER_ID,
       INSTAGRAM_TIMEOUT_MS: process.env.INSTAGRAM_TIMEOUT_MS,
+      INSTAGRAM_CONTAINER_POLL_ATTEMPTS: process.env.INSTAGRAM_CONTAINER_POLL_ATTEMPTS,
+      INSTAGRAM_CONTAINER_POLL_GAP_MS: process.env.INSTAGRAM_CONTAINER_POLL_GAP_MS,
       INSTAGRAM_MEDIA_STAGE_URL: process.env.INSTAGRAM_MEDIA_STAGE_URL,
     };
     process.env.INSTAGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
@@ -291,6 +388,8 @@ describe("instagram HTTP double", () => {
     process.env.INSTAGRAM_ACCESS_TOKEN = "fixture-token";
     process.env.INSTAGRAM_USER_ID = "me";
     process.env.INSTAGRAM_TIMEOUT_MS = "2000";
+    process.env.INSTAGRAM_CONTAINER_POLL_ATTEMPTS = "3";
+    process.env.INSTAGRAM_CONTAINER_POLL_GAP_MS = "10";
     process.env.INSTAGRAM_MEDIA_STAGE_URL = `http://127.0.0.1:${port}/stage`;
   });
 
@@ -369,5 +468,129 @@ describe("instagram HTTP double", () => {
       /INSTAGRAM_ACCOUNT_UNSUPPORTED/,
     );
     fixture.setMode("ok");
+  });
+
+  it("fails when no provider-fetchable URL can be issued", async () => {
+    const prev = process.env.INSTAGRAM_MEDIA_STAGE_URL;
+    delete process.env.INSTAGRAM_MEDIA_STAGE_URL;
+    try {
+      await assert.rejects(
+        () => postMediaToInstagram({ format: "video", caption: "nourl", media: [videoMedia()] }),
+        /INSTAGRAM_MEDIA_URL_MISSING/,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.INSTAGRAM_MEDIA_STAGE_URL;
+      else process.env.INSTAGRAM_MEDIA_STAGE_URL = prev;
+    }
+  });
+
+  it("publishes a Reel through REELS container then media_publish", async () => {
+    const result = await postMediaToInstagram({
+      format: "video",
+      caption: "hello reel",
+      media: [videoMedia()],
+    });
+    assert.ok(result.mediaId.startsWith("m"));
+    assert.ok(result.creationId.startsWith("c"));
+    const created = fixture.creates.find((b) => b.get("media_type") === "REELS");
+    assert.ok(created);
+    assert.ok(String(created?.get("video_url") ?? "").startsWith("http://127.0.0.1/ig-media/"));
+    assert.equal(created?.has("cover_url"), false);
+    assert.equal(created?.has("image_url"), false);
+  });
+
+  it("treats persistent IN_PROGRESS as unknown with a creationId hint", async () => {
+    fixture.setMode("in-progress");
+    try {
+      await assert.rejects(
+        () =>
+          postMediaToInstagram({
+            format: "video",
+            caption: "still-processing",
+            media: [videoMedia()],
+          }),
+        (error: unknown) => {
+          assert.equal(error instanceof InstagramPublishAmbiguousError, true);
+          const amb = error as InstagramPublishAmbiguousError;
+          assert.ok(amb.hint.creationId);
+          assert.match(amb.message, /IN_PROGRESS/);
+          return true;
+        },
+      );
+    } finally {
+      fixture.setMode("ok");
+    }
+  });
+
+  it("treats container ERROR and EXPIRED as confirmed failures", async () => {
+    fixture.setMode("error-container");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "err", media: [videoMedia()] }),
+      /status_code=ERROR/,
+    );
+    fixture.setMode("expired-container");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "exp", media: [videoMedia()] }),
+      /status_code=EXPIRED/,
+    );
+    fixture.setMode("ok");
+  });
+
+  it("maps provider 400/401/403/429/5xx without assuming publication", async () => {
+    fixture.setMode("400-create");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "bad", media: [videoMedia()] }),
+      /400|invalid video/,
+    );
+    fixture.setMode("401-create");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "auth", media: [videoMedia()] }),
+      /401|invalid token/,
+    );
+    fixture.setMode("403-create");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "deny", media: [videoMedia()] }),
+      /ACCESS_DENIED|403/,
+    );
+    fixture.setMode("429-create");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "slow", media: [videoMedia()] }),
+      /429|rate limit/,
+    );
+    fixture.setMode("500-publish");
+    await assert.rejects(
+      () => postMediaToInstagram({ format: "video", caption: "boom", media: [videoMedia()] }),
+      InstagramPublishAmbiguousError,
+    );
+    fixture.setMode("ok");
+  });
+
+  it("adapter refuses invalid Reel media without invoking the provider", async () => {
+    const adapter = createInstagramChannelAdapter();
+    const outcome = await adapter.publish({
+      format: "video",
+      channel: "instagram",
+      payload: { caption: "nope" },
+      correlationId: "c",
+      media: [videoMedia({ mime: "video/webm" })],
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.equal(outcome.errorClass, "permanent");
+    assert.match(String(outcome.errorMessage), /video\/mp4/);
+  });
+
+  it("adapter refuses an over-long caption without truncating", async () => {
+    const adapter = createInstagramChannelAdapter();
+    const outcome = await adapter.publish({
+      format: "video",
+      channel: "instagram",
+      payload: { caption: "x".repeat(2201) },
+      correlationId: "c",
+      media: [videoMedia()],
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.providerCalled, false);
+    assert.match(String(outcome.errorMessage), /2200/);
   });
 });

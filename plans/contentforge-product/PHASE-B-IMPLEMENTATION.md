@@ -680,6 +680,73 @@ vendor execution, audio, lip-sync/avatars, timeline editing, clipping, video
 autopilot, video scripts as a separate subsystem, multi-video variations,
 automatic thumbnails, UI, Chrome.
 
+## Phase 20 — Instagram Reels Video Publishing (done)
+
+**The problem this closes**: Phase 19 made `format=video` a durable Artifact
+primitive, but no channel could publish it. This phase extends the **existing
+Instagram ChannelAdapter** so a video Artifact completes the same distribution
+lifecycle already used for Instagram image/carousel.
+
+```
+VideoAsset → Artifact(format=video)
+        → Publication(channel=instagram)
+        → Schedule / Occurrence
+        → Instagram ChannelAdapter
+              validate → provider-fetch URL → REELS container
+              → poll processing → media_publish
+        → Result → PerformanceSignal → LearningSignal
+```
+
+**No parallel Reel model.** There is no `ReelPublication`, `InstagramReel`,
+`ReelsPublisher`, or `instagram_reel` content format. Channel remains
+`instagram`. Format remains `video`. Capability is registered as
+`video × instagram` through the existing format-profile + adapter `supports()`
++ visual-spec registries.
+
+**Adapter extension.** `createInstagramChannelAdapter` now supports
+`image | carousel | video`. Reels use Instagram's container workflow with
+`media_type=REELS` + `video_url`. Cover/`thumb_offset` are optional at Meta and
+**omitted** (no thumbnail subsystem). Bounded in-adapter status polls
+(`IN_PROGRESS` / `FINISHED` / `ERROR` / `EXPIRED`) — not a second scheduler.
+`container created` is never treated as `published`.
+
+**Media resolution.** Unchanged core path: Artifact media refs → VisualAsset
+(`kind=video`) → `AssetStoragePort` → `issueProviderFetchUrl` (or
+`INSTAGRAM_MEDIA_STAGE_URL`). The adapter never queries `visual_assets`.
+Provider URLs are object-scoped, time-limited, and not persisted as public
+storage keys.
+
+**Validation.** Generic `validateVideoOutput` stays in the visual layer.
+Instagram adds channel constraints: `video/mp4`, 9:16, 3s–15min, 100 MB, ftyp.
+Captions use Artifact text; over-limit captions fail, they are not truncated.
+Spec `instagram_reel` lives in the Phase 15 visual specification registry.
+
+**Reconciliation / idempotency.** Ambiguous publish (`IN_PROGRESS`, dropped
+`media_publish`, 5xx) sets `providerCalled=true` + Result `unknown` with a
+bounded `creationId` hint. Lookup order: published media id → container status
+→ listing. A listing miss is never proof of absence. Duplicate fan-out reuses
+the same Publication; `republishKey` remains the explicit new attempt.
+
+**Reuse.** Approval, Schedule/Occurrence, Phase 12 repurposing, Phase 13
+automation (no default Reel autopilot), and Phase 14 analytics are unchanged.
+A Story can independently produce X/LinkedIn text, Instagram image/carousel,
+and Instagram video through ordinary Opportunity/Artifact creation.
+
+**Credentials.** Same Instagram connected-account / env-token boundary. Tokens
+never enter pg-boss, Publication, Result, Artifact, logs, or the status report.
+API version remains the single configured `graph.instagram.com` / `v25.0`.
+
+**Migration.** None. VisualAsset video columns from `0021` already cover Reels.
+
+**Live vendor.** `Real Instagram Reels network smoke: BLOCKED — professional publishing credentials/account unavailable`. Restart proof used the Graph fixture with a real app/DB/queue/storage.
+
+**Verification:** TypeScript 0 errors; unit 445/445; real Postgres 228/228;
+live E2E 154/154; visual E2E 28/28; fresh migrations 22 / 50 tables.
+
+**Deferred:** X video publishing, LinkedIn video, YouTube / Shorts, Instagram
+Stories / Live, advanced Reel editing, automatic clipping, automatic cover
+generation, audio, avatars/lip-sync, video autopilot, UI, Chrome/capture.
+
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 
 **The problem this closes**: every phase so far made one *manual* product

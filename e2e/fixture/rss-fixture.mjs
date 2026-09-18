@@ -550,6 +550,8 @@ async function handlePost(req, res, url) {
       caption: body.caption ?? "",
       status: "FINISHED",
       children: body.children,
+      mediaType: body.media_type ?? null,
+      videoUrl: body.video_url ?? null,
     });
     return send(200, { id });
   }

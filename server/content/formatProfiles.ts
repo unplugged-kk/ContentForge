@@ -131,6 +131,14 @@ const PROFILES: readonly FormatProfile[] = [
       "are the durable primitives.",
     constraints: { maxUnits: 1, visual: "required", visualSpecId: "generic_social_video" },
   },
+  {
+    format: "video",
+    channel: "instagram",
+    guidance:
+      "An Instagram Reel: vertical 9:16 MP4, hook in the first seconds, one idea. " +
+      "Caption is optional and must not invent data. Cover/thumbnail selection is omitted.",
+    constraints: { maxCharacters: 2200, maxUnits: 1, visual: "required", visualSpecId: "instagram_reel" },
+  },
 ];
 
 const byKey = new Map(PROFILES.map((p) => [`${p.format}:${p.channel}`, p]));

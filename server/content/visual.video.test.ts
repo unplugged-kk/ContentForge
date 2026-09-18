@@ -102,6 +102,7 @@ describe("video specification registry", () => {
     assert.equal(resolveVisualSpec({ specId: "generic_social_video" }).mime, "video/mp4");
     assert.equal(resolveVisualSpec({ specId: "generic_social_video" }).maxDurationMs, 60_000);
     assert.equal(resolveVisualSpec({ format: "video", channel: "x" }).id, "generic_social_video");
+    assert.equal(resolveVisualSpec({ format: "video", channel: "instagram" }).id, "instagram_reel");
     assert.equal(resolveVisualSpec({ format: "video", aspectRatio: "16:9" }).id, "landscape_video");
     assert.equal(resolveVisualSpec({ format: "video", aspectRatio: "1:1" }).id, "square_video");
     assert.equal(resolveVisualSpec({ format: "video" }).id, "generic_social_video");

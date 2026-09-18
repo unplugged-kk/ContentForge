@@ -29,7 +29,8 @@ export interface VisualSpec {
     | "thumbnail"
     | "generic_social_video"
     | "landscape_video"
-    | "square_video";
+    | "square_video"
+    | "instagram_reel";
   width: number;
   height: number;
   aspectRatio: VisualAspectRatio;
@@ -152,6 +153,19 @@ const SPECS: readonly VisualSpec[] = [
     container: "mp4",
     maxFrameRate: 30,
   },
+  {
+    id: "instagram_reel",
+    modality: "video",
+    usage: "instagram_reel",
+    width: 1080,
+    height: 1920,
+    aspectRatio: "9:16",
+    mime: "video/mp4",
+    maxBytes: 100 * 1024 * 1024,
+    maxDurationMs: 15 * 60 * 1000,
+    container: "mp4",
+    maxFrameRate: 30,
+  },
 ];
 
 const byId = new Map(SPECS.map((s) => [s.id, s]));
@@ -165,6 +179,7 @@ const FORMAT_CHANNEL_SPEC: Record<string, string> = {
   "image:instagram": "instagram_feed",
   "carousel:instagram": "instagram_feed",
   "video:x": "generic_social_video",
+  "video:instagram": "instagram_reel",
 };
 
 export function listVisualSpecs(): VisualSpec[] {

@@ -116,6 +116,9 @@ export async function resolvePublicationMedia(
       providerFetchUrl,
       width: asset.width,
       height: asset.height,
+      durationMs: asset.durationMs,
+      byteSize: asset.byteSize,
+      kind: asset.kind,
     });
   }
   return media;

@@ -17,6 +17,9 @@
  * Carousel: child containers `is_carousel_item=true`, parent `media_type=CAROUSEL`
  * + `children`, then media_publish. Containers expire in 24h; 400 containers /
  * 100 published posts per rolling 24h.
+ * Reels: same container/publish workflow with `media_type=REELS` + `video_url`.
+ * Processing is asynchronous (`IN_PROGRESS` → `FINISHED` | `ERROR` | `EXPIRED`).
+ * `cover_url` / `thumb_offset` are optional and omitted (no cover subsystem).
  *
  * Provider idempotency: none documented for create-container or media_publish.
  * Duplicate suppression is ContentForge Publication identity + the single-flight
@@ -27,6 +30,7 @@
 
 import { storage } from "../storage";
 import type { PublishMedia } from "../content/adapters";
+import { looksLikeMp4 } from "../content/visual";
 
 export const INSTAGRAM_OAUTH_SCOPES = [
   "instagram_business_basic",
@@ -43,6 +47,16 @@ export const INSTAGRAM_MIN_ASPECT = 4 / 5;
 export const INSTAGRAM_MAX_ASPECT = 1.91;
 export const INSTAGRAM_MIN_CAROUSEL = 2;
 export const INSTAGRAM_MAX_CAROUSEL = 10;
+
+/** Instagram Reels Graph constraints (channel-specific; generic video validation stays in visual.ts). */
+export const INSTAGRAM_REEL_MAX_BYTES = 100 * 1024 * 1024;
+export const INSTAGRAM_REEL_MIN_DURATION_MS = 3_000;
+export const INSTAGRAM_REEL_MAX_DURATION_MS = 15 * 60 * 1000;
+export const INSTAGRAM_REEL_MIN_WIDTH = 540;
+export const INSTAGRAM_REEL_MAX_WIDTH = 1920;
+/** 9:16 with a small rounding tolerance. Landscape is not a Reel. */
+export const INSTAGRAM_REEL_MIN_ASPECT = 9 / 16 - 0.03;
+export const INSTAGRAM_REEL_MAX_ASPECT = 9 / 16 + 0.03;
 
 export const INSTAGRAM_INSIGHT_METRICS = [
   "likes",
@@ -82,6 +96,16 @@ function timeoutMs(): number {
   return Number(process.env.INSTAGRAM_TIMEOUT_MS ?? 30_000);
 }
 
+function containerPollAttempts(): number {
+  const n = Number(process.env.INSTAGRAM_CONTAINER_POLL_ATTEMPTS ?? 3);
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), 8) : 3;
+}
+
+function containerPollGapMs(): number {
+  const n = Number(process.env.INSTAGRAM_CONTAINER_POLL_GAP_MS ?? 250);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 2_000) : 250;
+}
+
 export function redactInstagramSecrets(text: string): string {
   return text
     .replace(/access_token=[^&\s]+/gi, "access_token=[redacted]")
@@ -98,7 +122,7 @@ export function translateInstagramError(body: string): string {
     return "Instagram Content Publishing requires a professional (Business or Creator) account. Personal accounts are not supported.";
   }
   if (redacted.includes("INSTAGRAM_MEDIA_URL_MISSING")) {
-    return "Instagram requires a provider-fetchable JPEG URL. Set CONTENTFORGE_PUBLIC_BASE_URL or INSTAGRAM_MEDIA_STAGE_URL.";
+    return "Instagram requires a provider-fetchable media URL. Set CONTENTFORGE_PUBLIC_BASE_URL or INSTAGRAM_MEDIA_STAGE_URL.";
   }
   if (/INSTAGRAM_PUBLISH_ID_MISSING|INSTAGRAM_CONTAINER_ID_MISSING/i.test(redacted)) {
     return "Instagram accepted the request but did not return an id.";
@@ -217,6 +241,43 @@ export function validateInstagramImageMedia(media: PublishMedia): string | null 
   return null;
 }
 
+export function validateInstagramVideoMedia(media: PublishMedia): string | null {
+  if (media.kind && media.kind !== "video") {
+    return `instagram video requires a video asset (got ${media.kind})`;
+  }
+  if (media.mime !== "video/mp4") {
+    return `instagram reels require video/mp4 (got ${media.mime})`;
+  }
+  if (!looksLikeMp4(media.bytes)) return "instagram video bytes are missing a valid ftyp box";
+  const size = media.byteSize ?? media.bytes.length;
+  if (size > INSTAGRAM_REEL_MAX_BYTES) {
+    return `instagram video exceeds ${INSTAGRAM_REEL_MAX_BYTES} bytes`;
+  }
+  const duration = media.durationMs ?? null;
+  if (duration === null || !Number.isInteger(duration) || duration <= 0) {
+    return "instagram video duration is required";
+  }
+  if (duration < INSTAGRAM_REEL_MIN_DURATION_MS) {
+    return `instagram video duration ${duration}ms is below the ${INSTAGRAM_REEL_MIN_DURATION_MS}ms Reel minimum`;
+  }
+  if (duration > INSTAGRAM_REEL_MAX_DURATION_MS) {
+    return `instagram video duration ${duration}ms exceeds the ${INSTAGRAM_REEL_MAX_DURATION_MS}ms Reel maximum`;
+  }
+  const width = media.width ?? null;
+  const height = media.height ?? null;
+  if (width === null || height === null || width <= 0 || height <= 0) {
+    return "instagram video dimensions are required";
+  }
+  if (width < INSTAGRAM_REEL_MIN_WIDTH || width > INSTAGRAM_REEL_MAX_WIDTH) {
+    return `instagram video width ${width} is outside ${INSTAGRAM_REEL_MIN_WIDTH}–${INSTAGRAM_REEL_MAX_WIDTH}`;
+  }
+  const aspect = width / height;
+  if (aspect < INSTAGRAM_REEL_MIN_ASPECT || aspect > INSTAGRAM_REEL_MAX_ASPECT) {
+    return `instagram reel aspect ${aspect.toFixed(3)} must be 9:16`;
+  }
+  return null;
+}
+
 export function validateInstagramPublishMedia(format: string, media: PublishMedia[]): string | null {
   if (format === "image") {
     if (media.length !== 1) return `instagram image requires exactly one asset, got ${media.length}`;
@@ -235,6 +296,10 @@ export function validateInstagramPublishMedia(format: string, media: PublishMedi
       if (err) return err;
     }
     return null;
+  }
+  if (format === "video") {
+    if (media.length !== 1) return `instagram video requires exactly one asset, got ${media.length}`;
+    return validateInstagramVideoMedia(media[0]);
   }
   return `instagram adapter does not support format "${format}"`;
 }
@@ -394,6 +459,18 @@ export function buildPublishContainerBody(creationId: string): URLSearchParams {
   return body;
 }
 
+/**
+ * Reel container body. Cover/thumbnail (`cover_url`, `thumb_offset`) are
+ * optional at the provider and omitted here — Phase 20 does not generate covers.
+ */
+export function buildReelContainerBody(input: { videoUrl: string; caption?: string }): URLSearchParams {
+  const body = new URLSearchParams();
+  body.set("media_type", "REELS");
+  body.set("video_url", input.videoUrl);
+  if (input.caption) body.set("caption", input.caption);
+  return body;
+}
+
 export async function stageInstagramMediaUrl(media: PublishMedia): Promise<string> {
   if (media.providerFetchUrl) return media.providerFetchUrl;
   const stage = process.env.INSTAGRAM_MEDIA_STAGE_URL?.trim();
@@ -451,6 +528,54 @@ async function getContainerStatusCode(
   return typeof code === "string" ? code : null;
 }
 
+/**
+ * Bounded in-adapter status checks — not a second scheduler. `FINISHED`/`PUBLISHED`
+ * (or a missing status, matching prior image behavior) proceeds to publish.
+ * `ERROR`/`EXPIRED` are terminal. Persistent `IN_PROGRESS` is ambiguous so the
+ * same Publication can reconcile later without creating another container.
+ */
+async function waitForContainerReady(
+  config: InstagramConfig,
+  creationId: string,
+  hint: InstagramPublishAmbiguousError["hint"],
+): Promise<void> {
+  const attempts = containerPollAttempts();
+  const gapMs = containerPollGapMs();
+  let last: string | null = null;
+  for (let i = 0; i < attempts; i++) {
+    last = await getContainerStatusCode(config, creationId);
+    if (last === "ERROR" || last === "EXPIRED") {
+      throw new Error(`instagram container ${creationId} status_code=${last}`);
+    }
+    if (!last || last === "FINISHED" || last === "PUBLISHED") return;
+    if (i < attempts - 1 && gapMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, gapMs));
+    }
+  }
+  throw new InstagramPublishAmbiguousError(
+    hint,
+    `instagram container ${creationId} still ${last ?? "unknown"}`,
+  );
+}
+
+async function finishContainer(
+  config: InstagramConfig,
+  creationId: string,
+  hint: InstagramPublishAmbiguousError["hint"],
+): Promise<InstagramPostResult> {
+  try {
+    await waitForContainerReady(config, creationId, hint);
+    return await publishContainer(config, creationId, hint);
+  } catch (error) {
+    if (error instanceof InstagramPublishAmbiguousError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (/timeout|ECONN|ENOTFOUND|fetch failed|socket/i.test(message)) {
+      throw new InstagramPublishAmbiguousError(hint, message);
+    }
+    throw error;
+  }
+}
+
 async function publishContainer(
   config: InstagramConfig,
   creationId: string,
@@ -493,7 +618,7 @@ async function publishContainer(
 }
 
 export async function postMediaToInstagram(
-  input: { format: "image" | "carousel"; caption: string; media: PublishMedia[] },
+  input: { format: "image" | "carousel" | "video"; caption: string; media: PublishMedia[] },
   ownerUserId?: number | null,
 ): Promise<InstagramPostResult> {
   const invalid = validateInstagramCaption(input.caption) ?? validateInstagramPublishMedia(input.format, input.media);
@@ -517,17 +642,16 @@ export async function postMediaToInstagram(
           altText: input.media[0].altText,
         }),
       );
-      const status = await getContainerStatusCode(config, creationId);
-      if (status === "ERROR" || status === "EXPIRED") {
-        throw new Error(`instagram container ${creationId} status_code=${status}`);
-      }
-      if (status && status !== "FINISHED" && status !== "PUBLISHED") {
-        throw new InstagramPublishAmbiguousError(
-          { caption, attemptedAt, creationId },
-          `instagram container ${creationId} still ${status}`,
-        );
-      }
-      return await publishContainer(config, creationId, { caption, attemptedAt, creationId });
+      return await finishContainer(config, creationId, { caption, attemptedAt, creationId });
+    }
+
+    if (input.format === "video") {
+      const videoUrl = await stageInstagramMediaUrl(input.media[0]);
+      const creationId = await createContainer(
+        config,
+        buildReelContainerBody({ videoUrl, caption }),
+      );
+      return await finishContainer(config, creationId, { caption, attemptedAt, creationId });
     }
 
     const childIds: string[] = [];
@@ -544,17 +668,12 @@ export async function postMediaToInstagram(
       childIds.push(childId);
     }
     const parentId = await createContainer(config, buildCarouselParentBody(childIds, caption));
-    const status = await getContainerStatusCode(config, parentId);
-    if (status === "ERROR" || status === "EXPIRED") {
-      throw new Error(`instagram carousel container ${parentId} status_code=${status}`);
-    }
-    if (status && status !== "FINISHED" && status !== "PUBLISHED") {
-      throw new InstagramPublishAmbiguousError(
-        { caption, attemptedAt, creationId: parentId, childIds },
-        `instagram carousel container ${parentId} still ${status}`,
-      );
-    }
-    return await publishContainer(config, parentId, { caption, attemptedAt, creationId: parentId, childIds });
+    return await finishContainer(config, parentId, {
+      caption,
+      attemptedAt,
+      creationId: parentId,
+      childIds,
+    });
   } catch (error) {
     if (error instanceof InstagramPublishAmbiguousError) throw error;
     const message = error instanceof Error ? error.message : String(error);
@@ -645,8 +764,22 @@ export async function reconcileInstagramPost(
     if (code === "ERROR" || code === "EXPIRED") {
       return { status: "absent", message: `Instagram container ${hint.creationId} status_code=${code}` };
     }
-    if (code === "PUBLISHED") {
+    if (code === "IN_PROGRESS") {
       return { status: "pending" };
+    }
+    if (code === "FINISHED") {
+      try {
+        const published = await publishContainer(config, hint.creationId, {
+          caption: hint.caption ?? "",
+          attemptedAt: hint.attemptedAt ?? new Date().toISOString(),
+          creationId: hint.creationId,
+        });
+        return { status: "success", mediaId: published.mediaId, url: published.url };
+      } catch (error) {
+        if (error instanceof InstagramPublishAmbiguousError) return { status: "pending" };
+        // 4xx after FINISHED often means the container was already published —
+        // fall through to listing rather than creating another container.
+      }
     }
   }
 

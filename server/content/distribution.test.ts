@@ -135,7 +135,9 @@ describe("format vs channel", () => {
     assert.equal(channelSupportsFormat("instagram", "thumbnail"), false);
     assert.equal(channelSupportsFormat("threads", "image"), false);
     assert.equal(channelSupportsFormat("x", "video"), true, "video is generation-ready on x");
-    assert.equal(channelSupportsFormat("instagram", "video"), false, "Reels publishing is deferred");
+    assert.equal(channelSupportsFormat("instagram", "video"), true, "Reels publish as format=video on instagram");
+    assert.equal(channelSupportsFormat("threads", "video"), false);
+    assert.equal(channelSupportsFormat("linkedin", "video"), false);
   });
 
   it("x adapter refuses to publish video without calling a provider", async () => {

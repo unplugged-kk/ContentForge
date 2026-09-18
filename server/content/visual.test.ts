@@ -192,6 +192,7 @@ describe("visual specs and variation identity", () => {
       await import("./visualSpecs");
     assert.equal(resolveVisualSpec({ specId: "x_image" }).usage, "x_image");
     assert.equal(resolveVisualSpec({ format: "video", channel: "x" }).id, "generic_social_video");
+    assert.equal(resolveVisualSpec({ format: "video", channel: "instagram" }).id, "instagram_reel");
     assert.equal(resolveVisualSpec({ format: "video", aspectRatio: "16:9" }).id, "landscape_video");
     assert.equal(resolveVisualSpec({ aspectRatio: "16:9" }).id, "generic_landscape");
     assert.ok(getVisualSpec("social_portrait"));

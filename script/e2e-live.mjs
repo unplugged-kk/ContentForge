@@ -1578,6 +1578,48 @@ const observed = {};
     return approved.body.id;
   }
 
+  async function approvedInstagramReelArtifact(caption) {
+    const vis = await http("POST", "/api/video-generations", {
+      kind: "video",
+      providerId: "local-video-fixture",
+      specId: "instagram_reel",
+      durationMs: 5000,
+      intent: { subject: caption, aspectRatio: "9:16" },
+    });
+    assert(vis.status === 201 || vis.status === 200, `video visual ${vis.status}: ${vis.text}`);
+    const ready = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/video-generations/${vis.body.id}`);
+        if (r.body.status === "ready" && r.body.visualAssetId) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage ?? r.text);
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 300, label: "instagram reel visual ready" },
+    );
+    const opp = await http("POST", "/api/opportunities", {
+      storyId,
+      concept: "instagram reel",
+      objective: "publish",
+      format: "video",
+      channel: "instagram",
+    });
+    assert(opp.status === 201, `opportunity ${opp.status}: ${opp.text}`);
+    const created = await http("POST", `/api/opportunities/${opp.body.id}/artifacts`, {
+      payload: {
+        visualAssetId: ready.visualAssetId,
+        caption,
+        altText: caption,
+        aspectRatio: "9:16",
+      },
+      attributionReason: "instagram reel e2e",
+    });
+    assert(created.status === 201, `artifact ${created.status}: ${created.text}`);
+    await http("POST", `/api/artifacts/${created.body.id}/submit-review`, {});
+    const approved = await http("POST", `/api/artifacts/${created.body.id}/approve`, {});
+    assert(approved.body.readiness === "approved", `readiness=${approved.body.readiness}`);
+    return approved.body.id;
+  }
+
   const resolveMarker = `${RUN}-reconcile-resolve`;
   const requeueMarker = `${RUN}-reconcile-requeue`;
 
@@ -3651,6 +3693,155 @@ const observed = {};
   inform(
     "Path L/M/N: Real Instagram network verification: BLOCKED — credential/account unavailable",
     "No INSTAGRAM_ACCESS_TOKEN professional credential in this environment; fixture Graph double covered Paths A–K",
+  );
+
+  // ── Phase 20: Instagram Reels video publishing ──────────────────────────────
+  phase("Phase 20: Artifact(format=video) → Publication(instagram) → Reel");
+
+  let igReelArtifactId = null;
+  let igReelPubId = null;
+
+  await check("Path A: video Artifact through generic HTTP", async () => {
+    igReelArtifactId = await approvedInstagramReelArtifact(`${RUN}-ig-reel-a`);
+    const row = await q("select format, channel, readiness from artifacts where id = $1", [igReelArtifactId]);
+    assert(row[0].format === "video");
+    assert(row[0].readiness === "approved");
+    const refs = await q("select visual_asset_id from visual_asset_refs where artifact_id = $1", [igReelArtifactId]);
+    assert(refs.length === 1);
+    const asset = await q("select kind, mime, duration_ms from visual_assets where id = $1", [refs[0].visual_asset_id]);
+    assert(asset[0].kind === "video");
+    assert(asset[0].mime === "video/mp4");
+    assert(Number(asset[0].duration_ms) >= 3000);
+    return `artifact ${igReelArtifactId}`;
+  });
+
+  await check("Path B: Instagram Publication through generic publication API", async () => {
+    const fan = await http("POST", `/api/artifacts/${igReelArtifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const ot = fan.body.outcomes.find((o) => o.channel === "instagram");
+    assert(ot && ot.status === "created", `outcome ${JSON.stringify(fan.body)}`);
+    igReelPubId = ot.publicationId;
+    const pub = await http("GET", `/api/publications/${igReelPubId}`);
+    assert(pub.body.channel === "instagram");
+    assert(pub.body.artifactId === igReelArtifactId);
+    return `publication ${igReelPubId}`;
+  });
+
+  await check("Path C: schedule Instagram video independently of a future sibling", async () => {
+    const artifactId = await approvedInstagramReelArtifact(`${RUN}-ig-reel-sched`);
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [
+        { channel: "instagram" },
+        { channel: "x", startAt: future },
+      ],
+    });
+    const ig = fan.body.outcomes.find((o) => o.channel === "instagram");
+    const x = fan.body.outcomes.find((o) => o.channel === "x");
+    assert(ig && ig.publicationId, "due Instagram target materializes");
+    assert(x && !x.publicationId, "future X target has no Publication yet");
+    return `instagram due now, x ${future}`;
+  });
+
+  await check("Path D: execute Instagram Reel Publication", async () => {
+    const row = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${igReelPubId}`);
+        return r.status === 200 && r.body.state === "published" ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "instagram reel published" },
+    );
+    assert(row.channel === "instagram");
+    assert(row.artifactId === igReelArtifactId);
+    const resultRows = await q("select outcome, external_id from results where publication_id = $1", [igReelPubId]);
+    assert(resultRows[0]?.outcome === "published");
+    return `published ${row.externalId ?? resultRows[0].external_id}`;
+  });
+
+  await check("Path E: ambiguous Reel publish → unknown → reconcile", async () => {
+    const marker = `${RUN}-ig-reel-ambiguous`;
+    const artifactId = await approvedInstagramReelArtifact(marker);
+    await fixturePost("/control/instagram-mode", { mode: "network-fail-publish", matchSubstring: marker });
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    const unknown = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${pubId}`);
+        return r.status === 200 && (r.body.state === "failed" || r.body.state === "published") ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 500, label: "instagram reel ambiguous outcome" },
+    );
+    assert(unknown.channel === "instagram");
+    await fixturePost("/control/instagram-record-media", { id: `listed-${marker}`, caption: marker });
+    const recon = await http("POST", "/api/publications/dispatch", {});
+    assert(recon.status === 200, `dispatch ${recon.status}: ${recon.text}`);
+    return `state=${unknown.state}`;
+  });
+
+  await check("Path F: duplicate Instagram Reel publication request reuses identity", async () => {
+    const again = await http("POST", `/api/artifacts/${igReelArtifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === igReelPubId);
+    return `reused ${igReelPubId}`;
+  });
+
+  await check("Path G: foreign Artifact ids remain non-leaking 404s for Reel fan-out", async () => {
+    const missing = await http("POST", "/api/artifacts/999999992/publications", {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(missing.status === 404, `expected 404 got ${missing.status}`);
+    return "404";
+  });
+
+  await check("Path H: SIGKILL does not duplicate an Instagram Reel Publication", async () => {
+    const artifactId = await approvedInstagramReelArtifact(`${RUN}-ig-reel-rst`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    const pubId = fan.body.outcomes[0].publicationId;
+    await killApp("SIGKILL");
+    await startApp();
+    const again = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(again.body.outcomes[0].status === "reused");
+    assert(again.body.outcomes[0].publicationId === pubId);
+    const count = await q("select count(*)::int c from publications where artifact_id = $1 and channel = 'instagram'", [
+      artifactId,
+    ]);
+    assert(count[0].c === 1, `duplicates after restart: ${count[0].c}`);
+    return `reel publication ${pubId} survived`;
+  });
+
+  await check("Path I: Instagram Reel Publication → PerformanceSignal → LearningSignal", async () => {
+    const queued = await http("POST", `/api/learning/publications/${igReelPubId}/refresh`, {});
+    assert(queued.status === 202 || queued.status === 200, `refresh ${queued.status}: ${queued.text}`);
+    const snaps = await waitFor(
+      async () => {
+        const rows = await q(
+          "select metric, value, availability, provenance from performance_signals where publication_id = $1",
+          [igReelPubId],
+        );
+        return rows.length > 0 ? rows : false;
+      },
+      { timeoutMs: 60_000, intervalMs: 400, label: "instagram reel performance signals" },
+    );
+    const impressions = snaps.find((s) => s.metric === "impressions");
+    assert(impressions, "views mapped to impressions");
+    const learned = await q("select id, publication_id from learning_signals where publication_id = $1", [igReelPubId]);
+    assert(learned.every((r) => r.publication_id === igReelPubId));
+    return `signals=${snaps.length} learning=${learned.length}`;
+  });
+
+  inform(
+    "Path J: Real Instagram Reels network smoke: BLOCKED — professional publishing credentials/account unavailable",
+    "INSTAGRAM_ACCESS_TOKEN in this harness is the fixture double, not a live professional token",
   );
 
   // ── 9. EXTERNAL SMOKE (optional, non-gating) ────────────────────────────────

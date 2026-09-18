@@ -258,6 +258,7 @@ describe("opportunity boundary", () => {
     assert.match(String(formatChannelError("x_post", "linkedin")), /cannot target channel/);
     assert.equal(formatChannelError("image", "x"), null, "X now supports the single-image format");
     assert.equal(formatChannelError("video", "x"), null, "video generation can target x without a second media stack");
+    assert.equal(formatChannelError("video", "instagram"), null, "video × instagram is a registered Reel pair");
     assert.equal(formatChannelError("x_post", "threads"), null, "Threads text uses the x_post payload");
     assert.match(String(formatChannelError("carousel", "x")), /cannot target channel/, "carousel delivery is deferred");
 
@@ -424,6 +425,7 @@ describe("generation policy", () => {
     assert.equal(hasFormatProfile("carousel", "x"), true);
     assert.equal(hasFormatProfile("thumbnail", "x"), true);
     assert.equal(hasFormatProfile("video", "x"), true);
+    assert.equal(hasFormatProfile("video", "instagram"), true);
     assert.equal(hasFormatProfile("linkedin_post", "linkedin"), true, "Phase 6: genuinely implemented");
     assert.equal(hasFormatProfile("video_script", "video_factory"), false, "no fake placeholders");
     assert.deepEqual(
