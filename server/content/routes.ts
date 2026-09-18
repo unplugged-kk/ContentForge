@@ -42,7 +42,16 @@ import {
   StoryMissingForOpportunityError,
   type GenerationDeps,
 } from "./generation";
-import { repurposeStory, RepurposeInputError } from "./repurposing";
+import {
+  cancelRepurposingPlan,
+  inspectRepurposingPlan,
+  MAX_COUNT_PER_TARGET,
+  MAX_OPPORTUNITIES_PER_PLAN,
+  MAX_TARGETS_PER_PLAN,
+  repurposeStory,
+  RepurposeInputError,
+  RepurposingPlanNotFoundError,
+} from "./repurposing";
 import {
   approveArtifact,
   createArtifact,
@@ -77,6 +86,7 @@ import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
 import { requestStyleAnalysis, activateStyleProfile, publicReference, publicStyleProfile, ReferenceNotFoundError, StyleServiceInputError, StyleProfileNotFoundError } from "./styleService";
 import { listChannelAdapters } from "./adapters";
+import { listFormatProfiles } from "./formatProfiles";
 import {
   createVisualGeneration,
   VisualServiceInputError,
@@ -338,11 +348,19 @@ const repurposeTargetBody = z.object({
   constraints: z.record(z.unknown()).optional(),
   /** Intentional new derivation for THIS target — bypasses reuse-by-key. */
   regenerate: z.boolean().optional(),
+  count: z.number().int().min(1).max(MAX_COUNT_PER_TARGET).optional(),
 });
 
 const repurposeStoryBody = z.object({
   requestKey: z.string().trim().min(1).max(200).optional(),
-  targets: z.array(repurposeTargetBody).min(1).max(20),
+  targets: z.array(repurposeTargetBody).min(1).max(MAX_TARGETS_PER_PLAN),
+  limits: z
+    .object({
+      maxTargetsPerPlan: z.number().int().min(1).max(MAX_TARGETS_PER_PLAN).optional(),
+      maxCountPerTarget: z.number().int().min(1).max(MAX_COUNT_PER_TARGET).optional(),
+      maxOpportunities: z.number().int().min(1).max(MAX_OPPORTUNITIES_PER_PLAN).optional(),
+    })
+    .optional(),
 });
 
 const reviseArtifactBody = z.object({
@@ -425,6 +443,14 @@ function message(error: unknown): string | null {
   return null;
 }
 
+function planDeps(deps: ContentApiDeps) {
+  return {
+    opportunities: deps.opportunities,
+    generation: deps.generation,
+    plans: deps.content as import("./repurposing").RepurposingPlanPort,
+  };
+}
+
 export function createContentRouter(deps: ContentApiDeps): Router {
   const router = Router();
 
@@ -462,12 +488,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const result = await repurposeStory(
         storyId,
         body,
-        { opportunities: deps.opportunities, generation: deps.generation },
+        planDeps(deps),
         getUserId(req) ?? 1,
       );
 
       for (const outcome of result.outcomes) {
-        if (outcome.status === "created" && outcome.job && outcome.job.status === "queued") {
+        if (outcome.job && outcome.job.status === "queued") {
           try {
             await deps.enqueueGeneration(outcome.job);
           } catch {
@@ -480,9 +506,20 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
       return res.status(207).json({
         storyId: result.storyId,
+        planId: result.plan?.id ?? null,
+        plan: result.plan
+          ? {
+              id: result.plan.id,
+              status: result.plan.status,
+              requestKey: result.plan.requestKey,
+              planVersion: result.plan.planVersion,
+            }
+          : null,
+        progress: result.progress,
         outcomes: result.outcomes.map((o) => ({
           format: o.format,
           channel: o.channel,
+          slot: o.slot,
           status: o.status,
           opportunityId: o.opportunity?.id ?? null,
           generationJobId: o.job?.id ?? null,
@@ -494,6 +531,139 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (error instanceof RepurposeInputError) return res.status(400).json({ message: error.message });
       if (error instanceof StoryNotFoundError) return res.status(404).json({ message: error.message });
       if (error instanceof StoryNotUsableError) return res.status(409).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/repurposing/capabilities", async (_req, res) => {
+    return res.json({
+      formats: listFormatProfiles().map((profile) => ({
+        format: profile.format,
+        channel: profile.channel,
+        visual: profile.constraints.visual ?? "none",
+      })),
+      limits: {
+        maxTargetsPerPlan: MAX_TARGETS_PER_PLAN,
+        maxCountPerTarget: MAX_COUNT_PER_TARGET,
+        maxOpportunities: MAX_OPPORTUNITIES_PER_PLAN,
+      },
+    });
+  });
+
+  router.get("/repurposing/plans/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid plan id" });
+    try {
+      const view = await inspectRepurposingPlan(
+        id,
+        planDeps(deps),
+        getUserId(req) ?? 1,
+      );
+      return res.json({
+        id: view.plan.id,
+        storyId: view.plan.storyId,
+        status: view.plan.status,
+        requestKey: view.plan.requestKey,
+        planVersion: view.plan.planVersion,
+        progress: view.progress,
+        snapshot: view.plan.snapshot,
+        outcomes: view.outcomes.map((o) => ({
+          format: o.format,
+          channel: o.channel,
+          slot: o.slot,
+          status: o.status,
+          opportunityId: o.opportunity?.id ?? null,
+          generationJobId: o.job?.id ?? null,
+          error: o.error ?? null,
+        })),
+        createdAt: view.plan.createdAt,
+        completedAt: view.plan.completedAt,
+      });
+    } catch (error) {
+      if (error instanceof RepurposingPlanNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.get("/repurposing/plans/:id/opportunities", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid plan id" });
+    try {
+      const view = await inspectRepurposingPlan(
+        id,
+        planDeps(deps),
+        getUserId(req) ?? 1,
+      );
+      return res.json(
+        view.outcomes
+          .filter((o) => o.opportunity)
+          .map((o) => serializeOpportunity(o.opportunity!)),
+      );
+    } catch (error) {
+      if (error instanceof RepurposingPlanNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.post("/repurposing/plans/:id/cancel", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid plan id" });
+    try {
+      const plan = await cancelRepurposingPlan(
+        id,
+        planDeps(deps),
+        getUserId(req) ?? 1,
+      );
+      return res.json({ id: plan.id, status: plan.status, storyId: plan.storyId });
+    } catch (error) {
+      if (error instanceof RepurposingPlanNotFoundError) return res.status(404).json({ message: error.message });
+      return next(error);
+    }
+  });
+
+  router.post("/repurposing/plans/:id/run", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid plan id" });
+    try {
+      const view = await inspectRepurposingPlan(
+        id,
+        planDeps(deps),
+        getUserId(req) ?? 1,
+      );
+      const snapshot = view.plan.snapshot as { targets?: unknown };
+      const targets = Array.isArray(snapshot.targets) ? snapshot.targets : [];
+      const result = await repurposeStory(
+        view.plan.storyId,
+        { requestKey: view.plan.requestKey, targets: targets as Array<{ format: string; channel: string }> },
+        planDeps(deps),
+        getUserId(req) ?? 1,
+      );
+      for (const outcome of result.outcomes) {
+        if (outcome.job && outcome.job.status === "queued") {
+          try {
+            await deps.enqueueGeneration(outcome.job);
+          } catch {
+            /* durable row already exists */
+          }
+        }
+      }
+      return res.status(207).json({
+        storyId: result.storyId,
+        planId: result.plan?.id ?? view.plan.id,
+        progress: result.progress,
+        outcomes: result.outcomes.map((o) => ({
+          format: o.format,
+          channel: o.channel,
+          slot: o.slot,
+          status: o.status,
+          opportunityId: o.opportunity?.id ?? null,
+          generationJobId: o.job?.id ?? null,
+          error: o.error ?? null,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof RepurposingPlanNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof RepurposeInputError) return res.status(400).json({ message: error.message });
       return next(error);
     }
   });

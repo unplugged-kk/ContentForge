@@ -831,6 +831,41 @@ export const opportunities = pgTable(
 );
 
 /**
+ * RepurposingPlan (Phase 25) — durable execution intent for one Story → N
+ * Opportunities. Does not duplicate content or research. Frozen `snapshot`
+ * captures the expanded target slots, limits, and plan-level ContextAssembly
+ * inputs so a later style mutation cannot silently retarget an in-flight batch.
+ * Opportunity/GenerationJob/Artifact rows remain the source of progress.
+ */
+export const repurposingPlans = pgTable(
+  "repurposing_plans",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id"),
+    storyId: integer("story_id").notNull().references(() => stories.id),
+    planVersion: integer("plan_version").notNull().default(1),
+    /** planning | queued | running | awaiting_approval | partial | completed | failed | cancelled */
+    status: varchar("status", { length: 30 }).notNull().default("planning"),
+    /** Caller-supplied (or generated) idempotency for the whole batch. */
+    requestKey: varchar("request_key", { length: 200 }).notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    limits: jsonb("limits").$type<Record<string, unknown>>().notNull().default({}),
+    errorClass: varchar("error_class", { length: 30 }),
+    errorMessage: text("error_message"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("repurposing_plans_story_request_uq").on(table.storyId, table.requestKey),
+    index("repurposing_plans_owner_idx").on(table.userId),
+    index("repurposing_plans_story_idx").on(table.storyId),
+    index("repurposing_plans_status_idx").on(table.status),
+  ],
+);
+export type RepurposingPlan = typeof repurposingPlans.$inferSelect;
+
+/**
  * Voice profile — reusable writing identity for generation (CannerAI parity
  * phase 1). A voice is *configuration*, never a second generation engine: it
  * feeds a GenerationPolicy, which is what a GenerationJob snapshots.

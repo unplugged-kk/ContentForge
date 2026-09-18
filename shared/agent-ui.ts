@@ -190,17 +190,57 @@ export function matchStoryId(objective: string): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-export function inferTargets(objective: string): Array<{ format: string; channel: string; generate: boolean }> {
+export function inferTargets(
+  objective: string,
+): Array<{ format: string; channel: string; generate: boolean; count?: number }> {
   const text = objective.toLowerCase();
-  const targets: Array<{ format: string; channel: string; generate: boolean }> = [];
+  const targets: Array<{ format: string; channel: string; generate: boolean; count?: number }> = [];
+  const countNear = (patterns: RegExp[], fallback = 1): number => {
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match?.[1]) {
+        const n = Number(match[1]);
+        if (Number.isInteger(n) && n > 0) return Math.min(n, 10);
+      }
+    }
+    return fallback;
+  };
+  const wantsThread = /\bthread\b/.test(text);
   const wantsX = /\bx\b|\btwitter\b|\btweet\b/.test(text) || /\bx post\b/.test(text);
   const wantsLinkedIn = /\blinkedin\b/.test(text);
   const wantsInstagram = /\binstagram\b|\breel\b/.test(text);
   if (wantsX || (!wantsLinkedIn && !wantsInstagram && /\bpost\b|\bcontent\b|\bopportunit/.test(text))) {
-    targets.push({ format: "x_post", channel: "x", generate: true });
+    targets.push({
+      format: "x_post",
+      channel: "x",
+      generate: true,
+      count: countNear([/(\d+)\s+x posts?/, /(\d+)\s+tweets?/, /(\d+)\s+posts?/]),
+    });
   }
-  if (wantsLinkedIn) targets.push({ format: "linkedin_post", channel: "linkedin", generate: true });
-  if (wantsInstagram) targets.push({ format: "image", channel: "instagram", generate: true });
+  if (wantsThread) {
+    targets.push({
+      format: "x_thread",
+      channel: "x",
+      generate: true,
+      count: countNear([/(\d+)\s+threads?/], 1),
+    });
+  }
+  if (wantsLinkedIn) {
+    targets.push({
+      format: "linkedin_post",
+      channel: "linkedin",
+      generate: true,
+      count: countNear([/(\d+)\s+linkedin/], 1),
+    });
+  }
+  if (wantsInstagram) {
+    targets.push({
+      format: "image",
+      channel: "instagram",
+      generate: true,
+      count: countNear([/(\d+)\s+instagram/, /(\d+)\s+images?/], 1),
+    });
+  }
   if (targets.length === 0 && /\bvariant/.test(text)) {
     targets.push({ format: "x_post", channel: "x", generate: true });
   }

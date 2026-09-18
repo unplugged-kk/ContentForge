@@ -453,6 +453,27 @@ async function execTool(runId, tool, args, extra = {}) {
     return `opp ${opportunityId} job ${generationJobId} artifact ${artifactId} ${job.status}`;
   });
 
+  await check("repurpose_story count expansion returns a plan, not generated content", async () => {
+    const rep = await execTool(runId, "repurpose_story", {
+      storyId,
+      requestKey: `${RUN}-mass`,
+      targets: [
+        { format: "x_post", channel: "x", count: 3, generate: false },
+        { format: "linkedin_post", channel: "linkedin", count: 1, generate: false },
+      ],
+    });
+    assert(rep.body.result.status === "success", JSON.stringify(rep.body.result));
+    assert(Number.isInteger(rep.body.result.refs.planId) || Number.isInteger(rep.body.result.data.planId), "missing planId");
+    assert(rep.body.result.data.targets === 4, `targets=${rep.body.result.data.targets}`);
+    assert(Array.isArray(rep.body.result.data.outcomes), "outcomes missing");
+    assert(!JSON.stringify(rep.body.result.data).includes("IGNORE CONTENTFORGE"), "tool returned story body");
+    const planId = rep.body.result.refs.planId ?? rep.body.result.data.planId;
+    const [plan] = await q("select id, story_id from repurposing_plans where id = $1", [planId]);
+    assert(plan, "plan not durable");
+    assert(plan.story_id === storyId, "plan not bound to story");
+    return `plan ${planId} targets=${rep.body.result.data.targets}`;
+  });
+
   phase("Path D — image");
   let visualGenerationId;
   await check("generate_image produces a VisualAsset", async () => {

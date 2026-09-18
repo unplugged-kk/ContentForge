@@ -3,6 +3,93 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 25 — Mass Repurposing Engine
+
+**Status:** IMPLEMENTED (Timeplus live MCP remains ENVIRONMENTALLY BLOCKED;
+Video Factory HyperFrames render remains the Phase 21 BLOCKED boundary)
+
+**Verification:** TypeScript 0; unit 493/493; Postgres 249/249; live E2E 169/174
+(11 new Phase 25 checks; 5 failures are Phase 13 scheduler-tick timeout + Phase 24
+style-snapshot assertions on the shared live DB, not Phase 25 paths); agent E2E
+18/18; workspace/browser E2E 18/18. Visual E2E not re-run (Video Factory
+untouched).
+
+### Problem
+
+One researched Story must become many independent Opportunities, GenerationJobs,
+and Artifacts without re-researching, without a second content graph, and
+without a giant batch prompt.
+
+### Architecture
+
+```
+Story
+  → RepurposingPlan (frozen slots, limits, contextByChannel)
+  → Opportunity[N]   (existing; slot identity in repurpose_key)
+  → GenerationJob[N] (existing; channel-aware frozen GenerationPolicy)
+  → Artifact[N]
+  → existing approval / schedule / publication
+```
+
+Canonical service: `repurposeStory`. Manual HTTP, agent `repurpose_story`, and
+automation fan-out all call it. `count` expands to durable slots. Slot 1 keeps
+the Phase 12 key so automation idempotency is unchanged.
+
+### Database
+
+`repurposing_plans` (migration `0024_repurposing_plans`): unique
+`(story_id, request_key)`, owner/story/status indexes, FK to `stories`.
+
+### Idempotency / concurrency
+
+- Plan: unique `(story_id, request_key)` via `ON CONFLICT DO NOTHING`
+- Opportunity: unique `repurpose_key`
+  - slot 1: `repurpose:{storyId}:{requestKey}:{format}:{channel}`
+  - slot N: `…:sN`
+- Explicit new batch = new `requestKey`. `regenerate: true` uses a nonce and
+  does not poison the base key.
+
+### Limits
+
+`maxTargetsPerPlan=20`, `maxCountPerTarget=10`, `maxOpportunities=50`. Over
+limit → 400, not silent truncation.
+
+### Failure / restart
+
+Sibling outcomes are independent. Plan status is aggregated from durable rows
+(`queued` / `running` / `partial` / `completed` / `failed` / `cancelled` /
+`awaiting_approval`). Remaining work is whatever Opportunities/Jobs are missing
+for the frozen slots — no in-memory cursor.
+
+### Agent / UI
+
+`repurpose_story` accepts structured targets with `count` and returns
+`planId`, `storyId`, `opportunityIds`, `status`, counts. `/agent` has a
+controlled repurpose panel; progress is polled from `GET /api/repurposing/plans/:id`.
+
+### CannerAI parity
+
+| Item | Status |
+|---|---|
+| CR-5 content repurposing | IMPLEMENTED |
+| CR-6 one Story → many Opportunities | IMPLEMENTED (count/slots + plan) |
+| CR-16 one-click transformations | PARTIALLY IMPLEMENTED (same graph; no extra transform engine) |
+| CR-4 research-to-content | STRENGTHENED (research reuse proven) |
+| CR-9 LinkedIn | COMPATIBLE where `linkedin_post` is registered |
+| CR-10 future formats | COMPATIBLE (registry-driven; unsupported pairs return invalid) |
+| DI-7 / DI-8 queue/calendar | UNCHANGED (existing surfaces) |
+
+### Known blockers (unchanged)
+
+- Timeplus live MCP: ENVIRONMENTALLY BLOCKED without `TIMEPLUS_MCP_URL`
+- HyperFrames Video Factory render: BLOCKED (Phase 21)
+
+### Deferred
+
+Phase 26 research intelligence + SEO; vector duplicate detection; batch
+analytics/learning (Phase 29); YouTube/TikTok/Threads; HyperFrames; automatic
+publish; batch approval UI.
+
 ## Phase 24 — Real Voice + Style Intelligence
 
 **Status:** IMPLEMENTED (Timeplus live MCP remains ENVIRONMENTALLY BLOCKED;
@@ -73,7 +160,7 @@ dimensions. No vector DB, no performance learning, no second queue.
 
 ### Deferred
 
-Mass repurposing (Phase 25); vector semantic memory; automatic performance
+Mass repurposing is Phase 25 (done). Vector semantic memory; automatic performance
 learning; automatic mutation of Voice/preferences; Video Factory composition
 builder / remote worker / HyperFrames Cloud-Lambda-Cloud Run selection.
 

@@ -13,6 +13,7 @@ import { subscribeAgentStream } from "@/lib/agui-stream";
 import { ArtifactReviewCard } from "@/components/agent/artifact-review";
 import { AgentCopilotProvider } from "@/components/agent/copilot-provider";
 import { StyleIntelligencePanel } from "@/components/agent/style-panel";
+import { RepurposePanel } from "@/components/agent/repurpose-panel";
 import {
   AgentRunCard,
   OpportunityCard,
@@ -86,6 +87,7 @@ function AgentWorkspaceInner() {
   const [selectedArtifactId, setSelectedArtifactId] = useState<number | null>(null);
   const [story, setStory] = useState<Record<string, unknown> | null>(null);
   const [opportunities, setOpportunities] = useState<Record<string, unknown>[]>([]);
+  const [planId, setPlanId] = useState<number | null>(null);
   const [visual, setVisual] = useState<Record<string, unknown> | null>(null);
   const [video, setVideo] = useState<Record<string, unknown> | null>(null);
   const [untrusted, setUntrusted] = useState<string>("");
@@ -125,6 +127,8 @@ function AgentWorkspaceInner() {
     const artifactId = Number(refs.artifactId);
     const visualId = Number(refs.visualAssetId);
     const videoId = Number(refs.videoAssetId ?? refs.visualGenerationId);
+    const nextPlanId = Number(refs.planId);
+    if (nextPlanId > 0) setPlanId(nextPlanId);
     if (storyId > 0) {
       try {
         setStory(asRecord(await readJson(`/api/stories/${storyId}`)));
@@ -364,6 +368,19 @@ function AgentWorkspaceInner() {
         </section>
 
         <aside className="border-l p-3 overflow-y-auto space-y-3">
+          <RepurposePanel
+            storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
+            planId={planId}
+            onPlan={setPlanId}
+            onOpenArtifact={async (opportunityId) => {
+              try {
+                const rows = (await readJson(`/api/opportunities/${opportunityId}/artifacts`)) as Array<{ id: number }>;
+                if (Array.isArray(rows) && rows[0]?.id) setSelectedArtifactId(rows[0].id);
+              } catch {
+                /* opportunity may not have an artifact yet */
+              }
+            }}
+          />
           <StyleIntelligencePanel />
           <h2 className="text-sm font-semibold mb-2">Artifact review</h2>
           {selectedArtifactId ? (

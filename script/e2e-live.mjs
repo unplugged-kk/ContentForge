@@ -2623,6 +2623,214 @@ const observed = {};
     },
   );
 
+  // ── 6c3b. PHASE 25 RED ARROWS (mass repurposing engine) ─────────────────────
+  phase("Phase 25: one Story -> RepurposingPlan -> N slot Opportunities, no re-research");
+
+  let massPlanId;
+  let massOpportunityIds = [];
+  await check("Path A: count expansion creates 5 slot Opportunities on one plan", async () => {
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-a`,
+      targets: [{ format: "x_post", channel: "x", count: 5 }],
+    });
+    assert(res.status === 207, `status ${res.status}: ${res.text}`);
+    assert(res.body.outcomes.length === 5, `outcomes=${res.body.outcomes.length}`);
+    assert(Number.isInteger(res.body.planId), "missing planId");
+    massPlanId = res.body.planId;
+    massOpportunityIds = res.body.outcomes.map((o) => o.opportunityId);
+    assert(new Set(massOpportunityIds).size === 5, "slots were not distinct Opportunities");
+    const plan = await http("GET", `/api/repurposing/plans/${massPlanId}`);
+    assert(plan.status === 200, `GET plan ${plan.status}`);
+    assert(plan.body.progress.targets === 5, `progress.targets=${plan.body.progress.targets}`);
+    return `plan ${massPlanId} slots=${massOpportunityIds.join(",")}`;
+  });
+
+  await check("Path B: multi-channel fan-out including Instagram image where registered", async () => {
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-b`,
+      targets: [
+        { format: "x_post", channel: "x" },
+        { format: "linkedin_post", channel: "linkedin" },
+        { format: "image", channel: "instagram" },
+      ],
+    });
+    assert(res.status === 207, `status ${res.status}: ${res.text}`);
+    const byPair = Object.fromEntries(res.body.outcomes.map((o) => [`${o.channel}:${o.format}`, o.status]));
+    assert(byPair["x:x_post"] === "created" || byPair["x:x_post"] === "reused", "x missing");
+    assert(byPair["linkedin:linkedin_post"] === "created" || byPair["linkedin:linkedin_post"] === "reused", "linkedin missing");
+    assert(byPair["instagram:image"] === "created" || byPair["instagram:image"] === "reused", "instagram image missing");
+    return Object.keys(byPair).join(",");
+  });
+
+  await check("Path C: slot generation jobs produce Artifacts independently", async () => {
+    const jobs = [];
+    for (const id of massOpportunityIds.slice(0, 3)) {
+      const rows = await q("select id, status from generation_jobs where opportunity_id = $1 order by id desc limit 1", [id]);
+      if (rows[0]) jobs.push(rows[0].id);
+    }
+    assert(jobs.length >= 1, "no generation jobs for mass slots");
+    for (const jobId of jobs) {
+      await waitFor(
+        async () => {
+          const r = await http("GET", `/api/generation-jobs/${jobId}`);
+          if (r.body.status === "succeeded") return r.body;
+          if (r.body.status === "failed") throw new Error(`job ${jobId} failed: ${r.body.errorMessage}`);
+          return false;
+        },
+        { timeoutMs: 60_000, intervalMs: 300, label: `mass job ${jobId}` },
+      );
+    }
+    return `${jobs.length} slot jobs succeeded`;
+  });
+
+  await check("Path D/E: plan snapshot freezes context and does not create research", async () => {
+    const before = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-style`,
+      targets: [
+        { format: "x_post", channel: "x", count: 2 },
+        { format: "linkedin_post", channel: "linkedin" },
+      ],
+    });
+    assert(res.status === 207, `status ${res.status}: ${res.text}`);
+    const plan = await http("GET", `/api/repurposing/plans/${res.body.planId}`);
+    assert(plan.body.snapshot?.contextByChannel, "missing frozen contextByChannel");
+    const after = {
+      jobs: (await q("select count(*)::int c from research_jobs"))[0].c,
+      sources: (await q("select count(*)::int c from research_sources"))[0].c,
+      evidence: (await q("select count(*)::int c from research_evidence"))[0].c,
+    };
+    assert(after.jobs === before.jobs, `research_jobs ${before.jobs}->${after.jobs}`);
+    assert(after.sources === before.sources, `research_sources ${before.sources}->${after.sources}`);
+    assert(after.evidence === before.evidence, `research_evidence ${before.evidence}->${after.evidence}`);
+    return `jobs=${after.jobs} sources=${after.sources} evidence=${after.evidence}`;
+  });
+
+  await check("Path F: concurrent duplicate requestKey collapses to one plan", async () => {
+    const body = {
+      requestKey: `${RUN}-mass-dup`,
+      targets: [{ format: "x_post", channel: "x", count: 3 }],
+    };
+    const [a, b] = await Promise.all([
+      http("POST", `/api/stories/${storyId}/repurpose`, body),
+      http("POST", `/api/stories/${storyId}/repurpose`, body),
+    ]);
+    assert(a.status === 207 && b.status === 207, `status ${a.status}/${b.status}`);
+    assert(a.body.planId === b.body.planId, `plans diverged ${a.body.planId} vs ${b.body.planId}`);
+    const rows = await q("select id from repurposing_plans where story_id = $1 and request_key = $2", [
+      storyId,
+      `${RUN}-mass-dup`,
+    ]);
+    assert(rows.length === 1, `plans=${rows.length}`);
+    const opps = [
+      ...a.body.outcomes.map((o) => o.opportunityId),
+      ...b.body.outcomes.map((o) => o.opportunityId),
+    ].filter(Boolean);
+    assert(new Set(opps).size === 3, `opportunities=${new Set(opps).size}`);
+    return `plan ${rows[0].id}`;
+  });
+
+  await check("Path G: invalid sibling leaves valid slots intact", async () => {
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-partial`,
+      targets: [
+        { format: "x_post", channel: "x", count: 2 },
+        { format: "x_post", channel: "not_a_channel" },
+      ],
+    });
+    assert(res.status === 207, `status ${res.status}`);
+    const valid = res.body.outcomes.filter((o) => o.status === "created" || o.status === "reused");
+    const invalid = res.body.outcomes.filter((o) => o.status === "invalid");
+    assert(valid.length === 2, `valid=${valid.length}`);
+    assert(invalid.length === 1, `invalid=${invalid.length}`);
+    const plan = await http("GET", `/api/repurposing/plans/${res.body.planId}`);
+    assert(plan.body.status === "partial" || plan.body.progress.invalid >= 1, `status=${plan.body.status}`);
+    return plan.body.status;
+  });
+
+  await check("Path J: regenerate one sibling creates a new Opportunity without touching others", async () => {
+    const first = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-regen`,
+      targets: [{ format: "x_post", channel: "x", count: 2 }],
+    });
+    const second = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-regen`,
+      targets: [{ format: "x_post", channel: "x", count: 2, regenerate: true }],
+    });
+    assert(second.body.outcomes.every((o) => o.status === "created"), "regenerate must create");
+    const firstIds = first.body.outcomes.map((o) => o.opportunityId);
+    const secondIds = second.body.outcomes.map((o) => o.opportunityId);
+    assert(secondIds.every((id) => !firstIds.includes(id)), "regenerate reused original slots");
+    const replay = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-regen`,
+      targets: [{ format: "x_post", channel: "x", count: 2 }],
+    });
+    assert(replay.body.outcomes.every((o) => firstIds.includes(o.opportunityId)), "base key poisoned");
+    return `kept ${firstIds.join(",")} added ${secondIds.join(",")}`;
+  });
+
+  await check("Path K: User B cannot read User A's plan", async () => {
+    const savedCookie = cookie;
+    const savedCsrf = csrfToken;
+    cookie = null;
+    csrfToken = null;
+    await bootstrapSession();
+    const registered = await http("POST", "/api/auth/register", {
+      email: `${RUN}-repurpose-b@example.com`,
+      password: "password1",
+      name: "Repurpose B",
+    });
+    assert([200, 201].includes(registered.status), `register ${registered.status}`);
+    const csrf = await http("GET", "/api/csrf-token");
+    csrfToken = csrf.body?.csrfToken;
+    const peek = await http("GET", `/api/repurposing/plans/${massPlanId}`);
+    assert(peek.status === 404, `leaked plan ${peek.status}`);
+    const create = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      targets: [{ format: "x_post", channel: "x" }],
+    });
+    assert([404, 409].includes(create.status), `foreign story ${create.status}: ${create.text}`);
+    cookie = savedCookie;
+    csrfToken = savedCsrf;
+    return "plan isolated";
+  });
+
+  await check("Path L: mass artifacts stay in draft/in_review (no auto-approve)", async () => {
+    const rows = await q(
+      "select readiness from artifacts where opportunity_id = any($1::int[])",
+      [massOpportunityIds],
+    );
+    assert(rows.length >= 1, "no artifacts for mass slots");
+    assert(
+      rows.every((row) => row.readiness !== "approved"),
+      `unexpected approval ${rows.map((r) => r.readiness).join(",")}`,
+    );
+    return rows.map((r) => r.readiness).join(",");
+  });
+
+  await check("over-limit request is rejected, not silently truncated", async () => {
+    const res = await http("POST", `/api/stories/${storyId}/repurpose`, {
+      requestKey: `${RUN}-mass-limit`,
+      targets: [{ format: "x_post", channel: "x", count: 10 }],
+      limits: { maxOpportunities: 2 },
+    });
+    assert(res.status === 400, `expected 400, got ${res.status}: ${res.text}`);
+    return "rejected";
+  });
+
+  await check("GET /api/repurposing/capabilities lists registered format×channel pairs", async () => {
+    const res = await http("GET", "/api/repurposing/capabilities");
+    assert(res.status === 200, `status ${res.status}`);
+    const pairs = res.body.formats.map((f) => `${f.channel}:${f.format}`);
+    assert(pairs.includes("x:x_post"), "missing x_post");
+    assert(pairs.includes("linkedin:linkedin_post"), "missing linkedin_post");
+    assert(!pairs.includes("youtube:video"), "must not advertise unsupported YouTube");
+    return `${pairs.length} pairs`;
+  });
+
   // ── 6c4. PHASE 13 RED ARROWS (automation / autopilot foundation) ────────────
   phase("Phase 13: AutomationPolicy -> AutomationRun -> ResearchJob -> Story -> Opportunities -> GenerationJobs");
 

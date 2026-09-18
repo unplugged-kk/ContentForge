@@ -53,13 +53,27 @@ export {
 
 export {
   repurposeStory,
+  cancelRepurposingPlan,
+  inspectRepurposingPlan,
+  expandRepurposeTargets,
+  repurposeKeyFor,
+  aggregatePlanStatus,
+  progressFromOutcomes,
+  normalizeAngle,
+  resolveRepurposeLimits,
   RepurposeInputError,
+  RepurposingPlanNotFoundError,
+  MAX_TARGETS_PER_PLAN,
+  MAX_COUNT_PER_TARGET,
+  MAX_OPPORTUNITIES_PER_PLAN,
+  DEFAULT_REPURPOSE_LIMITS,
   type RepurposeDeps,
   type RepurposeInput,
   type RepurposeResult,
   type RepurposeTargetInput,
   type RepurposeTargetOutcome,
   type RepurposeOutcomeStatus,
+  type RepurposingPlanPort,
 } from "./repurposing";
 
 export {

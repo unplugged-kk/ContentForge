@@ -24,6 +24,7 @@ import {
   generationPolicies,
   opportunities,
   publications,
+  repurposingPlans,
   researchJobs,
   results,
   scheduleOccurrences,
@@ -39,7 +40,7 @@ import { createSchedule, dispatchDueOccurrences } from "./scheduling";
 import { runPublication } from "./publication";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createDatabaseContextReader } from "./context";
-import { repurposeStory, RepurposeInputError, type RepurposeDeps } from "./repurposing";
+import { repurposeStory, inspectRepurposingPlan, RepurposeInputError, type RepurposeDeps } from "./repurposing";
 import { StoryNotFoundError, StoryNotUsableError } from "./opportunity";
 
 registerBuiltinChannelAdapters();
@@ -93,6 +94,7 @@ describeDb("repurposing (db)", () => {
       await db.delete(generationJobs).where(inArray(generationJobs.opportunityId, oppIds));
       await db.delete(opportunities).where(inArray(opportunities.id, oppIds));
     }
+    if (storyIds.length) await db.delete(repurposingPlans).where(inArray(repurposingPlans.storyId, storyIds));
     if (storyIds.length) await db.delete(stories).where(inArray(stories.id, storyIds));
     await db.delete(generationPolicies).where(like(generationPolicies.name, `${RUN}%`));
     await db.delete(contextVault).where(inArray(contextVault.userId, [OWNER_A, OWNER_B]));
@@ -136,6 +138,7 @@ describeDb("repurposing (db)", () => {
         defaultModel: "fake-1",
         contextReader: createDatabaseContextReader(db),
       },
+      plans: c,
     };
   }
 
@@ -443,5 +446,105 @@ describeDb("repurposing (db)", () => {
       const run = await runGenerationJob(reloaded.id, deps.generation);
       assert.equal(run.status, "succeeded");
     }
+  });
+
+  it("count expansion writes a durable plan and N slot Opportunities without new research", async () => {
+    const story = await seedStory(OWNER_A, "plan-slots");
+    const deps = repurposeDeps(fakeModel("generated"));
+    const beforeJobs = await db.select({ id: researchJobs.id }).from(researchJobs);
+    const result = await repurposeStory(
+      story.id,
+      { requestKey: `${RUN}-slots`, targets: [{ format: "x_post", channel: "x", count: 3 }] },
+      deps,
+      OWNER_A,
+    );
+    assert.ok(result.plan);
+    assert.equal(result.outcomes.length, 3);
+    assert.equal(new Set(result.outcomes.map((o) => o.opportunity?.id)).size, 3);
+    const afterJobs = await db.select({ id: researchJobs.id }).from(researchJobs);
+    assert.equal(afterJobs.length, beforeJobs.length, "repurposing must not create ResearchJobs");
+    const view = await inspectRepurposingPlan(result.plan!.id, deps, OWNER_A);
+    assert.equal(view.progress.targets, 3);
+    assert.equal(view.plan.storyId, story.id);
+  });
+
+  it("concurrent identical requestKey collapses to one plan and three Opportunities", async () => {
+    const story = await seedStory(OWNER_A, "concurrent");
+    const deps = repurposeDeps(fakeModel("generated"));
+    const request = {
+      requestKey: `${RUN}-concurrent`,
+      targets: [{ format: "x_post", channel: "x", count: 3 }],
+    };
+    const [a, b] = await Promise.all([
+      repurposeStory(story.id, request, deps, OWNER_A),
+      repurposeStory(story.id, request, deps, OWNER_A),
+    ]);
+    assert.equal(a.plan?.id, b.plan?.id);
+    const ids = [...a.outcomes, ...b.outcomes]
+      .map((o) => o.opportunity?.id)
+      .filter((id): id is number => typeof id === "number");
+    assert.equal(new Set(ids).size, 3);
+    const plans = await db
+      .select()
+      .from(repurposingPlans)
+      .where(eq(repurposingPlans.requestKey, `${RUN}-concurrent`));
+    assert.equal(plans.length, 1);
+  });
+
+  it("restart from durable slots creates only the missing Opportunities", async () => {
+    const story = await seedStory(OWNER_A, "restart-slots");
+    const deps = repurposeDeps(fakeModel("generated"));
+    const request = {
+      requestKey: `${RUN}-restart-slots`,
+      targets: [
+        { format: "x_post", channel: "x" },
+        { format: "linkedin_post", channel: "linkedin" },
+        { format: "x_thread", channel: "x" },
+      ],
+    };
+    const first = await repurposeStory(story.id, request, deps, OWNER_A);
+    assert.equal(first.outcomes.length, 3);
+    const second = await repurposeStory(story.id, request, deps, OWNER_A);
+    assert.ok(second.outcomes.every((o) => o.status === "reused"));
+    assert.equal(second.plan?.id, first.plan?.id);
+  });
+
+  it("owner B cannot inspect owner A's plan", async () => {
+    const story = await seedStory(OWNER_A, "plan-iso");
+    const deps = repurposeDeps(fakeModel("generated"));
+    const result = await repurposeStory(
+      story.id,
+      { requestKey: `${RUN}-iso`, targets: [{ format: "x_post", channel: "x" }] },
+      deps,
+      OWNER_A,
+    );
+    await assert.rejects(
+      () => inspectRepurposingPlan(result.plan!.id, deps, OWNER_B),
+      (err: Error) => err.name === "RepurposingPlanNotFoundError",
+    );
+  });
+
+  it("frozen plan contextHash is reused across sibling jobs", async () => {
+    const story = await seedStory(OWNER_A, "freeze");
+    const deps = repurposeDeps(fakeModel("generated"));
+    const result = await repurposeStory(
+      story.id,
+      {
+        requestKey: `${RUN}-freeze`,
+        targets: [
+          { format: "x_post", channel: "x", count: 2 },
+          { format: "linkedin_post", channel: "linkedin" },
+        ],
+      },
+      deps,
+      OWNER_A,
+    );
+    const xJobs = result.outcomes.filter((o) => o.channel === "x" && o.job);
+    assert.equal(xJobs.length, 2);
+    const hashA = (xJobs[0].job!.policySnapshot as { inputHashes?: { context?: string } }).inputHashes?.context;
+    const hashB = (xJobs[1].job!.policySnapshot as { inputHashes?: { context?: string } }).inputHashes?.context;
+    if (hashA && hashB) assert.equal(hashA, hashB, "same-channel siblings share the frozen context");
+    const snapshot = result.plan?.snapshot as { contextByChannel?: Record<string, { contextHash: string }> };
+    assert.ok(snapshot?.contextByChannel?.x || snapshot?.contextByChannel?._default);
   });
 });

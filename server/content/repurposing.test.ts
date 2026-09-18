@@ -16,7 +16,19 @@ import type {
   Story,
   Voice,
 } from "@shared/schema";
-import { repurposeStory, RepurposeInputError, type RepurposeDeps } from "./repurposing";
+import {
+  repurposeStory,
+  RepurposeInputError,
+  expandRepurposeTargets,
+  repurposeKeyFor,
+  aggregatePlanStatus,
+  progressFromOutcomes,
+  normalizeAngle,
+  resolveRepurposeLimits,
+  MAX_OPPORTUNITIES_PER_PLAN,
+  type RepurposeDeps,
+  type RepurposeTargetOutcome,
+} from "./repurposing";
 import { StoryNotFoundError, StoryNotUsableError, type OpportunityDeps } from "./opportunity";
 import type { ContentStoragePort, InsertGenerationJobRow, InsertPolicyRow } from "./storage";
 import type { GenerationDeps } from "./generation";
@@ -62,6 +74,9 @@ function memoryStore() {
     providerCalls,
 
     async insertOpportunity(row: Record<string, unknown>): Promise<Opportunity> {
+      if (row.repurposeKey && opps.some((o) => o.repurposeKey === row.repurposeKey)) {
+        throw new Error('duplicate key value violates unique constraint "opportunities_repurpose_key_uq"');
+      }
       const o = {
         id: next(),
         userId: 1,
@@ -431,5 +446,96 @@ describe("repurposeStory", () => {
 
     assert.equal(content.researchJobCreations.length, 0);
     assert.equal(content.providerCalls.length, 0);
+  });
+
+  it("expands count into distinct slot identities, not one Opportunity with N posts", async () => {
+    const s = makeStory();
+    const { deps, content } = harness([s]);
+    const result = await repurposeStory(
+      s.id,
+      { requestKey: "batch-a", targets: [{ format: "x_post", channel: "x", count: 3 }] },
+      deps,
+      1,
+    );
+    assert.equal(result.outcomes.length, 3);
+    assert.deepEqual(
+      result.outcomes.map((o) => o.slot),
+      [1, 2, 3],
+    );
+    assert.equal(new Set(result.outcomes.map((o) => o.opportunity?.id)).size, 3);
+    assert.equal(content.opps[0].repurposeKey, `repurpose:${s.id}:batch-a:x_post:x`);
+    assert.equal(content.opps[1].repurposeKey, `repurpose:${s.id}:batch-a:x_post:x:s2`);
+    assert.equal(content.opps[2].repurposeKey, `repurpose:${s.id}:batch-a:x_post:x:s3`);
+  });
+
+  it("duplicate count expansion with the same requestKey collapses to the same slots", async () => {
+    const s = makeStory();
+    const { deps, content } = harness([s]);
+    const request = { requestKey: "batch-a", targets: [{ format: "x_post", channel: "x", count: 3 }] };
+    const first = await repurposeStory(s.id, request, deps, 1);
+    const second = await repurposeStory(s.id, request, deps, 1);
+    assert.ok(second.outcomes.every((o) => o.status === "reused"));
+    assert.deepEqual(
+      second.outcomes.map((o) => o.opportunity?.id),
+      first.outcomes.map((o) => o.opportunity?.id),
+    );
+    assert.equal(content.opps.length, 3);
+  });
+
+  it("rejects an over-limit expansion instead of silently creating a storm", async () => {
+    const s = makeStory();
+    const { deps } = harness([s]);
+    await assert.rejects(
+      () =>
+        repurposeStory(
+          s.id,
+          { targets: [{ format: "x_post", channel: "x", count: 3 }], limits: { maxOpportunities: 2 } },
+          deps,
+          1,
+        ),
+      RepurposeInputError,
+    );
+  });
+});
+
+describe("repurpose target expansion", () => {
+  it("accumulates slots across duplicate format×channel targets", () => {
+    const { slots } = expandRepurposeTargets(9, "rk", [
+      { format: "x_post", channel: "x", angle: "what happened" },
+      { format: "x_post", channel: "x", angle: "why it matters" },
+    ]);
+    assert.equal(slots.length, 2);
+    assert.equal(slots[0].slot, 1);
+    assert.equal(slots[1].slot, 2);
+    assert.equal(slots[0].repurposeKey, "repurpose:9:rk:x_post:x");
+    assert.equal(slots[1].repurposeKey, "repurpose:9:rk:x_post:x:s2");
+  });
+
+  it("slot 1 preserves the Phase 12 key", () => {
+    assert.equal(repurposeKeyFor(1, "r", "x_post", "x"), "repurpose:1:r:x_post:x");
+    assert.equal(repurposeKeyFor(1, "r", "x_post", "x", 2), "repurpose:1:r:x_post:x:s2");
+  });
+
+  it("normalizes angles for structured distinctness", () => {
+    assert.equal(normalizeAngle("  Why It Matters  "), "why it matters");
+    assert.equal(normalizeAngle("   "), null);
+  });
+
+  it("caps configured limits at the system ceiling", () => {
+    const limits = resolveRepurposeLimits({ maxOpportunities: 10_000 });
+    assert.equal(limits.maxOpportunities, MAX_OPPORTUNITIES_PER_PLAN);
+  });
+
+  it("aggregates partial vs completed vs failed honestly", () => {
+    const partial: RepurposeTargetOutcome[] = [
+      { format: "x_post", channel: "x", slot: 1, status: "created", job: { status: "succeeded" } as never },
+      { format: "x_post", channel: "x", slot: 2, status: "invalid", error: "nope" },
+    ];
+    assert.equal(aggregatePlanStatus("running", progressFromOutcomes(partial)), "partial");
+    const queued: RepurposeTargetOutcome[] = [
+      { format: "x_post", channel: "x", slot: 1, status: "created", job: { status: "queued" } as never },
+    ];
+    assert.equal(aggregatePlanStatus("queued", progressFromOutcomes(queued)), "running");
+    assert.equal(aggregatePlanStatus("cancelled", progressFromOutcomes(queued)), "cancelled");
   });
 });

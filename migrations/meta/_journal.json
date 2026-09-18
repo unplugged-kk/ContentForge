@@ -169,6 +169,13 @@
       "when": 1790181000000,
       "tag": "0023_style_corpus",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790268000000,
+      "tag": "0024_repurposing_plans",
+      "breakpoints": true
     }
   ]
 }

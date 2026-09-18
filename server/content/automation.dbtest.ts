@@ -30,6 +30,7 @@ import {
   generationPolicies,
   opportunities,
   publications,
+  repurposingPlans,
   researchEvidence,
   researchJobs,
   researchSources,
@@ -119,6 +120,7 @@ describeDb("automation (db)", () => {
       }
     }
     await db.delete(opportunities).where(inArray(opportunities.userId, OWNERS));
+    await db.delete(repurposingPlans).where(inArray(repurposingPlans.userId, OWNERS));
     await db.delete(stories).where(inArray(stories.userId, OWNERS));
     await db.delete(automationRuns).where(inArray(automationRuns.userId, OWNERS));
     await db.delete(automationPolicies).where(inArray(automationPolicies.userId, OWNERS));
@@ -164,6 +166,7 @@ describeDb("automation (db)", () => {
           defaultModel: "fake-1",
           contextReader: createDatabaseContextReader(db),
         },
+        plans: content,
       },
       enqueueGeneration: async () => true,
       enqueueAutomationRun: async () => true,

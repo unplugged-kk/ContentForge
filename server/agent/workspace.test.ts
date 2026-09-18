@@ -35,6 +35,17 @@ describe("workspace intent compiler", () => {
     assert.ok(targets.some((t) => t.channel === "instagram"));
   });
 
+  it("parses bounded counts for a mass-repurpose objective", () => {
+    const plan = compileWorkspaceIntent(
+      "Turn this Story 42 into 3 X posts, 1 thread and 2 LinkedIn posts.",
+    );
+    const repurpose = plan.find((step) => step.tool === "repurpose_story");
+    const targets = (repurpose?.arguments as { targets: Array<{ format: string; count?: number }> }).targets;
+    assert.equal(targets.find((t) => t.format === "x_post")?.count, 3);
+    assert.equal(targets.find((t) => t.format === "x_thread")?.count, 1);
+    assert.equal(targets.find((t) => t.format === "linkedin_post")?.count, 2);
+  });
+
   it("compiles image and video intents", () => {
     assert.ok(compileWorkspaceIntent("Create an image for this post.").some((s) => s.tool === "generate_image"));
     assert.ok(compileWorkspaceIntent("Create a video for this story.").some((s) => s.tool === "generate_video"));

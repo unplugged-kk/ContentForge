@@ -935,10 +935,69 @@ UNTRUSTED text. Foreign runs 404.
 Paths A–C, G, I, J, K plus OpenAI-compatible and AG-UI remote through
 configuration). Timeplus MCP and HyperFrames remain environmental blockers.
 
-**Deferred:** Phase 24 voice + style intelligence (now done), mass repurposing, A2UI,
+**Deferred:** Phase 24 voice + style intelligence (now done), mass repurposing (now done), A2UI,
 unrestricted MCP Apps, autonomous publishing as default.
 
+## Phase 25 — Mass Repurposing Engine (done)
+
+**The problem this closes**: Phase 12 already turned one Story into N
+Opportunities through `repurposeStory`, and Phase 13 automation already called
+that function. What was missing was *mass* production: a target `count` that
+expands into durable slot identities, a frozen execution plan, bounded volume,
+plan-level ContextAssembly freeze, live progress derived from rows, and one
+agent/UI/automation path onto that same service.
+
+```
+ONE STORY
+    ↓
+RepurposingPlan (frozen slots + context inputs + limits)
+    ↓
+Opportunity[N]  (existing rows; slot identity in `repurpose_key`)
+    ↓
+GenerationJob[N]  (existing; channel-aware GenerationPolicy)
+    ↓
+Artifact[N] → existing approval → Schedule → Occurrence → Publication → Result
+```
+
+**Audit reused, not replaced.** Canonical service remains `repurposeStory`.
+No `MassRepurposeService`, no second content graph, no per-channel Story types,
+no giant batch LLM prompt, no new queue/scheduler/publication pipeline.
+Automation still calls `repurposeStory({ requestKey: automation-run-${id} })`.
+The agent tool `repurpose_story` is the same function. Manual HTTP
+`POST /api/stories/:id/repurpose` is the same function.
+
+**RepurposingPlan** is the minimum new durable object: identity, owner, frozen
+snapshot (story, expanded slots, limits, `contextByChannel`), requestKey unique
+per story. Progress is always counted from Opportunity / GenerationJob /
+Artifact rows. Slot 1 keeps the Phase 12 key
+`repurpose:{storyId}:{requestKey}:{format}:{channel}` so existing automation
+idempotency is unchanged; slots 2+ append `:sN`.
+
+**Invariants proven:** no new ResearchJobs; concurrent identical requestKeys
+collapse via unique `(story_id, request_key)` plus unique `repurpose_key`;
+partial siblings stay valid; regenerate does not poison the base key; plan-level
+context freeze is copied into each `createGenerationJob`; artifacts remain
+draft until the existing approval service; Video Factory was not modified.
+
+**Limits (not billing):** `maxTargetsPerPlan=20`, `maxCountPerTarget=10`,
+`maxOpportunities=50`. Over-limit requests are rejected (400), never truncated.
+
+**CannerAI:** CR-5 / CR-6 IMPLEMENTED; CR-16 where a transformation already uses
+this graph; CR-9 LinkedIn and Instagram image only where format profiles exist.
+YouTube/TikTok/Threads publication remain deferred.
+
+**Verification:** TypeScript 0; unit 493/493; Postgres 249/249; live E2E
+169/174 (11 new Phase 25 checks; 5 failures are the Phase 13 scheduler-tick
+timeout and Phase 24 style-snapshot assertions on the shared `cf_e2e_live`
+database — none of the named failures are Phase 25 paths); agent E2E 18/18;
+workspace/browser E2E 18/18. Visual E2E not re-run (Video Factory untouched).
+
+**Deferred:** Phase 26 research intelligence + SEO; vector duplicate detection;
+batch analytics/learning (Phase 29); HyperFrames / Video Factory composition;
+new channel adapters; hidden batch approve/publish.
+
 ## Phase 24 — Real Voice + Style Intelligence (done)
+
 
 **The problem this closes**: personalization was still mostly explicit Voice /
 user_profile notes plus one-reference Phase 11 observations. Generation quality
@@ -981,8 +1040,9 @@ is unchanged.
 163/163; visual 38/38; agent 17/17; workspace 17/17. Snapshot proof: Style v1
 → Job A remains pinned after Style v2 is activated.
 
-**Deferred:** mass repurposing (Phase 25), vector memory, automatic performance
-learning, Video Factory composition/submit/render-backend work.
+**Deferred:** vector memory, automatic performance
+learning, Video Factory composition/submit/render-backend work. Mass
+repurposing is Phase 25 (done).
 
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 

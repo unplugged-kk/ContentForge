@@ -110,7 +110,7 @@ export function registerAgentTools(): void {
     stories: storyDeps,
     opportunities: opportunityDeps,
     generation: generationDeps,
-    repurpose: { opportunities: opportunityDeps, generation: generationDeps },
+    repurpose: { opportunities: opportunityDeps, generation: generationDeps, plans: contentStorage },
     content: contentStorage,
     visualStorage: visualAssetStorage,
     enqueueGeneration,

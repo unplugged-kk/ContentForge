@@ -111,6 +111,12 @@ export interface CreateGenerationJobInput {
    * (and therefore a new Artifact revision). Omit for normal idempotent creation.
    */
   regenerate?: boolean;
+  /**
+   * Plan-level frozen ContextAssembly (Phase 25). When present, this job does
+   * not re-read live style/preferences — sibling generation stays coherent
+   * even if the user activates a new StyleProfile mid-batch.
+   */
+  frozenContext?: import("./context").ContextAssembly;
 }
 
 export class OpportunityNotFoundError extends Error {
@@ -214,9 +220,13 @@ export async function createGenerationJob(
 
   // Ticket 10: resolved ONCE here, then frozen into the policy spec and the
   // effective request — never re-read when the job later executes.
-    const contextAssembly = deps.contextReader
-      ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
-      : EMPTY_CONTEXT_ASSEMBLY;
+  // Phase 25: a RepurposingPlan may supply a frozen assembly so later siblings
+  // do not pick up a style mutation that happened after the plan was claimed.
+    const contextAssembly = input.frozenContext
+      ? input.frozenContext
+      : deps.contextReader
+        ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
+        : EMPTY_CONTEXT_ASSEMBLY;
 
   const resolved = await resolveGenerationPolicy(
     composeGenerationPolicyInput(

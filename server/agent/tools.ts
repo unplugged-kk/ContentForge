@@ -227,7 +227,7 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
     },
     {
       name: "repurpose_story",
-      description: "Thin Story→Opportunity orchestration over existing repurposeStory.",
+      description: "Turn one Story into a durable RepurposingPlan of Opportunities via existing repurposeStory. Does not re-research.",
       inputSchema: z.object({
         storyId: positiveId,
         targets: z
@@ -235,11 +235,14 @@ export function createContentForgeTools(deps: AgentDomainDeps): ToolDefinition[]
             z.object({
               format: z.string().trim().min(1).max(50),
               channel: z.string().trim().min(1).max(50),
+              count: z.number().int().min(1).max(10).optional(),
               generate: z.boolean().optional(),
+              objective: z.string().trim().min(1).max(2000).optional(),
+              angle: z.string().trim().min(1).max(2000).optional(),
             }),
           )
           .min(1)
-          .max(8),
+          .max(20),
         requestKey: z.string().trim().min(1).max(200).optional(),
       }),
       access: "write",
@@ -598,10 +601,22 @@ async function repurpose(
       Number(input.storyId),
       {
         requestKey: typeof input.requestKey === "string" ? input.requestKey : ctx.idempotencyKey,
-        targets: (input.targets as Array<{ format: string; channel: string; generate?: boolean }>).map((target) => ({
+        targets: (
+          input.targets as Array<{
+            format: string;
+            channel: string;
+            count?: number;
+            generate?: boolean;
+            objective?: string;
+            angle?: string;
+          }>
+        ).map((target) => ({
           format: target.format,
           channel: target.channel,
-          generate: target.generate === true ? true : false,
+          count: target.count,
+          generate: target.generate,
+          objective: target.objective,
+          angle: target.angle,
         })),
       },
       deps.repurpose,
@@ -614,19 +629,28 @@ async function repurpose(
         jobs.push(outcome.job);
       }
     }
+    const created = result.progress.opportunitiesCreated + result.progress.opportunitiesReused;
     return envelope({
       tool: "repurpose_story",
       status: "success",
-      summary: `Repurposed into ${result.outcomes.length} target(s)`,
+      summary: `Plan ${result.plan?.id ?? "ephemeral"}: ${created} opportunities from story ${result.storyId}`,
       refs: {
+        planId: result.plan?.id,
         storyId: result.storyId,
         opportunityIds: result.outcomes.map((o) => o.opportunity?.id).filter(Boolean),
         generationJobIds: result.outcomes.map((o) => o.job?.id).filter(Boolean),
       },
       data: {
+        planId: result.plan?.id ?? null,
+        storyId: result.storyId,
+        status: result.plan?.status ?? "queued",
+        targets: result.progress.targets,
+        opportunitiesCreated: created,
+        progress: result.progress,
         outcomes: result.outcomes.map((o) => ({
           format: o.format,
           channel: o.channel,
+          slot: o.slot,
           status: o.status,
           opportunityId: o.opportunity?.id,
           generationJobId: o.job?.id,

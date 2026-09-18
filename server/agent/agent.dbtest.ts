@@ -19,6 +19,7 @@ import {
   researchJobs,
   researchSources,
   stories,
+  repurposingPlans,
 } from "@shared/schema";
 import { DatabaseResearchStorage } from "../research/storage";
 import { DatabaseStoryStorage } from "../story/storage";
@@ -88,6 +89,7 @@ describeDb("agent runtime (db)", () => {
           model: { provider: "test", generate: async () => ({ payload: { text: "x" }, model: "t", provider: "t", cost: null, usage: {} }) },
           defaultModel: "test",
         },
+        plans: content,
       },
       content,
       visualStorage: createLocalAssetStorage(),
@@ -108,6 +110,9 @@ describeDb("agent runtime (db)", () => {
       await db.delete(agentToolCalls).where(inArray(agentToolCalls.agentRunId, runIds));
     }
     await db.delete(agentRuns).where(like(agentRuns.idempotencyKey, `${RUN}%`));
+    const leftoverStories = await db.select({ id: stories.id }).from(stories).where(like(stories.title, `${RUN}%`));
+    const leftoverIds = leftoverStories.map((row) => row.id);
+    if (leftoverIds.length) await db.delete(repurposingPlans).where(inArray(repurposingPlans.storyId, leftoverIds));
     await db.delete(stories).where(like(stories.title, `${RUN}%`));
     await pool.end();
   });

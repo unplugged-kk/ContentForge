@@ -499,6 +499,7 @@ export const automationDeps: AutomationDeps = {
   repurpose: {
     opportunities: { opportunities: contentStorage, stories: storyStorage },
     generation: generationDeps,
+    plans: contentStorage,
   },
   enqueueGeneration: async (job: GenerationJob) => {
     const { getJobRuntime } = await import("../jobs/bootstrap");

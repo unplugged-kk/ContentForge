@@ -351,8 +351,9 @@ async function cookieHeader() {
     await page.locator('[data-testid="textarea-agent-composer"]').waitFor();
     await page.locator('[data-testid="panel-agent-capabilities"]').waitFor();
     await page.locator('[data-testid="panel-style-intelligence"]').waitFor();
+    await page.locator('[data-testid="panel-repurposing"]').waitFor();
     await context.close();
-    return "workspace chrome + style panel visible";
+    return "workspace chrome + style + repurpose panels visible";
   });
 
   await check("HTTP: operator can add reference content and list it", async () => {
@@ -439,6 +440,31 @@ async function cookieHeader() {
     assert(/Research|Run|story|Artifact|activity/i.test(activity), `activity=${activity.slice(0, 200)}`);
     await context.close();
     return "reload reconstructed";
+  });
+
+  await check("Browser Path A: repurpose panel creates a durable plan from the Story", async () => {
+    assert(Number.isInteger(storyId), "no story from journey");
+    const { context, page } = await openWorkspace();
+    await page.locator('[data-testid="panel-repurposing"]').waitFor();
+    await page.locator('[data-testid="input-repurpose-story-id"]').fill(String(storyId));
+    await page.locator('[data-testid="button-repurpose-create"]').click();
+    await page.locator('[data-testid="panel-repurpose-plan"]').waitFor({ timeout: 30_000 });
+    const progress = await page.locator('[data-testid="text-repurpose-progress"]').innerText();
+    assert(/\d+ \/ \d+ opportunities/.test(progress), `progress=${progress}`);
+    await page.reload();
+    await page.locator('[data-testid="panel-repurposing"]').waitFor();
+    await page.locator('[data-testid="input-repurpose-story-id"]').fill(String(storyId));
+    await page.locator('[data-testid="button-repurpose-create"]').click();
+    await page.locator('[data-testid="panel-repurpose-plan"]').waitFor({ timeout: 30_000 });
+    const again = await page.locator('[data-testid="text-repurpose-progress"]').innerText();
+    assert(/\d+ \/ \d+ opportunities/.test(again), `reload progress=${again}`);
+    const plans = await q("select id from repurposing_plans where story_id = $1 and request_key = $2", [
+      storyId,
+      `ui-story-${storyId}`,
+    ]);
+    assert(plans.length === 1, `duplicate plans=${plans.length}`);
+    await context.close();
+    return `plan ${plans[0].id}`;
   });
 
   phase("Path C — artifact revision");

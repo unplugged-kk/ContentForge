@@ -19,6 +19,7 @@ import {
   generationPolicies,
   opportunities,
   publications,
+  repurposingPlans,
   results,
   scheduleOccurrences,
   schedules,
@@ -35,6 +36,7 @@ import {
   type OpportunityStatus,
   type Publication,
   type PublicationState,
+  type RepurposingPlan,
   type Result,
   type Schedule,
   type ScheduleOccurrence,
@@ -320,6 +322,30 @@ export interface ContentStoragePort {
     status: OpportunityStatus,
     killReason: string | null,
   ): Promise<Opportunity | undefined>;
+
+  claimRepurposingPlan?(row: {
+    userId?: number | null;
+    storyId: number;
+    planVersion?: number;
+    status?: string;
+    requestKey: string;
+    snapshot: JsonRecord;
+    limits: JsonRecord;
+  }): Promise<{ plan: RepurposingPlan; created: boolean }>;
+  getRepurposingPlan?(id: number): Promise<RepurposingPlan | undefined>;
+  getRepurposingPlanForOwner?(id: number, ownerId: number): Promise<RepurposingPlan | undefined>;
+  getRepurposingPlanByStoryRequest?(storyId: number, requestKey: string): Promise<RepurposingPlan | undefined>;
+  patchRepurposingPlan?(
+    id: number,
+    patch: {
+      status?: string;
+      snapshot?: JsonRecord;
+      errorClass?: string | null;
+      errorMessage?: string | null;
+      completedAt?: Date | null;
+    },
+  ): Promise<RepurposingPlan | undefined>;
+  listRepurposingPlansByStory?(storyId: number): Promise<RepurposingPlan[]>;
 
   claimGenerationJob(row: InsertGenerationJobRow): Promise<ClaimGenerationJobResult>;
   getGenerationJob(id: number): Promise<GenerationJob | undefined>;
@@ -884,6 +910,93 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(eq(opportunities.repurposeKey, repurposeKey))
       .limit(1);
     return row;
+  }
+
+  async claimRepurposingPlan(row: {
+    userId?: number | null;
+    storyId: number;
+    planVersion?: number;
+    status?: string;
+    requestKey: string;
+    snapshot: JsonRecord;
+    limits: JsonRecord;
+  }): Promise<{ plan: RepurposingPlan; created: boolean }> {
+    const inserted = await this.database
+      .insert(repurposingPlans)
+      .values({
+        userId: row.userId ?? null,
+        storyId: row.storyId,
+        planVersion: row.planVersion ?? 1,
+        status: row.status ?? "planning",
+        requestKey: row.requestKey,
+        snapshot: row.snapshot ?? {},
+        limits: row.limits ?? {},
+      })
+      .onConflictDoNothing({ target: [repurposingPlans.storyId, repurposingPlans.requestKey] })
+      .returning();
+    if (inserted.length > 0) return { plan: inserted[0], created: true };
+    const [existing] = await this.database
+      .select()
+      .from(repurposingPlans)
+      .where(and(eq(repurposingPlans.storyId, row.storyId), eq(repurposingPlans.requestKey, row.requestKey)))
+      .limit(1);
+    return { plan: existing, created: false };
+  }
+
+  async getRepurposingPlan(id: number): Promise<RepurposingPlan | undefined> {
+    const [row] = await this.database.select().from(repurposingPlans).where(eq(repurposingPlans.id, id)).limit(1);
+    return row;
+  }
+
+  async getRepurposingPlanForOwner(id: number, ownerId: number): Promise<RepurposingPlan | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(repurposingPlans)
+      .where(and(eq(repurposingPlans.id, id), eq(repurposingPlans.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
+  async getRepurposingPlanByStoryRequest(storyId: number, requestKey: string): Promise<RepurposingPlan | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(repurposingPlans)
+      .where(and(eq(repurposingPlans.storyId, storyId), eq(repurposingPlans.requestKey, requestKey)))
+      .limit(1);
+    return row;
+  }
+
+  async patchRepurposingPlan(
+    id: number,
+    patch: {
+      status?: string;
+      snapshot?: JsonRecord;
+      errorClass?: string | null;
+      errorMessage?: string | null;
+      completedAt?: Date | null;
+    },
+  ): Promise<RepurposingPlan | undefined> {
+    const [row] = await this.database
+      .update(repurposingPlans)
+      .set({
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.snapshot !== undefined ? { snapshot: patch.snapshot } : {}),
+        ...(patch.errorClass !== undefined ? { errorClass: patch.errorClass } : {}),
+        ...(patch.errorMessage !== undefined ? { errorMessage: patch.errorMessage } : {}),
+        ...(patch.completedAt !== undefined ? { completedAt: patch.completedAt } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(repurposingPlans.id, id))
+      .returning();
+    return row;
+  }
+
+  async listRepurposingPlansByStory(storyId: number): Promise<RepurposingPlan[]> {
+    return this.database
+      .select()
+      .from(repurposingPlans)
+      .where(eq(repurposingPlans.storyId, storyId))
+      .orderBy(asc(repurposingPlans.id));
   }
 
   async listOpportunitiesByStory(storyId: number): Promise<Opportunity[]> {
