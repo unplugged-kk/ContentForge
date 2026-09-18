@@ -888,10 +888,55 @@ Timeplus live MCP ENVIRONMENTALLY BLOCKED (`TIMEPLUS_MCP_URL` unset — Path N
 returned ContentForge-local metrics); Video Factory HyperFrames render remains
 the Phase 21 blocker; fresh migrations 23 / 52 tables.
 
-**Deferred:** CopilotKit/AG-UI workspace UI (Phase 23), mass repurposing
+**Deferred:** CopilotKit/AG-UI workspace UI (Phase 23 — now done), mass repurposing
 intelligence (Phase 25), style learning, autonomous publishing as default,
 Chrome, YouTube/TikTok connectors, vector memory, Timeplus as a live telemetry
 cluster (needs `TIMEPLUS_MCP_URL`).
+
+## Phase 23 — CopilotKit + AG-UI Agent-Native Workspace (done)
+
+**The problem this closes**: Phase 22 made the agent runtime real, but humans
+still had to drive it through HTTP. This phase adds one Agent Workspace so a
+user can enter intent, watch a durable AgentRun, inspect tool calls and domain
+cards, edit/approve/schedule/publish through existing APIs, and recover the
+same run after reload.
+
+```
+Browser CopilotKit + Agent Workspace
+        ↓
+AG-UI SSE (/api/agent/agui, /api/agent/runs/:id/stream)
+        ↓
+ContentForge Agent Runtime (unchanged)
+        ↓
+AgentToolRegistry → existing domain services → PostgreSQL
+```
+
+CopilotKit (`@copilotkit/react-core@1.72.0`) is the UI/agent interaction layer
+only. Controlled tool-call rendering owns the components; the agent chooses
+when they appear. No arbitrary generated HTML/JS, no A2UI, no MCP Apps, no
+second tool registry.
+
+**Transport.** `GET /api/agent/runs/:id/stream` and `POST /api/agent/agui`
+emit AG-UI protocol events. Historical reconstruction remains
+`GET /api/agent/runs/:id/events`. `GET /api/agent/runtime` advertises only
+configured backends and never secrets.
+
+**Workspace.** `/agent`: composer (`compilePlan` for fixture intent→plan),
+activity from real events, tool cards, Story/Opportunity/Artifact/asset/
+publication cards, artifact review (human edit = new immutable revision),
+explicit approval, schedule, publish, run history, capability panel.
+
+**Security.** Browser cannot set `ownerId` or privileged grants on workspace
+runs. Approve/publish remain privileged. Research excerpts render as
+UNTRUSTED text. Foreign runs 404.
+
+**Verification:** TypeScript 0; unit 481/481; Postgres 240/240; live E2E
+154/154; visual E2E 38/38; agent E2E 17/17; workspace E2E 16/16 (browser
+Paths A–C, G, I, J, K plus OpenAI-compatible and AG-UI remote through
+configuration). Timeplus MCP and HyperFrames remain environmental blockers.
+
+**Deferred:** Phase 24 voice + style intelligence, mass repurposing, A2UI,
+unrestricted MCP Apps, autonomous publishing as default.
 
 ## Phase 13 — automation / autopilot foundation: durable intent, not a second orchestrator (done)
 

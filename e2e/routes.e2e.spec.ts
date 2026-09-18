@@ -3,6 +3,7 @@ import { test, expect } from "@playwright/test";
 /** Logged-in smoke: each primary route renders its page chrome. */
 const routes: { path: string; selector: string }[] = [
   { path: "/", selector: '[data-testid="text-page-title"]' },
+  { path: "/agent", selector: '[data-testid="text-agent-workspace-title"]' },
   { path: "/calendar", selector: '[data-testid="text-calendar-title"]' },
   { path: "/ideas", selector: '[data-testid="text-ideas-title"]' },
   { path: "/templates", selector: '[data-testid="text-templates-title"]' },

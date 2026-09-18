@@ -28,9 +28,12 @@
     "build:verify:docker": "node script/e2e-docker.mjs",
     "smoke:research": "node --import tsx script/research-smoke.mjs",
     "test:e2e:visual": "node script/e2e-visual.mjs",
-    "test:e2e:agent": "node script/e2e-agent.mjs"
+    "test:e2e:agent": "node script/e2e-agent.mjs",
+    "test:e2e:workspace": "node script/e2e-workspace.mjs"
   },
   "dependencies": {
+    "@copilotkit/react-core": "^1.72.0",
+    "@copilotkit/react-ui": "^1.72.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",

@@ -43,7 +43,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Chat-to-post | chat → Story(human) → Opportunity → GenerationJob | IMPLEMENTED — durable idempotency (`idempotencyKey` → same Opportunity/job) and explicit `regenerate`; no conversational UI |
 | Repurposing (format change) | Story → new Opportunity → new Artifact | IMPLEMENTED — never re-researches, never clones evidence |
 | Regeneration after rejection | GenerationJob (`regenerate`) → new Artifact revision | IMPLEMENTED (idempotent duplicate delivery vs intentional regeneration is explicit) |
-| Human editing | Artifact revision (`provenance=human_edit`) | **API foundation complete** — `POST /artifacts/:id/revise` (stale-base guarded) creates a new draft revision, `GET /artifacts/:id/history` exposes the chain, prior revisions and their approvals/publications stay pinned. **Deferred**: editor UI |
+| Human editing | Artifact revision (`provenance=human_edit`) | IMPLEMENTED — `POST /artifacts/:id/revise` (stale-base guarded) creates a new draft revision; Agent Workspace review card edits through that API. Prior revisions and their approvals/publications stay pinned |
 | Approval workflow | Artifact readiness | IMPLEMENTED (`draft → in_review → approved \| rejected`, pinned per revision; approval never carries to a new revision) |
 | Scheduling | Schedule → Occurrence | PARTIALLY IMPLEMENTED — durable scheduler tick + `every:<n><unit>` recurrence. Phase 16: one independent Schedule per Publication target (distinct `startAt`). Calendar/RRULE still deferred |
 | Publishing | Publication → ChannelAdapter | **IMPLEMENTED** for X and LinkedIn. One Artifact revision → N independent Publications (`POST /api/artifacts/:id/publications`). `Publication.channel` is the delivery target. Threads/Instagram/YouTube: DEFERRED |
@@ -61,7 +61,7 @@ ResearchJob → Story → Opportunity → GenerationPolicy → GenerationJob →
 | Multi-brand / collaboration | identity model | DEFERRED |
 | Notifications, search, activity feed | new surfaces | DEFERRED |
 | Billing / subscriptions | — | DEFERRED (out of scope by design) |
-| Agent-operated pipeline | AgentRuntime → AgentToolRegistry → existing domain services | IMPLEMENTED — interchangeable backends (OpenAI-compatible / AG-UI remote / fixture) invoke governed tools only. CopilotKit workspace UI: DEFERRED Phase 23. Timeplus: telemetry seam only; live MCP ENVIRONMENTALLY BLOCKED without `TIMEPLUS_MCP_URL` |
+| Agent-operated pipeline | AgentRuntime → AgentToolRegistry → existing domain services | IMPLEMENTED — interchangeable backends invoke governed tools only. CopilotKit + AG-UI Agent Workspace: IMPLEMENTED (Phase 23, controlled tool-call UI). Timeplus: telemetry seam only; live MCP ENVIRONMENTALLY BLOCKED without `TIMEPLUS_MCP_URL` |
 
 ## Video Factory boundary (contract only)
 

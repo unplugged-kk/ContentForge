@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 
 const createItems = [
+  { title: "Agent Workspace", url: "/agent", icon: Bot },
   { title: "Generate", url: "/", icon: Sparkles },
   { title: "Post Formatter", url: "/formatter", icon: CaseSensitive },
   { title: "Canned Responses", url: "/canned-responses", icon: Quote },

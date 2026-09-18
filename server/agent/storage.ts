@@ -178,6 +178,16 @@ export class DatabaseAgentStorage {
     return rows[0];
   }
 
+  async listRunsForOwner(ownerId: number, limit = 30): Promise<AgentRun[]> {
+    const take = Math.min(Math.max(limit, 1), 100);
+    return this.database
+      .select()
+      .from(agentRuns)
+      .where(eq(agentRuns.userId, ownerId))
+      .orderBy(desc(agentRuns.id))
+      .limit(take);
+  }
+
   async listToolCalls(agentRunId: number): Promise<AgentToolCall[]> {
     return this.database
       .select()

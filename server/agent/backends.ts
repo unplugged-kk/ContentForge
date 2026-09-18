@@ -4,6 +4,7 @@ import type {
   AgentRunResult,
   AgentToolRequest,
 } from "./types";
+import { collectRefs, resolvePlanArguments } from "./intent";
 
 export function agentBackendConfig(env: NodeJS.ProcessEnv = process.env): {
   id: "fixture" | "openai-compatible" | "agui-remote";
@@ -46,7 +47,7 @@ export function createFixtureBackend(): AgentBackendPort {
     async run(input: AgentRunInput): Promise<AgentRunResult> {
       const plan = input.providerSnapshot.plan;
       if (Array.isArray(plan)) {
-        const next = nextPlanStep(plan, input.history.length);
+        const next = nextPlanStep(plan, input.history.length, input);
         if (!next) return { status: "completed", message: "fixture plan complete" };
         return { status: "waiting", toolRequests: [next] };
       }
@@ -55,17 +56,18 @@ export function createFixtureBackend(): AgentBackendPort {
   };
 }
 
-function nextPlanStep(plan: unknown[], index: number): AgentToolRequest | null {
+function nextPlanStep(plan: unknown[], index: number, input?: AgentRunInput): AgentToolRequest | null {
   const step = plan[index];
   if (!step || typeof step !== "object") return null;
   const rec = step as Record<string, unknown>;
   const name = typeof rec.tool === "string" ? rec.tool : typeof rec.name === "string" ? rec.name : null;
   if (!name) return null;
-  const args =
+  const raw =
     rec.arguments && typeof rec.arguments === "object" && !Array.isArray(rec.arguments)
       ? (rec.arguments as Record<string, unknown>)
       : {};
-  return { name, arguments: args };
+  const refs = collectRefs(input?.history ?? []);
+  return { name, arguments: resolvePlanArguments(raw, refs, input?.objective ?? "") };
 }
 
 export function createOpenAiCompatibleBackend(config: {

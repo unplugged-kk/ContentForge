@@ -29,6 +29,7 @@ import FormatterPage from "@/pages/formatter";
 import CannedResponsesPage from "@/pages/canned-responses";
 import QueuePage from "@/pages/queue";
 import AiUsagePage from "@/pages/ai-usage";
+import AgentWorkspacePage from "@/pages/agent";
 import { QuickCapture } from "@/components/quick-capture";
 
 function Router() {
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/canned-responses" component={CannedResponsesPage} />
       <Route path="/queue" component={QueuePage} />
       <Route path="/ai-usage" component={AiUsagePage} />
+      <Route path="/agent" component={AgentWorkspacePage} />
       <Route component={NotFound} />
     </Switch>
   );
