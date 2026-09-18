@@ -91,7 +91,7 @@ export function videoProductionProviderMatrix(
       verified: false,
       status: videoFactoryRegistered
         ? videoFactoryConfigured(env)
-          ? "implemented"
+          ? "architecturally-ready"
           : "unconfigured"
         : "not-registered",
     },
@@ -163,10 +163,13 @@ export function createHyperframesCloudProvider(options: HyperframesCloudOptions)
         synchronous: false,
         transportConfigured: true,
         reachable,
+        processingReady: false,
+        reason: "HyperFrames Cloud is deferred; local rendering is via Video Factory",
         notes: [
           "HyperFrames Cloud is an additional provider, not a replacement of video-factory.contract.v1",
           `renderBackend=${backend}`,
           "signed URLs are ephemeral; ContentForge imports bytes before declaring a VideoAsset",
+          "GET /health 200 is not sufficient to claim processing_ready",
         ],
       };
     },

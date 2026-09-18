@@ -381,6 +381,8 @@ export {
   createVideoFactoryProvider,
 } from "./videoFactoryProvider";
 
+export { reportVideoCapabilities } from "./videoCapabilities";
+
 export {
   MAX_VARIATION_COUNT,
   MIN_CAROUSEL_SLIDES,

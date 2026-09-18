@@ -29,6 +29,7 @@ import {
   type VideoFactoryStatus,
 } from "./videoFactoryContract";
 import { InvalidVisualInputError } from "./visual";
+import { renderVideoFactoryCompositionHtml, renderVideoFactoryCompositionMeta } from "./videoFactoryComposition";
 
 export interface VideoFactoryTransport {
   readonly kind: "filesystem" | "memory" | "http";
@@ -217,6 +218,8 @@ async function writeJobFiles(dir: string, request: VideoFactoryJobRequest): Prom
   await writeFile(path.join(dir, "BRIEF.md"), `${request.brief}\n`, "utf8");
   if (request.script) await writeFile(path.join(dir, "SCRIPT.md"), `${request.script}\n`, "utf8");
   if (request.storyboard) await writeFile(path.join(dir, "STORYBOARD.md"), `${request.storyboard}\n`, "utf8");
+  await writeFile(path.join(dir, "index.html"), renderVideoFactoryCompositionHtml(request), "utf8");
+  await writeFile(path.join(dir, "hyperframes.json"), renderVideoFactoryCompositionMeta(request), "utf8");
 }
 
 async function readJsonIfPresent(file: string): Promise<Record<string, unknown> | null> {

@@ -97,10 +97,9 @@ import {
   createVideoRepurposingJob,
   runVideoRepurposing,
   VideoRepurposeInputError,
-  videoRepurposingProviderMatrix,
   type VideoRepurposeStoragePort,
 } from "./videoRepurpose";
-import { videoProductionProviderMatrix } from "./videoProviders";
+import { reportVideoCapabilities } from "./videoCapabilities";
 import {
   createLocalAssetStorage,
   InvalidVisualInputError,
@@ -1559,16 +1558,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
-  router.get("/video/capabilities", async (_req, res) => {
-    return res.json({
-      production: videoProductionProviderMatrix(),
-      repurposing: videoRepurposingProviderMatrix(),
-      notes: [
-        "ContentForge is the control plane; Video Factory / HyperFrames / OpenShorts are workers",
-        "OpenShorts publish_clip is never called",
-        "YouTube Shorts and TikTok publishing remain deferred",
-      ],
-    });
+  router.get("/video/capabilities", async (_req, res, next) => {
+    try {
+      return res.json(await reportVideoCapabilities());
+    } catch (error) {
+      return next(error);
+    }
   });
 
   router.post("/video/repurposing", async (req, res, next) => {

@@ -270,6 +270,18 @@ describe("video-factory filesystem transport", () => {
       const native = JSON.parse(await readFile(path.join(queued, "job.json"), "utf8"));
       assert.deepEqual(native.renderArgs, ["--quality", "high"]);
       assert.equal(native.voice, false);
+      const html = await readFile(path.join(queued, "index.html"), "utf8");
+      assert.match(html, /data-composition-id="root"/);
+      assert.match(html, /cfvg-99/);
+      assert.equal(html.includes("<script>alert"), false);
+      const malicious = buildVideoFactoryJobRequest({
+        generationId: 100,
+        snapshot: snapshot({ title: "<script>alert(1)</script>", subject: "<img src=x onerror=alert(1)>" }),
+      });
+      await transport.submit(malicious);
+      const escaped = await readFile(path.join(root, "queue", "cfvg-100", "index.html"), "utf8");
+      assert.match(escaped, /&lt;script&gt;/);
+      assert.equal(escaped.includes("<script>alert(1)</script>"), false);
 
       await assert.rejects(() => transport.getStatus("cfvg-99/../../etc"), InvalidVisualInputError);
       await assert.rejects(() => transport.submit({ ...request, jobId: "cfvg-1/../x" }), InvalidVisualInputError);

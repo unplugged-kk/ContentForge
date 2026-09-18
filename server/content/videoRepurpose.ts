@@ -85,10 +85,19 @@ export interface VideoRepurposeRequest {
   snapshot: JsonRecord;
 }
 
+export interface VideoRepurposeHealth {
+  configured: boolean;
+  reachable: boolean;
+  apiRouteAvailable?: boolean;
+  processingReady?: boolean;
+  reason?: string | null;
+  notes?: string[];
+}
+
 export interface VideoRepurposingProviderPort {
   readonly providerId: string;
   readonly providerVersion: string;
-  health?(): Promise<{ configured: boolean; reachable: boolean; notes?: string[] }>;
+  health?(): Promise<VideoRepurposeHealth>;
   submit(request: VideoRepurposeRequest): Promise<VideoRepurposeSubmitResult>;
   getStatus(providerJobId: string): Promise<VideoRepurposeStatusResult>;
 }
@@ -179,7 +188,14 @@ export function createFixtureVideoRepurposeProvider(
     providerVersion: "video-repurpose-fixture-1",
     calls: () => calls,
     async health() {
-      return { configured: true, reachable: true, notes: ["deterministic fixture; not a clip engine"] };
+      return {
+        configured: true,
+        reachable: true,
+        apiRouteAvailable: true,
+        processingReady: true,
+        reason: "deterministic fixture; not a clip engine",
+        notes: ["deterministic fixture; not a clip engine"],
+      };
     },
     async submit(request) {
       calls += 1;
@@ -224,9 +240,24 @@ export function openshortsConfigured(env: NodeJS.ProcessEnv = process.env): bool
   return Boolean(env.OPENSHORTS_API_URL?.trim());
 }
 
+function readErrorDetail(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const record = body as Record<string, unknown>;
+  if (typeof record.detail === "string") return record.detail;
+  if (record.detail && typeof record.detail === "object") {
+    const detail = record.detail as Record<string, unknown>;
+    if (typeof detail.message === "string") return detail.message;
+    if (typeof detail.error === "string") return detail.error;
+  }
+  if (typeof record.error === "string") return record.error;
+  if (typeof record.message === "string") return record.message;
+  return "";
+}
+
 export function createOpenShortsProvider(options: {
   baseUrl: string;
   apiKey?: string;
+  geminiKey?: string;
   fetchImpl?: typeof fetch;
 }): VideoRepurposingProviderPort {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -235,6 +266,7 @@ export function createOpenShortsProvider(options: {
   async function api(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+    if (options.geminiKey) headers.set("x-gemini-key", options.geminiKey);
     return fetchImpl(`${baseUrl}${path}`, { ...init, headers });
   }
 
@@ -242,60 +274,144 @@ export function createOpenShortsProvider(options: {
     providerId: OPENSHORTS_PROVIDER_ID,
     providerVersion: "openshorts-1",
     async health() {
+      const notes = [
+        "OpenShorts is a clipping worker; ContentForge owns publishing",
+        "REST uses /api/process and /api/status/:job_id, not MCP tool names",
+      ];
+      let reachable = false;
+      let apiRouteAvailable = false;
+      let processingReady = false;
+      let reason: string | null = "openshorts health probe failed";
       try {
-        const res = await api("/health", { method: "GET" });
-        return {
-          configured: true,
-          reachable: res.ok,
-          notes: ["OpenShorts is a clipping worker; ContentForge owns publishing"],
-        };
+        const live = await api("/health", { method: "GET" });
+        reachable = live.ok;
+        if (!reachable) {
+          return { configured: true, reachable: false, apiRouteAvailable: false, processingReady: false, reason: `GET /health returned ${live.status}`, notes };
+        }
+        const ready = await api("/health/ready", { method: "GET" });
+        const configRes = await api("/api/config", { method: "GET" });
+        const config = configRes.ok ? ((await configRes.json()) as Record<string, unknown>) : {};
+        const probe = await api("/api/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ acknowledged: true }),
+        });
+        const probeBody = await probe.json().catch(() => ({}));
+        const detail = readErrorDetail(probeBody);
+        apiRouteAvailable = probe.status !== 404;
+        if (probe.status === 404) {
+          reason = "POST /api/process is not available on this host";
+        } else if (probe.status === 402) {
+          reason = detail || "provider quota unavailable";
+        } else if (probe.status === 401) {
+          reason = detail || "provider credentials unavailable";
+        } else if (probe.status === 400 && /gemini/i.test(detail)) {
+          reason = "provider credentials unavailable";
+        } else if (probe.status === 400) {
+          const localLlm = config.localLlm && typeof config.localLlm === "object";
+          processingReady = ready.ok && apiRouteAvailable;
+          reason = processingReady ? null : "OpenShorts process route is up but not ready";
+          if (!localLlm && processingReady) {
+            notes.push("self-hosted process route answers 400 without a source; Gemini/local LLM is required at submit time");
+          }
+        } else if (probe.ok) {
+          processingReady = false;
+          reason = "unexpected process success without a source; refusing to claim operational";
+        } else {
+          reason = detail || `POST /api/process returned ${probe.status}`;
+        }
+        return { configured: true, reachable, apiRouteAvailable, processingReady, reason, notes };
       } catch {
-        return { configured: true, reachable: false };
+        return { configured: true, reachable, apiRouteAvailable, processingReady: false, reason, notes };
       }
     },
     async submit(request) {
-      const res = await api("/process_video", {
+      if (!request.source.bytes?.length) {
+        throw JobFailure.permanent("OpenShorts submit requires owned VideoAsset bytes");
+      }
+      const slotRes = await api("/api/uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: `cfvr-${request.source.assetId}.mp4` }),
+      });
+      if (!slotRes.ok) {
+        if (slotRes.status === 429) throw JobFailure.rateLimited("openshorts rate limited");
+        if (slotRes.status === 402) throw JobFailure.permanent("openshorts quota unavailable");
+        if (slotRes.status >= 400 && slotRes.status < 500) {
+          throw JobFailure.permanent(`openshorts rejected upload slot (${slotRes.status})`);
+        }
+        throw JobFailure.transient(`openshorts upload slot ${slotRes.status}`);
+      }
+      const slot = (await slotRes.json()) as { upload_id?: string };
+      const uploadId = String(slot.upload_id ?? "").trim();
+      if (!uploadId) throw JobFailure.permanent("openshorts upload slot missing upload_id");
+
+      const put = await api(`/api/uploads/${encodeURIComponent(uploadId)}`, {
+        method: "PUT",
+        headers: { "content-type": request.source.mime || "video/mp4" },
+        body: new Uint8Array(request.source.bytes),
+      });
+      if (!put.ok) {
+        if (put.status === 400) throw JobFailure.permanent(`openshorts rejected uploaded bytes (${put.status})`);
+        if (put.status >= 400 && put.status < 500) throw JobFailure.permanent(`openshorts upload failed (${put.status})`);
+        throw JobFailure.transient(`openshorts upload ${put.status}`);
+      }
+
+      const res = await api("/api/process", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          identity: request.semanticId,
-          clip_count: request.clipCount,
-          aspect_ratio: "9:16",
-          mime: request.source.mime,
-          duration_ms: request.source.durationMs,
+          upload_id: uploadId,
+          acknowledged: true,
+          target_clips: request.clipCount,
+          output_format: "vertical",
         }),
       });
       if (!res.ok) {
-        if (res.status === 429) throw JobFailure.rateLimited("openshorts rate limited");
-        if (res.status >= 400 && res.status < 500) throw JobFailure.permanent(`openshorts rejected process_video (${res.status})`);
-        throw JobFailure.transient(`openshorts process_video ${res.status}`);
+        const body = await res.json().catch(() => ({}));
+        const detail = readErrorDetail(body);
+        if (res.status === 429) throw JobFailure.rateLimited(detail || "openshorts rate limited");
+        if (res.status === 402) throw JobFailure.permanent(detail || "openshorts quota unavailable");
+        if (res.status >= 400 && res.status < 500) {
+          throw JobFailure.permanent(detail || `openshorts rejected /api/process (${res.status})`);
+        }
+        throw JobFailure.transient(detail || `openshorts /api/process ${res.status}`);
       }
       const body = (await res.json()) as { job_id?: string; status?: string };
-      const providerJobId = String(body.job_id ?? request.semanticId);
+      const providerJobId = String(body.job_id ?? "").trim();
+      if (!providerJobId) throw JobFailure.transient("openshorts /api/process returned no job_id");
       return { providerJobId, status: mapOpenShortsStatus(body.status) };
     },
     async getStatus(providerJobId) {
-      const res = await api(`/get_job_status?job_id=${encodeURIComponent(providerJobId)}`, { method: "GET" });
+      const res = await api(`/api/status/${encodeURIComponent(providerJobId)}`, { method: "GET" });
       if (res.status === 404) {
         return { providerJobId, status: "unknown", clips: [], failureClass: "unknown" };
       }
       if (!res.ok) throw JobFailure.transient(`openshorts status ${res.status}`);
       const body = (await res.json()) as {
         status?: string;
-        clips?: Array<Record<string, unknown>>;
+        partial?: boolean;
         error?: string;
+        result?: { clips?: Array<Record<string, unknown>> };
+        clips?: Array<Record<string, unknown>>;
       };
-      const status = mapOpenShortsStatus(body.status);
+      const rawClips = Array.isArray(body.result?.clips) ? body.result!.clips! : Array.isArray(body.clips) ? body.clips : [];
       const clips: VideoRepurposeClip[] = [];
-      for (const [index, clip] of Array.from((body.clips ?? []).entries())) {
+      for (const [index, clip] of Array.from(rawClips.entries())) {
         const clipId = String(clip.id ?? clip.clip_id ?? `${providerJobId}-${index}`);
-        const failed = Boolean(clip.failed) || String(clip.status ?? "") === "failed";
+        const videoUrl = typeof clip.video_url === "string" ? clip.video_url : typeof clip.download_url === "string" ? clip.download_url : null;
+        const startSec = typeof clip.start === "number" ? clip.start : null;
+        const endSec = typeof clip.end === "number" ? clip.end : null;
+        const failed = Boolean(clip.failed) || String(clip.status ?? "") === "failed" || !videoUrl;
         let bytes = Buffer.alloc(0);
-        if (!failed) {
-          const downloadPath = typeof clip.download_path === "string" ? clip.download_path : `/clips/${encodeURIComponent(clipId)}`;
-          const file = await api(downloadPath, { method: "GET" });
-          if (file.ok) bytes = Buffer.from(await file.arrayBuffer());
+        if (!failed && videoUrl) {
+          const downloaded = /^https?:\/\//i.test(videoUrl)
+            ? await fetchImpl(videoUrl)
+            : await api(videoUrl.startsWith("/") ? videoUrl : `/${videoUrl}`, { method: "GET" });
+          if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
         }
+        const durationMs =
+          startSec != null && endSec != null ? Math.max(0, Math.round((endSec - startSec) * 1000)) : typeof clip.duration_ms === "number" ? clip.duration_ms : null;
         clips.push({
           position: index,
           clipId,
@@ -303,15 +419,19 @@ export function createOpenShortsProvider(options: {
           mime: "video/mp4",
           width: typeof clip.width === "number" ? clip.width : 1080,
           height: typeof clip.height === "number" ? clip.height : 1920,
-          durationMs: typeof clip.duration_ms === "number" ? clip.duration_ms : null,
-          startMs: typeof clip.start_ms === "number" ? clip.start_ms : null,
-          endMs: typeof clip.end_ms === "number" ? clip.end_ms : null,
-          title: typeof clip.title === "string" ? clip.title : typeof clip.hook === "string" ? clip.hook : null,
-          caption: typeof clip.caption === "string" ? clip.caption : null,
-          aspectRatio: typeof clip.aspect_ratio === "string" ? clip.aspect_ratio : "9:16",
-          failed,
-          errorMessage: failed ? String(clip.error ?? "clip failed") : undefined,
+          durationMs: durationMs && durationMs > 0 ? durationMs : 1000,
+          startMs: startSec != null ? Math.round(startSec * 1000) : null,
+          endMs: endSec != null ? Math.round(endSec * 1000) : null,
+          title: typeof clip.title === "string" ? clip.title : null,
+          caption: typeof clip.video_description_for_instagram === "string" ? clip.video_description_for_instagram : null,
+          aspectRatio: "9:16",
+          failed: failed || bytes.length === 0,
+          errorMessage: failed || bytes.length === 0 ? String(clip.error ?? "clip download failed") : undefined,
         });
+      }
+      let status = mapOpenShortsStatus(body.status);
+      if (status === "ready" && (body.partial || clips.some((c) => c.failed))) {
+        status = clips.some((c) => !c.failed) ? "partial" : "failed";
       }
       return {
         providerJobId,
@@ -342,6 +462,7 @@ export function createConfiguredOpenShortsProvider(
   return createOpenShortsProvider({
     baseUrl,
     apiKey: env.OPENSHORTS_API_KEY?.trim() || undefined,
+    geminiKey: env.OPENSHORTS_GEMINI_KEY?.trim() || env.GEMINI_API_KEY?.trim() || undefined,
   });
 }
 
@@ -585,33 +706,14 @@ export async function runVideoRepurposing(
     if (job.providerJobId) {
       statusResult = await provider.getStatus(job.providerJobId);
       if (statusResult.status === "unknown") {
-        const submitted = await provider.submit({
-          semanticId,
-          source: {
-            assetId: source.id,
-            storageKey: source.storageKey,
-            mime: source.mime,
-            durationMs: source.durationMs,
-            bytes: await deps.storage.get(source.storageKey),
-          },
-          clipCount: job.clipCount,
-          snapshot: (job.requestSnapshot ?? {}) as JsonRecord,
-        });
-        await deps.content.markVideoRepurposingJob(job.id, {
-          status: submitted.status === "unknown" ? "unknown" : "accepted",
-          providerJobId: submitted.providerJobId,
-        });
-        if (submitted.status === "unknown") {
-          return {
-            jobId: job.id,
-            status: "unknown",
-            reused: false,
-            assetIds: readyExisting.map((o) => o.visualAssetId!).filter(Boolean),
-            failureClass: "unknown",
-            failureMessage: "provider side effect is ambiguous; reconcile the same identity",
-          };
-        }
-        statusResult = await provider.getStatus(submitted.providerJobId);
+        return {
+          jobId: job.id,
+          status: "unknown",
+          reused: true,
+          assetIds: readyExisting.map((o) => o.visualAssetId!).filter(Boolean),
+          failureClass: "unknown",
+          failureMessage: "provider job identity is known; reconciling the same OpenShorts job without resubmitting",
+        };
       }
     } else {
       const submitted = await provider.submit({

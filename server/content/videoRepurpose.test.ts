@@ -100,34 +100,81 @@ describe("video repurpose primitives", () => {
 });
 
 describe("openshorts adapter", () => {
-  it("never calls publish_clip", async () => {
+  it("uses REST /api/uploads + /api/process and never calls publish paths", async () => {
     const paths: string[] = [];
     const provider = createOpenShortsProvider({
       baseUrl: "http://openshorts.test",
-      fetchImpl: async (input) => {
+      fetchImpl: async (input, init) => {
         const url = String(input);
-        paths.push(url);
-        if (url.includes("process_video")) {
-          return new Response(JSON.stringify({ job_id: "os-1", status: "accepted" }), { status: 200 });
+        paths.push(`${init?.method ?? "GET"} ${url}`);
+        if (url.endsWith("/api/uploads") && init?.method === "POST") {
+          return new Response(JSON.stringify({ upload_id: "up-1" }), { status: 200 });
         }
-        return new Response(JSON.stringify({ status: "ready", clips: [] }), { status: 200 });
+        if (url.includes("/api/uploads/up-1") && init?.method === "PUT") {
+          return new Response(JSON.stringify({ upload_id: "up-1", bytes: 32, duration_seconds: 12 }), { status: 200 });
+        }
+        if (url.endsWith("/api/process") && init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          assert.equal(body.upload_id, "up-1");
+          assert.equal(body.acknowledged, true);
+          assert.equal("url" in body, false);
+          return new Response(JSON.stringify({ job_id: "os-1", status: "queued" }), { status: 200 });
+        }
+        if (url.endsWith("/api/status/os-1")) {
+          return new Response(
+            JSON.stringify({
+              status: "completed",
+              result: { clips: [{ title: "Hook", start: 1, end: 4, video_url: "/videos/os-1/clip0.mp4" }] },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/videos/os-1/clip0.mp4")) {
+          return new Response(fixtureMp4Bytes(), { status: 200 });
+        }
+        return new Response("no", { status: 500 });
       },
     });
-    await provider.submit({
+    const submitted = await provider.submit({
       semanticId: "cfvr-9",
       source: {
         assetId: 1,
         storageKey: "local:abc",
         mime: "video/mp4",
-        durationMs: 1000,
+        durationMs: 12000,
         bytes: fixtureMp4Bytes(),
       },
       clipCount: 3,
       snapshot: {},
     });
-    await provider.getStatus("os-1");
-    assert.equal(paths.some((p) => p.includes("publish_clip")), false);
-    assert.equal(paths.some((p) => p.includes("process_video")), true);
+    assert.equal(submitted.providerJobId, "os-1");
+    const status = await provider.getStatus("os-1");
+    assert.equal(status.clips[0]?.bytes.length, fixtureMp4Bytes().length);
+    assert.equal(paths.some((p) => p.includes("publish")), false);
+    assert.equal(paths.some((p) => p.includes("process_video")), false);
+    assert.equal(paths.some((p) => p.includes("get_job_status")), false);
+    assert.equal(paths.some((p) => p.includes("/api/process")), true);
+    assert.equal(paths.some((p) => p.includes("/api/status/os-1")), true);
+  });
+
+  it("does not treat GET /health 200 as processing-ready when quota is missing", async () => {
+    const provider = createOpenShortsProvider({
+      baseUrl: "http://openshorts.test",
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        if (url.endsWith("/health/ready")) return new Response(JSON.stringify({ status: "ready" }), { status: 200 });
+        if (url.endsWith("/api/config")) return new Response(JSON.stringify({ billingEnabled: true }), { status: 200 });
+        if (url.endsWith("/api/process")) {
+          return new Response(JSON.stringify({ detail: { error: "no_plan", message: "provider quota unavailable" } }), { status: 402 });
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    const health = await provider.health!();
+    assert.equal(health.reachable, true);
+    assert.equal(health.processingReady, false);
+    assert.match(String(health.reason), /quota/i);
   });
 });
 

@@ -37,9 +37,12 @@ Filesystem transport also writes factory-native files the current runner reads:
 - `CONTRACT.json` — this versioned document
 - `job.json` — `{ title, format, voice, renderArgs: ["--quality", "<allowlisted>"] }`
 - `BRIEF.md`, optional `SCRIPT.md`, optional `STORYBOARD.md`
+- `index.html` — adapter-generated composition entrypoint (title/brief/script as escaped text)
+- `hyperframes.json` — width/height/fps/duration metadata for the runner
 
-ContentForge does **not** write `index.html` or HyperFrames composition. Missing
-composition is reported honestly; it is not fabricated.
+HyperFrames, GSAP, Chrome, and FFmpeg stay inside Video Factory. The ContentForge
+domain still only calls `submit` / `getStatus` / `getOutput`. Intent cannot
+supply `index.html`, `renderArgs`, shell, or job identity.
 
 ## Status (observational)
 

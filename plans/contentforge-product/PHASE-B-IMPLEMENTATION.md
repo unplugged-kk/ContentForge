@@ -1105,6 +1105,39 @@ Instagram Reels. YouTube Shorts / TikTok / full YouTube are not claimed.
 **Deferred:** Phase 28 YouTube + TikTok + Threads; live HyperFrames Cloud;
 live OpenShorts; VideoTemplate revisions; editor; auto-publish.
 
+## Phase 27.1 — Real Video Provider Integration Hardening (partial)
+
+**The problem this closes**: Phase 27 registered production adapters that
+could not actually execute. Video Factory jobs had no `index.html`, so the
+runner never rendered. OpenShorts and HyperFrames Cloud used invented HTTP
+paths. Capabilities collapsed “env set” into “implemented”.
+
+**Local only.** No HyperFrames Cloud subscription. ContentForge tests
+locally hostable workers: Video Factory + `npx hyperframes@0.7.60 render`
+(proven) and self-hosted OpenShorts (protocol-fixed; processing blocked
+without Gemini/Ollama). Other Docker clippers (Clips Studio, Clipper,
+VibeClip) were researched and not integrated.
+
+**Video Factory.** Adapter writes factory-native `index.html` +
+`hyperframes.json` from the bounded textual contract. HyperFrames/GSAP stay
+inside the factory. `video-factory.contract.v1` and `cfvg-{id}` unchanged.
+Factory repo unmodified. Real render: `cfvg-9000271`, 126848-byte H.264
+1080×1920 MP4, sha256 `fa78ff28…`, imported via `AssetStoragePort`.
+
+**OpenShorts.** REST is `POST /api/uploads` + PUT + `POST /api/process` +
+`GET /api/status/:job_id`. Never MCP names as routes. Never `publish_clip`.
+Health: `/health` 200 is not `processing_ready` (402 quota, missing Gemini,
+404 process route). Local Docker backend is up on `:8000`: health 200,
+uploads return `upload_id`, process returns `400 Missing X-Gemini-Key`.
+Clone: `/Users/kishore/git/openshorts` @ `27d4916`.
+
+**Capabilities.** `GET /api/video/capabilities` reports configured /
+reachable / processing_ready / reason. HyperFrames Cloud is always
+`processing_ready: false` this phase.
+
+**Deferred:** Phase 28; HyperFrames Cloud; OpenShorts live clip (needs LLM +
+source ≥ `MIN_SOURCE_SECONDS`); additional clip adapters.
+
 ## Phase 25 — Mass Repurposing Engine (done)
 
 **The problem this closes**: personalization was still mostly explicit Voice /

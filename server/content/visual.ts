@@ -123,6 +123,10 @@ export interface VisualProviderHealth {
   transportConfigured?: boolean;
   /** Reachability of the configured transport — not "a generation is healthy". */
   reachable?: boolean;
+  /** True only when the worker can actually process a job (runner up, routes real, quota/credentials present). */
+  processingReady?: boolean;
+  /** Why processingReady is false, or null when ready. */
+  reason?: string | null;
   notes?: readonly string[];
 }
 

@@ -42,6 +42,8 @@ export interface VideoFactoryProviderOptions {
   transport: VideoFactoryTransport;
   providerId?: string;
   pollBudgetMs?: number;
+  dashboardUrl?: string | null;
+  fetchImpl?: typeof fetch;
 }
 
 function snapshotRecord(snapshot: VisualGenerationRequest["snapshot"]): Record<string, unknown> {
@@ -109,6 +111,8 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
   const transport = options.transport;
   const providerId = options.providerId ?? VIDEO_FACTORY_PROVIDER_ID;
   const pollBudgetMs = options.pollBudgetMs ?? POLL_BUDGET_MS;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const dashboardUrl = options.dashboardUrl?.trim() || null;
 
   return {
     providerId,
@@ -118,6 +122,20 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
     synchronous: false,
     async health(): Promise<VisualProviderHealth> {
       const reachable = transport.configured ? await transport.reachable() : false;
+      let runnerUp = false;
+      if (reachable && dashboardUrl) {
+        try {
+          const res = await fetchImpl(dashboardUrl, { method: "GET" });
+          runnerUp = res.ok;
+        } catch {
+          runnerUp = false;
+        }
+      }
+      const processingReady = Boolean(transport.configured && reachable && runnerUp);
+      let reason: string | null = null;
+      if (!transport.configured) reason = "VIDEO_FACTORY_ROOT is not configured";
+      else if (!reachable) reason = "filesystem bridge unreachable";
+      else if (!runnerUp) reason = "Video Factory runner is not listening";
       return {
         providerId,
         registered: true,
@@ -126,10 +144,14 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
         synchronous: false,
         transportConfigured: transport.configured,
         reachable,
+        processingReady,
+        reason,
         notes: [
           "Video Factory remains a separate system",
-          "ContentForge does not generate HyperFrames composition (index.html)",
+          "Adapter writes a provider-native composition entrypoint; HyperFrames stays in the factory",
           "manifest.json is observational, not generation truth",
+          "reachable means the filesystem bridge, not a live HyperFrames render",
+          "processingReady requires the factory runner HTTP dashboard",
           transport.kind === "http"
             ? "HTTP transport is not implemented by the current factory"
             : `transport=${transport.kind}`,
@@ -226,5 +248,6 @@ export function createConfiguredVideoFactoryProvider(
   }
   return createVideoFactoryProvider({
     transport: createFilesystemVideoFactoryTransport(root),
+    dashboardUrl: env.VIDEO_FACTORY_DASHBOARD_URL?.trim() || "http://127.0.0.1:4300/manifest.json",
   });
 }

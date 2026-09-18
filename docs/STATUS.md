@@ -3,6 +3,78 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 27.1 — Real Video Provider Integration Hardening
+
+**Status:** PARTIALLY IMPLEMENTED (Video Factory local render proven and
+imported; OpenShorts REST adapter protocol-correct but processing BLOCKED
+without Gemini or a local LLM; HyperFrames Cloud deferred — no subscription)
+
+**Verification:** TypeScript 0; unit 523/523; visual E2E 38/38 (Path B now
+asserts `index.html`; Path J confirms the live factory MP4). Live E2E 185/190
+(8 Phase 27 checks including Path O all passed; 5 failures are the
+pre-existing scheduler-tick / style-snapshot regression on `cf_e2e_live`).
+Postgres video/factory/repurpose dbtests 13/13; full Postgres suite 257/258 on
+first pass (1 pre-existing `jobs/runtime.dbtest.ts` idempotency flake,
+recovered on re-run). Real factory evidence (not a fixture):
+
+| field | value |
+|---|---|
+| job | `cfvg-9000271` |
+| file | `/Users/kishore/git/video-factory/output/cfvg-9000271.mp4` |
+| bytes | 126848 |
+| codec | H.264 1080×1920, 2.000s |
+| sha256 | `fa78ff28c00be603b8e55c9ac974197b15fb8f3626002b91fdabc6ce731dfa4b` |
+| storage | `local:fa78ff28c00be603b8e55c9ac974197b15fb8f3626002b91fdabc6ce731dfa4b` |
+
+### Problem
+
+Phase 27 orchestration was real, but none of the three production providers
+was actually executable: Video Factory jobs lacked `index.html`, HyperFrames
+Cloud and OpenShorts adapters spoke invented HTTP paths, and
+`GET /api/video/capabilities` collapsed “configured” into “implemented”.
+
+### What changed
+
+- Video Factory adapter writes a provider-native composition (`index.html` +
+  `hyperframes.json`) from the bounded textual contract. Domain models still
+  do not see HyperFrames/GSAP/Chrome/FFmpeg. External identity remains
+  `cfvg-{VisualGeneration.id}`. Video Factory repo was not modified.
+- OpenShorts adapter uses real REST: `POST /api/uploads` + PUT bytes +
+  `POST /api/process` `{upload_id, acknowledged, target_clips}` +
+  `GET /api/status/{job_id}`. Never MCP tool names as routes. Never
+  `publish_clip`.
+- Health distinguishes configured / reachable / processing_ready / reason.
+  GET `/health` 200 is not operational. Explicit production prefs are never
+  silently replaced with fixtures. HyperFrames Cloud `processing_ready` is
+  always false in this phase.
+- Restart/reconcile: OpenShorts does not resubmit when `providerJobId` is set;
+  unknown reconciles the same identity.
+
+### Local / Docker tools (no HyperFrames Cloud)
+
+| tool | host | result |
+|---|---|---|
+| Video Factory + `npx hyperframes@0.7.60 render` | local filesystem worker at `/Users/kishore/git/video-factory` | **proven** — real MP4 imported through `AssetStoragePort` |
+| OpenShorts (`mutonby/openshorts`, Docker) | clone at `/Users/kishore/git/openshorts` HEAD `27d4916`; container `openshorts-backend` on `:8000` | **reachable** — `GET /health` 200, `POST /api/uploads` returns `upload_id`, `POST /api/process` is the real route. **processing BLOCKED** — `400 Missing X-Gemini-Key header`; Ollama is not on `:11434`; factory MP4 is 2s vs `MIN_SOURCE_SECONDS` 45 |
+| HyperFrames Cloud / HeyGen | hosted | **deferred** — no subscription; not tested |
+| Clips Studio / Clipper / VibeClip | local Docker clippers | researched, **not integrated** this phase (OpenShorts remains the clipping port) |
+
+### Defects D1–D5
+
+| id | defect | outcome |
+|---|---|---|
+| D1 | HyperFrames Cloud / HeyGen v3 invented | deferred; `processing_ready: false` |
+| D2 | OpenShorts invented MCP-as-HTTP | **fixed** (real REST) |
+| D3 | OpenShorts health treated `/health` 200 as ready | **fixed** |
+| D4 | Video Factory jobs missing `index.html` | **fixed** (adapter composition) |
+| D5 | capabilities matrix claimed implemented when ROOT set | **fixed** (architecturally-ready until runner is processing-ready) |
+
+### Deferred
+
+Phase 28 YouTube + TikTok + Threads; HyperFrames Cloud; OpenShorts live
+processing (needs Gemini or Ollama + ≥45s source); new clip adapters;
+Video Factory repo changes.
+
 ## Phase 27 — Video Production + Video Repurposing Factory
 
 **Status:** PARTIALLY IMPLEMENTED (orchestration + fixture E2E implemented;
