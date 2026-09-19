@@ -155,12 +155,23 @@ async function main() {
     submitArtifactForReview,
     approveArtifact,
   } = await import("../server/content/artifact");
-  const { createSchedule, dispatchDueOccurrences } = await import("../server/content/scheduling");
+  const {
+    createSchedule,
+    publicationIdempotencyKey,
+  } = await import("../server/content/scheduling");
   const { runPublication } = await import("../server/content/publication");
   const { registerBuiltinChannelAdapters } = await import("../server/content/adapters");
   const { getYouTubeConfigSummary, reconcileYouTubeVideo } = await import("../server/social/youtube");
-  const { eq } = await import("drizzle-orm");
-  const { publications, results, stories } = await import("@shared/schema");
+  const { and, desc, eq, sql } = await import("drizzle-orm");
+  const {
+    artifacts: artifactsTable,
+    publications,
+    results,
+    scheduleOccurrences,
+    schedules,
+    stories,
+  } = await import("@shared/schema");
+  const { randomUUID } = await import("node:crypto");
 
   registerBuiltinChannelAdapters();
 
@@ -176,74 +187,125 @@ async function main() {
     publicationReady: status.publicationReady,
   }));
 
-  if (!status.refreshCredentialPresent) {
+  if (!status.publicationReady) {
     throw new Error(
-      "BLOCKED — YouTube OAuth refresh credential unavailable. Connect via /api/social/youtube/connect",
+      "BLOCKED — YouTube publicationReady=false. Connect via /api/social/youtube/connect",
     );
   }
 
   const account = await storage.getConnectedAccountForOwner("youtube", ownerId)
     ?? await storage.getConnectedAccount("youtube");
   assert(account?.refreshToken, "connected youtube refresh token missing");
+  assert(account?.userId === ownerId, `youtube connected_accounts.user_id must be ${ownerId}`);
 
   const content = new DatabaseContentStorage(db);
   const storyStore = new DatabaseStoryStorage(db);
 
-  const [story] = await db
-    .insert(stories)
-    .values({
-      userId: ownerId,
-      researchJobId: null,
-      provenance: "human",
-      title: `${RUN} youtube cert`,
-      insightBody: "Phase 28.1B YouTube certification story",
-      angles: [],
-      evidenceRefs: [],
-      status: "ready",
-    })
-    .returning();
+  // Reuse durable cert artifact/schedule from a prior failed materialization.
+  const [priorArtifact] = await db
+    .select()
+    .from(artifactsTable)
+    .where(and(
+      eq(artifactsTable.channel, "youtube"),
+      eq(artifactsTable.userId, ownerId),
+      sql`${artifactsTable.payload}->>'certificationKey' = ${CERT_KEY}`,
+    ))
+    .orderBy(desc(artifactsTable.id))
+    .limit(1);
 
-  const opportunity = await createOpportunityFromStory(
-    story.id,
-    {
-      concept: "youtube certification",
-      objective: "educate",
-      format: "video",
-      channel: "youtube",
-    },
-    { opportunities: content, stories: storyStore },
-  );
+  let approved = priorArtifact;
+  if (!approved || approved.readiness !== "approved") {
+    const [story] = await db
+      .insert(stories)
+      .values({
+        userId: ownerId,
+        researchJobId: null,
+        provenance: "human",
+        title: `${RUN} youtube cert`,
+        insightBody: "Phase 28.1B YouTube certification story",
+        angles: [],
+        evidenceRefs: [],
+        status: "ready",
+      })
+      .returning();
 
-  const artifact = await createArtifact(
-    {
-      userId: ownerId,
-      generationJobId: null,
-      opportunityId: opportunity.id,
-      format: "video",
-      channel: "youtube",
-      payload: {
-        visualAssetId: ASSET_ID,
-        altText: "ContentForge Phase 28.1B cert",
-        title: "CF cert 28.1",
-        description: "ContentForge Phase 28.1B certification upload (private).",
-        privacyStatus: "private",
-        certificationKey: CERT_KEY,
+    const opportunity = await createOpportunityFromStory(
+      story.id,
+      {
+        concept: "youtube certification",
+        objective: "educate",
+        format: "video",
+        channel: "youtube",
       },
-      provenance: "generated",
-      attribution: [],
-      attributionReason: "phase28.1B-youtube-certification",
-    },
-    { artifacts: content },
-  );
-  await submitArtifactForReview(artifact.id, { artifacts: content });
-  const approved = await approveArtifact(artifact.id, { artifacts: content });
-  const schedule = await createSchedule(approved.id, {}, { content });
-  await dispatchDueOccurrences(new Date(), {
-    content,
-    enqueuePublication: async () => true,
-  });
+      { opportunities: content, stories: storyStore },
+    );
 
-  const [publication] = await db.select().from(publications).where(eq(publications.scheduleId, schedule.id));
+    const artifact = await createArtifact(
+      {
+        userId: ownerId,
+        generationJobId: null,
+        opportunityId: opportunity.id,
+        format: "video",
+        channel: "youtube",
+        payload: {
+          visualAssetId: ASSET_ID,
+          altText: "ContentForge Phase 28.1B cert",
+          title: "CF cert 28.1",
+          description: "ContentForge Phase 28.1B certification upload (private).",
+          privacyStatus: "private",
+          certificationKey: CERT_KEY,
+        },
+        provenance: "generated",
+        attribution: [],
+        attributionReason: "phase28.1B-youtube-certification",
+      },
+      { artifacts: content },
+    );
+    await submitArtifactForReview(artifact.id, { artifacts: content });
+    approved = await approveArtifact(artifact.id, { artifacts: content });
+  }
+
+  const [priorSchedule] = await db
+    .select()
+    .from(schedules)
+    .where(and(eq(schedules.artifactId, approved.id), eq(schedules.channel, "youtube")))
+    .orderBy(desc(schedules.id))
+    .limit(1);
+  const schedule = priorSchedule ?? await createSchedule(approved.id, {}, { content });
+
+  // Isolate from e2e due backlog: materialize + claim THIS schedule only.
+  // dispatchDueOccurrences(default limit=50) can starve new schedules when
+  // many older pending occurrences exist in cf_e2e_live.
+  let [occurrence] = await db
+    .select()
+    .from(scheduleOccurrences)
+    .where(eq(scheduleOccurrences.scheduleId, schedule.id))
+    .limit(1);
+  if (!occurrence) {
+    occurrence = await content.materializeOccurrence(schedule.id, schedule.startAt);
+    assert(occurrence, "occurrence not materialized");
+    if ((await content.countOccurrences(schedule.id)) >= schedule.count) {
+      await content.setScheduleStatus(schedule.id, "exhausted");
+    }
+  }
+  if (occurrence.status === "pending") {
+    await content.markOccurrenceStatusIf(occurrence.id, "pending", "enqueued");
+  }
+
+  const claimed = await content.claimPublication({
+    userId: schedule.userId ?? null,
+    scheduleId: schedule.id,
+    occurrenceId: occurrence.id,
+    artifactId: approved.id,
+    channel: schedule.channel,
+    idempotencyKey: publicationIdempotencyKey({
+      scheduleId: schedule.id,
+      occurrenceId: occurrence.id,
+      artifactId: approved.id,
+    }),
+    correlationId: randomUUID(),
+  });
+  const publication = claimed.publication;
   assert(publication, "publication not materialized");
 
   console.log(`→ runPublication ${publication.id} (VideoAsset ${ASSET_ID})…`);

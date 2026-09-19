@@ -5,25 +5,11 @@ Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 
 ## Phase 28.1 / 28.1B — YouTube ChannelAdapter + OAuth
 
-**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED —
-`no_youtube_channel`.
+**Status:** IMPLEMENTED / LIVE CERTIFIED.
 
-OAuth onboarding works end-to-end (redirect URI registered; Google consent
-granted for `youtube.upload` + `youtube.readonly`). Code exchange succeeded,
-but `channels.list?mine=true` returned **no channel** for the authorized
-Google account. ContentForge therefore did not persist credentials or mark
-`publicationReady`. **Real YouTube uploads: 0.**
-
-Unblock: create a YouTube channel on the Google account used for Connect
-YouTube (or authorize an account that already has one), then reconnect and
-run `script/publish-certify-youtube.ts` once.
-
-Google OAuth client (`GOOGLE_CLIENT_ID` / `SECRET`) is configured. Phase 28.1B
-adds server-side offline OAuth (`access_type=offline`, CSRF `state`), encrypted
-refresh persistence on `connected_accounts`, channel discovery
-(`channels.list?mine=true`), enhanced
-`GET /api/social/youtube/status`, Settings **Connect YouTube**, and a one-shot
-cert script (`script/publish-certify-youtube.ts`, key
+Google OAuth → encrypted `connected_accounts` refresh → channel discovery →
+existing VideoAsset `688` → YouTube resumable upload → `Result=published`.
+**Real YouTube uploads consumed: 1** (cert key
 `phase28.1-youtube-certification-v1`).
 
 ### Implemented
@@ -44,31 +30,24 @@ cert script (`script/publish-certify-youtube.ts`, key
 - Agent remains `publish_now` (channel-neutral). No `publish_youtube` tool.
 - Docs: `docs/channel-onboarding.md`.
 
-### Live certification
+### Live certification evidence
 
-- Gate: `CONTENTFORGE_REAL_PUBLISH_E2E=1` + `CONTENTFORGE_PUBLISH_CERTIFICATION=1`
-- Asset: existing VideoAsset (prefer Phase 27.3 fal id `688`) — no new media
-- Exactly one private upload; idempotent cert key
-  `phase28.1-youtube-certification-v1`
-- Evidence: `.scratch/publish-cert-youtube-evidence.json`
-- **Real uploads performed this phase: 0** (blocked: authorized Google account
-  has no YouTube channel)
-
-### Latest live attempt (verification)
-
-| Check | Result |
+| Field | Value |
 | --- | --- |
-| `GOOGLE_CLIENT_ID` / `SECRET` | present |
-| Redirect URI | `http://localhost:5050/api/social/youtube/callback` accepted |
-| Google consent | Allow granted |
-| Refresh token persist | not reached (aborted after empty `channels.list`) |
-| `GET /api/social/youtube/status` | `publicationReady=false` |
-| VideoAsset 688 | present on e2e DB (`ready`, video/mp4) |
-| Cert script | not run (status not ready) |
+| Certification key | `phase28.1-youtube-certification-v1` |
+| Channel | `UChrYZVLrD506vZrxTWjMi5g` (YourAIBuddy) |
+| VideoAsset | `688` (ready, `video/mp4`, owner `1`) |
+| Publication ID | `47377` |
+| YouTube video ID | `JPRq-hRpayI` |
+| Visibility | `private` |
+| Provider / Result | `published` / `published` |
+| Reconciliation | `published` |
+| Real YouTube uploads | **1** |
+| Evidence | `.scratch/publish-cert-youtube-evidence.json` |
+| Completed at | `2026-09-19T04:42:58.267Z` |
 
 ### Not done / deferred
 
-- Live publish until the OAuth Google account has a YouTube channel.
 - TikTok adapter.
 - Threads live re-certification.
 - YouTube analytics / playlists / Shorts-specific UX.

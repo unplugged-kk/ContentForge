@@ -26,7 +26,7 @@ Opportunity, GenerationJob, Artifact approval, Schedule, or Occurrence.
 | `linkedin` | text | prior phases |
 | `threads` | text | adapter IMPLEMENTED; live often BLOCKED on credentials |
 | `instagram` | image / carousel / video (Reels) | prior phases |
-| `youtube` | video | Phase 28.1B — see below |
+| `youtube` | video | **IMPLEMENTED / LIVE CERTIFIED** (Phase 28.1B) |
 
 TikTok: not registered.
 
@@ -118,6 +118,20 @@ CONTENTFORGE_REAL_PUBLISH_E2E=1 CONTENTFORGE_PUBLISH_CERTIFICATION=1 \
 - Privacy: `private` (unverified API projects may force private until audit)
 - No fal/ElevenLabs generation in this path
 
+### Live certification (completed)
+
+| Field | Value |
+| --- | --- |
+| Status | IMPLEMENTED / LIVE CERTIFIED |
+| Channel | `UChrYZVLrD506vZrxTWjMi5g` (YourAIBuddy) |
+| VideoAsset | `688` |
+| Publication ID | `47377` |
+| YouTube video ID | `JPRq-hRpayI` |
+| Visibility | `private` |
+| Result | `published` |
+| Reconciliation | `published` |
+| Real uploads | **1** (budget consumed for this cert key) |
+
 Without OAuth refresh credential:
 
 `BLOCKED — YouTube OAuth refresh credential unavailable`
@@ -128,6 +142,9 @@ Cloud Console before retrying Connect YouTube.
 
 If callback redirects with `reason=no_youtube_channel`, the Google account has
 no YouTube channel yet — create one at YouTube (or authorize a different
-account that already has a channel), then reconnect.
+account that already has a channel), then reconnect. Bind the resulting
+`connected_accounts.user_id` to the ContentForge owner (Connect while
+authenticated) so owner-scoped publish can resolve credentials.
 
-Do not claim live certification from unit doubles alone.
+Do not claim live certification from unit doubles alone. Do not re-run the
+cert script after PASS — it reuses evidence and refuses a second upload.

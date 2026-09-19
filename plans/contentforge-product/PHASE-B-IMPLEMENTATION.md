@@ -1107,15 +1107,12 @@ VideoTemplate revisions; editor; auto-publish.
 
 ## Phase 28.1 / 28.1B — YouTube publishing + OAuth
 
-**Status:** OAuth onboarding + adapter IMPLEMENTED. Live E2E **BLOCKED —
-`no_youtube_channel`**: Google consent + code exchange succeeded, but
-`channels.list?mine=true` returned no channel for the authorized account.
-Real YouTube uploads this slice: **0**. Cert key reserved:
-`phase28.1-youtube-certification-v1`.
+**Status:** IMPLEMENTED / LIVE CERTIFIED.
 
-Unblock by creating a YouTube channel on that Google account (or connecting
-an account that already has one), then re-run Connect YouTube +
-`script/publish-certify-youtube.ts`.
+**Live evidence.** Channel `UChrYZVLrD506vZrxTWjMi5g` (YourAIBuddy);
+VideoAsset `688`; Publication `47377`; YouTube video `JPRq-hRpayI`
+(private); Result `published`; reconciliation `published`; cert key
+`phase28.1-youtube-certification-v1`; **1 real upload** consumed.
 
 **Architecture.** Same `Artifact → Publication → ChannelAdapter → Result`.
 `createYouTubeChannelAdapter()` supports `video` only. Transport in
@@ -1130,13 +1127,14 @@ Routes: `GET /api/social/youtube/connect`, `GET /api/social/youtube/callback`.
 Refresh token encrypted on `connected_accounts`; preserved when Google omits
 a new refresh on re-auth. Channel discovery via `channels.list?mine=true`.
 Status: `publicationReady` only when client + refresh + scopes + channel.
+Owner-scoped publish requires `connected_accounts.user_id` bound to the
+ContentForge owner.
 
 **Audit.** Threads and Instagram adapters already existed; YouTube publishing
 did not. TikTok not started. No fal/ElevenLabs generation spend (cert may
 GET-rehydrate existing fal bytes only).
 
-**Deferred:** live cert after YouTube channel exists on the OAuth account;
-TikTok; Threads live cert; YouTube analytics.
+**Deferred:** TikTok; Threads live cert; YouTube analytics.
 
 ## Phase 27.3 — Pluggable Media Provider Platform (done)
 
