@@ -3,6 +3,140 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2A — UX Foundation / Stop the Leaks
+
+**Status:** IMPLEMENTED.
+
+First bounded slice of the completed UX audit (`docs/ux-audit/`, preserved
+as-is as the discovery baseline). Fixes the 7 P0 trust/safety/accessibility
+findings only. No IA redesign, no new pages/features — see Deferred below.
+
+### R01–R07
+
+| ID | Requirement | Status | Evidence |
+| --- | --- | --- | --- |
+| R01 | Quick Capture fixed, in-viewport, accessible | DONE | `index.css` two-class override (`.fixed.hover-elevate`) fixes the root cause (`.hover-elevate` forcing `position: relative`); `aria-label="Quick capture"` added. Verified at 1440/820/390px via `e2e/quick-capture.e2e.spec.ts` (all pass). |
+| R02 | Destructive actions confirm-or-undo | DONE | All 13 client `DELETE` call sites now gated by a new shared `ConfirmDialog` (wraps the previously-unused `AlertDialog` primitive). See delete-audit table below. `e2e/destructive-actions.e2e.spec.ts` verifies cancel-preserves / confirm-removes. |
+| R03 | Read-failure state distinct from empty | DONE | New shared `ErrorState` component; wired into the primary query on Queue, Calendar, Analytics, Settings (accounts), Discover, References, Vault, Agent Workspace (run history). `e2e/error-states.e2e.spec.ts` forces each GET to 500 and asserts `ErrorState` + working Retry, not an empty state. |
+| R04 | Honest AI Provider status | DONE | `settings.tsx` "AI Provider" tab no longer hardcodes "Connected/Active". Derives state from the real `/api/agent/runtime` response (`Configuration required` for the fixture backend, `Configured` when a real backend URL is set, `Unable to verify` on a status-fetch error) — never a fabricated "Connected". |
+| R05 | Agent publish guardrails | DONE | Schedule now opens a real date+time picker (new `SchedulePicker`, extracted from Calendar's existing native inputs) instead of hardcoding `now + 60s`. Publish Now opens a confirmation dialog showing the target account + rendered preview (new `PublishPreview`, reuses `x-post-preview.tsx` for X/Threads) and requires a second explicit click. Approve is visually distinct (`secondary` variant) from Publish (`default`). Run status no longer reports `completed` when a tool call failed — `reduceAgentEvents` now emits `completed_with_errors` (unit-tested). Waiting-for-approval now renders Approve/Dismiss controls wired to the existing `POST /api/agent/runs/:id/resume`. |
+| R06 | CopilotKit 403 | DONE | `AgentCopilotProvider`/`copilot-provider.tsx` deleted — 0 `useCopilot*`/`CopilotChat` consumers existed anywhere in the client, so the provider had no function beyond firing an un-tokened POST to `/api/agent/agui` on every page load. AG-UI runtime, streaming and all agent endpoints are untouched. Verified: no `/api/agent/agui` 403 in `e2e/agent-publish.e2e.spec.ts`'s network log. |
+| R07 | Accessibility baseline | DONE | See below. |
+
+### R02 delete audit
+
+| Delete action | Route | Old protection | New protection |
+| --- | --- | --- | --- |
+| Account disconnect | `DELETE /api/accounts/:id` | none | ConfirmDialog |
+| Reference (ingest + references pages) | `DELETE /api/references/:id` | none | ConfirmDialog |
+| Generated image | `DELETE /api/images/:id` | none | ConfirmDialog |
+| Discover idea | `DELETE /api/discover/ideas/:id` | none | ConfirmDialog |
+| Idea (Ideas Bank) | `DELETE /api/ideas/:id` | none | ConfirmDialog |
+| Queue post | `DELETE /api/posts/:id` | none | ConfirmDialog |
+| YouTube channel disconnect | `DELETE /api/youtube/channels/:id` | none | ConfirmDialog |
+| Scheduled post (Calendar) | `DELETE /api/posts/:id` | none | ConfirmDialog |
+| Article | `DELETE /api/articles/:id` | none | ConfirmDialog |
+| Vault item | `DELETE /api/vault/:id` | none | ConfirmDialog |
+| Canned response | `DELETE /api/canned-responses/:id` | none | ConfirmDialog |
+| Carousel | `DELETE /api/carousels/:id` | none | ConfirmDialog |
+
+No client `DELETE` remains unguarded.
+
+### R03 error-state matrix
+
+| Surface | Success | Empty | 500 | Retry |
+| --- | :-: | :-: | :-: | :-: |
+| Queue | ✓ | ✓ | ✓ | ✓ |
+| Calendar | ✓ | ✓ | ✓ | ✓ |
+| Analytics | ✓ | ✓ | ✓ | ✓ |
+| Settings (accounts) | ✓ | ✓ | ✓ | ✓ |
+| Discover | ✓ | ✓ | ✓ | ✓ |
+| References | ✓ | ✓ | ✓ | ✓ |
+| Vault | ✓ | ✓ | ✓ | ✓ |
+| Agent Workspace (runs) | ✓ | ✓ | ✓ | ✓ |
+
+All 8 rows verified live via `e2e/error-states.e2e.spec.ts` (Playwright route
+interception forcing the network boundary to 500; no app service was
+mocked).
+
+### R07 accessibility evidence
+
+- Route titles: `App.tsx` now sets `document.title = "ContentForge — <Page>"` per route (single `useLocation` effect, not duplicated per page).
+- Browser zoom: `maximum-scale=1` removed from `client/index.html`'s viewport meta.
+- Icon-only buttons: `aria-label` added across Quick Capture, theme toggle, sidebar logout, calendar prev/next, settings disconnect, canned-responses (favorite/copy/delete), articles (close/delete), ingest/references bookmark, generate copy buttons, template copy button, tiptap toolbar buttons, and 3 previously-unlabeled Select triggers found by axe (Generate's pillar/post-type/tone, Agent Workspace's backend picker, Style Intelligence's source-type picker).
+- Nav landmark: `<AppSidebar>` wrapped in `<nav aria-label="Primary">`.
+- Skip link: visually-hidden-until-focus "Skip to main content" link, first focusable element in the shell, targets `#main-content`.
+- Main landmark: `<main id="main-content">`.
+- Agent composer: `<Textarea>` now has an associated `<Label>` + `aria-label`.
+- Touch targets: Calendar prev/next bumped to 36px (`h-9 w-9`, the app's existing icon-button default).
+- 404 page: rewritten onto theme tokens (`bg-background`/`text-foreground` instead of hardcoded gray), honest copy, and a real "Back to Generate" action.
+- `e2e/accessibility.e2e.spec.ts` runs `@axe-core/playwright` against Generate, Queue, Calendar, Settings, Agent Workspace and 404, asserting 0 violations for `document-title`/`meta-viewport`/`button-name`/`label`, plus asserts the nav landmark, skip link, main landmark, per-route titles, and the un-clamped viewport meta. **All pass.**
+
+### Shared components (new, reusable by later IA phases)
+
+| Component | File | Consumers |
+| --- | --- | --- |
+| `ConfirmDialog` | `client/src/components/ui-shared/confirm-dialog.tsx` | 13 delete sites across settings/discover/ingest/queue/ideas/vault/imagegen/articles/calendar/references/canned-responses/youtube/carousel |
+| `ErrorState` | `client/src/components/ui-shared/error-state.tsx` | queue/calendar/analytics/settings/discover/references/vault/agent |
+| `StatusBadge` | `client/src/components/ui-shared/status-badge.tsx` | Agent Workspace run status; available for Queue/Calendar to adopt in a later phase (their existing per-page status pill logic was left untouched — no behavior change forced in this pass) |
+| `SchedulePicker` | `client/src/components/ui-shared/schedule-picker.tsx` | Agent Workspace artifact Schedule dialog |
+| `PublishPreview` | `client/src/components/ui-shared/publish-preview.tsx` | Agent Workspace artifact Publish confirmation |
+| `error-messages.ts` (`toUserMessage`) | `client/src/lib/error-messages.ts` | not yet wired into every toast call site (out of scope for this pass — toasts already show human copy in most places); available for the next phase to standardize on |
+
+`PageHeader`/`Banner`/`EmptyState` were **not** extracted this phase — no
+R01–R07 requirement needed them, and each page's existing header/empty
+markup was left as-is per the "don't duplicate, don't redesign" rule. They
+remain candidates for 28.2B+.
+
+### Known follow-on work / partial items
+
+- Calendar/Queue's own `PlatformBadge`/status-pill logic still duplicated
+  between the two files; `StatusBadge` exists for a later phase to
+  consolidate onto without a behavior change forced here.
+- `toUserMessage` exists but is not yet threaded through every mutation's
+  `onError` toast — most already show plain-language server messages, so
+  this was not a P0 gap.
+- Agent Workspace "Deny" control is a **Dismiss** (clears local
+  `waitingForApproval` UI state) — no backend deny endpoint exists; adding
+  one is out of scope for a UI-foundation phase.
+- `docs/X_API_COMPLIANCE_AND_RISK.md` was already deleted in the working
+  tree before this phase started (pre-existing, unrelated); left untouched.
+
+### Tests
+
+- TypeScript: `npm run check` — clean.
+- Production build: `npm run build` — clean.
+- Unit: `npm run test:unit` — **579/579 pass** (0 new failures; includes 2
+  new `reduceAgentEvents` truthful-status tests and 5 new `toUserMessage`
+  tests).
+- DB: `npm run test:db` — **264/266 pass**; the 2 failures
+  (`automation.dbtest.ts` concurrent-tick race, `researchRuntime.dbtest.ts`
+  idempotency-under-concurrency race) are pre-existing timing flakes in
+  files this phase never touched (server/content, server/jobs) — not
+  regressions.
+- Browser/Playwright (`chromium` project): **45/45 pass**, 2 skipped with
+  documented reasons — `deleting a reference requires confirmation` needs
+  outbound network the box didn't have for `/api/ingest`, and the agent
+  publish flow's full research→artifact pipeline hit a stale
+  `AI_TEXT_MODEL` id on OpenRouter (`google/gemini-2.0-flash-001` → 404),
+  the same "generation success paths not observed in this sandbox"
+  limitation the original audit documented. Both are environment gaps, not
+  product defects; the R05 UI contract they'd exercise (separation,
+  confirmation, preview) is otherwise verified end-to-end wherever an
+  artifact does reach the review card.
+- Accessibility: `e2e/accessibility.e2e.spec.ts` (axe-core) — 0 violations
+  for the required rules across all 6 tested routes.
+- `api`/`no-auth` Playwright projects: pre-existing, unrelated to this
+  phase — 15 `api`-project failures reproduce identically on the
+  unmodified `3311b1b` tree (confirmed via `git stash`); `no-auth` passes.
+
+### Deferred (unchanged, explicitly not started)
+
+28.2B (canonical IA), 28.2C (Create/review workflow), 28.2D (Agent
+Workspace full responsive redesign), 28.2E (Sources/research UX), 28.2F
+(Today + Schedule consolidation), 28.2G (Insights), 28.2H (mobile/polish
+re-audit). TikTok and additional media providers remain deferred.
+
 ## Phase 28.1 / 28.1B — YouTube ChannelAdapter + OAuth
 
 **Status:** IMPLEMENTED / LIVE CERTIFIED.

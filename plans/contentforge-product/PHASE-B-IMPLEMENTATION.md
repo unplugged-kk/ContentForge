@@ -2786,3 +2786,18 @@ non-gating external smoke against `hnrss.org` completed with 20 real sources.
 - `server/storage.ts` per-user isolation is still deferred to Phase C slice (c);
   the `userId` parameter is threaded but not yet used for filtering.
 
+## Phase 28.2A — UX Foundation / Stop the Leaks (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2A`), not here — this
+journal predates that phase and this project's later phases are tracked
+in STATUS.md going forward. Summary: fixed the 7 P0 findings from the UX
+audit (`docs/ux-audit/`) — Quick Capture positioning, destructive-action
+confirmation (new `ConfirmDialog`), read-failure states (new `ErrorState`),
+honest AI Provider status, Agent Workspace publish guardrails (new
+`SchedulePicker`/`PublishPreview`, truthful run status, approval controls),
+removal of the unused CopilotKit provider (was firing an un-tokened
+`/api/agent/agui` 403 on every Agent Workspace load), and an accessibility
+baseline (titles, zoom, landmarks, skip link, labels). New shared components
+live under `client/src/components/ui-shared/`. No information-architecture
+change — that is 28.2B+.
+
