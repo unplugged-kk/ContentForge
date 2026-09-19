@@ -539,6 +539,17 @@ describeDb("learning signals (db)", () => {
     const summary = await computeAnalyticsSummary(db, OWNER_A);
     assert.ok(summary.signalCounts.approval >= 1);
     assert.equal(typeof summary.approvalRate, "number");
+    assert.ok(Array.isArray(summary.metricTotals));
+    const likesTotal = summary.metricTotals.find((m) => m.metric === "likes");
+    assert.ok(likesTotal, "expected likes metric in metricTotals");
+    assert.ok(likesTotal.observedCount >= 1);
+    assert.equal(typeof likesTotal.total, "number");
+    assert.equal(typeof likesTotal.notAvailableCount, "number");
+
+    // Owner B summary should isolate from Owner A's performance
+    const summaryB = await computeAnalyticsSummary(db, OWNER_B);
+    const bLikes = summaryB.metricTotals.find((m) => m.metric === "likes");
+    assert.ok(!bLikes || bLikes.observedCount === 0);
 
     const job = await createGenerationJob(
       opportunity.id,

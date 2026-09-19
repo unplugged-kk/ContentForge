@@ -2866,5 +2866,22 @@ New owner-scoped list endpoints (`GET /api/artifacts`, `GET
 single id or opportunity. 631 unit tests passing, 273/274 DB tests (1
 pre-existing flake), 102/102 Playwright chromium tests, 0 axe violations.
 
+## Phase 28.2G — Insights / Performance Visibility + Learning Surface (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2G`) and
+`docs/insights-learning-ux.md`. Summary: transformed `/insights` from a canonical shell
+into a truthful performance and learning surface, closing the feedback loop:
+`Research → Create → Publish → Measure → Understand → Learn → Better next creation`.
+Surfaces 3 primary views: `[Performance] [Learning] [AI Usage]` (`?view=performance|learning|ai-usage`).
+Strict evidence integrity: `not_available` metrics are never coerced to 0 (surfacing `—` with observed counts),
+cautious language avoids causal overstatement ("Observed in available dataset", "Observed in N analyzed references"),
+and resilient independent queries prevent partial failures from blanking the screen. Top content links directly
+to canonical Review in Studio (`/create?artifact=<id>`), while learning patterns offer direct handoffs to
+Explore Topic in Sources (`/sources?q=...`) and Ask Agent (`/agent?prompt=...`).
+Includes backend metric aggregations (`metricTotals` in `server/content/learning/summary.ts`), pure state helpers
+with 15 unit tests (`client/src/lib/insights-state.ts`), 11/11 DB tests in `server/content/learning.dbtest.ts`,
+11 Playwright Journeys A–J with 0 Axe accessibility violations (`e2e/insights.e2e.spec.ts`), and 100% regression passing.
+
+
 
 

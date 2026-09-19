@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
 import {
@@ -106,7 +107,7 @@ function CostTooltip({ active, payload, label }: any) {
 export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const [days, setDays] = useState("30");
 
-  const { data, isLoading } = useQuery<DashboardData>({
+  const { data, isLoading, isError, refetch } = useQuery<DashboardData>({
     queryKey: [`/api/ai-usage/dashboard?days=${days}`],
     refetchInterval: 60_000,
   });
@@ -132,7 +133,25 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
     );
   }
 
-  const d = data!;
+  if (isError || !data) {
+    return (
+      <div className="flex flex-col h-full">
+        {!hideHeader && (
+          <div className="p-4 border-b">
+            <h1 className="text-lg font-semibold" data-testid="text-ai-usage-title">AI Usage & Cost</h1>
+            <p className="text-xs text-muted-foreground">Token consumption and estimated spend</p>
+          </div>
+        )}
+        <ErrorState
+          title="Couldn't load AI usage data"
+          description="Failed to retrieve AI usage and cost metrics."
+          onRetry={() => refetch()}
+        />
+      </div>
+    );
+  }
+
+  const d = data;
   const s = d.summary;
 
   // Show last 14 days in chart regardless of window selection (cleaner)
@@ -151,7 +170,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
           </div>
         )}
         <Select value={days} onValueChange={setDays}>
-          <SelectTrigger className="w-32 h-8 text-xs">
+          <SelectTrigger className="w-32 h-8 text-xs" aria-label="Select days window">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -162,7 +181,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
         </Select>
       </div>
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div className="flex-1 overflow-auto p-4 space-y-4" tabIndex={0} aria-label="AI usage overview">
 
         {/* Provider banner */}
         <Card className="p-3 bg-muted/40 flex items-center justify-between gap-4 flex-wrap">
@@ -214,7 +233,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
 
         {/* Daily cost chart */}
         <Card className="p-4">
-          <h3 className="text-sm font-medium mb-4">Daily cost — last 14 days</h3>
+          <h2 className="text-sm font-medium mb-4">Daily cost — last 14 days</h2>
           {chartDays.some((d) => d.cost > 0) ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={chartDays} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -245,7 +264,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
 
           {/* By feature */}
           <Card className="p-4">
-            <h3 className="text-sm font-medium mb-4">Cost by feature</h3>
+            <h2 className="text-sm font-medium mb-4">Cost by feature</h2>
             {d.byFeature.length > 0 ? (
               <>
                 <ResponsiveContainer width="100%" height={180}>
@@ -291,7 +310,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
 
           {/* By model */}
           <Card className="p-4">
-            <h3 className="text-sm font-medium mb-4">Cost by model</h3>
+            <h2 className="text-sm font-medium mb-4">Cost by model</h2>
             {d.byModel.length > 0 ? (
               <div className="space-y-3">
                 {d.byModel.map((m, i) => {
@@ -335,7 +354,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
         {/* Daily token trend line */}
         {chartDays.some((d) => d.tokens > 0) && (
           <Card className="p-4">
-            <h3 className="text-sm font-medium mb-4">Token consumption trend</h3>
+            <h2 className="text-sm font-medium mb-4">Token consumption trend</h2>
             <ResponsiveContainer width="100%" height={160}>
               <LineChart data={chartDays} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -352,7 +371,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
 
         {/* Recent calls table */}
         <Card className="p-4">
-          <h3 className="text-sm font-medium mb-3">Recent calls</h3>
+          <h2 className="text-sm font-medium mb-3">Recent calls</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -363,6 +382,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                   <th className="text-right py-1.5 pr-3 font-medium">Out</th>
                   <th className="text-right py-1.5 pr-3 font-medium">
                     <Clock className="h-3 w-3 inline" />
+                    <span className="sr-only">Latency</span>
                   </th>
                   <th className="text-right py-1.5 font-medium">Est. cost</th>
                 </tr>

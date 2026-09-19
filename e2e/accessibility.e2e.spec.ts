@@ -9,6 +9,9 @@ const routes = [
   "/agent",
   "/schedule",
   "/insights",
+  "/insights?view=performance",
+  "/insights?view=learning",
+  "/insights?view=ai-usage",
   "/settings",
   "/queue",
   "/calendar",
@@ -19,6 +22,7 @@ for (const path of routes) {
   test(`axe: ${path} has 0 document-title/meta-viewport/button-name/label violations`, async ({ page }) => {
     await page.goto(path);
     await expect(page.locator("body")).toBeVisible();
+    await expect(page).toHaveTitle(/.+/);
     const results = await new AxeBuilder({ page })
       .withRules(["document-title", "meta-viewport", "button-name", "label"])
       .analyze();

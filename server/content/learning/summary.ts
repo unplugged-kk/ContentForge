@@ -18,6 +18,15 @@ export interface AnalyticsSummary {
   byFormat: Array<{ format: string; published: number }>;
   byStory: Array<{ storyId: number; publications: number }>;
   signalCounts: Record<string, number>;
+  /** Owner-wide per-metric totals. `observedCount`/`notAvailableCount` make the
+   * denominator visible — a total is never presented as if every publication
+   * had that metric measured. */
+  metricTotals: Array<{
+    metric: string;
+    total: number;
+    observedCount: number;
+    notAvailableCount: number;
+  }>;
 }
 
 function ratio(num: number, den: number): number | null {
@@ -84,10 +93,24 @@ export async function computeAnalyticsSummary(
     .select({
       publicationId: performanceSignals.publicationId,
       channel: performanceSignals.channel,
+      metric: performanceSignals.metric,
+      value: performanceSignals.value,
       availability: performanceSignals.availability,
     })
     .from(performanceSignals)
     .where(eq(performanceSignals.userId, ownerId));
+
+  const metricTotalsMap = new Map<string, { total: number; observedCount: number; notAvailableCount: number }>();
+  for (const row of observedMetricRows) {
+    const cur = metricTotalsMap.get(row.metric) ?? { total: 0, observedCount: 0, notAvailableCount: 0 };
+    if (row.availability === "observed") {
+      cur.observedCount += 1;
+      cur.total += row.value === null ? 0 : Number(row.value);
+    } else {
+      cur.notAvailableCount += 1;
+    }
+    metricTotalsMap.set(row.metric, cur);
+  }
 
   const channelMap = new Map<string, { published: number; observedMetrics: number }>();
   for (const p of published) {
@@ -145,6 +168,9 @@ export async function computeAnalyticsSummary(
       .map(([storyId, publicationCount]) => ({ storyId, publications: publicationCount }))
       .sort((a, b) => a.storyId - b.storyId),
     signalCounts,
+    metricTotals: Array.from(metricTotalsMap.entries())
+      .map(([metric, v]) => ({ metric, ...v }))
+      .sort((a, b) => a.metric.localeCompare(b.metric)),
   };
 }
 

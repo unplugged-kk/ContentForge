@@ -3,6 +3,57 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2G — Insights / Performance Visibility + Learning Surface
+
+**Status:** IMPLEMENTED.
+
+Seventh slice of the UX roadmap. Transforms `/insights` from a canonical shell
+into a truthful performance and learning surface, closing the feedback loop:
+`Research → Create → Publish → Measure → Understand → Learn → Better next creation`.
+Full architectural reference: `docs/insights-learning-ux.md`.
+
+### Key principles adhered to
+
+- **Truthful evidence presentation**: Never coerces `not_available` metrics to 0
+  (displays `—` along with measurement denominators like `(N observed)`).
+- **No causal overstatement**: Uses cautious language grounded in observed data
+  ("Observed in available dataset", "Observed in N analyzed references", never "ContentForge knows" or "Your audience prefers").
+- **No speculative engines**: No second analytics database or rogue learning engine created (Phase 29 owns autonomous policy optimization).
+- **Resilient independent queries**: Learning view surfaces Writing Style Profiles, Workflow Signals, and Channel Metrics; one failing query never blanks other sections.
+- **Canonical handoffs**: Top content links directly to canonical Review in Studio (`/create?artifact=<id>`); learning insights provide direct handoffs to Explore Topic in Sources (`/sources?q=...`) and Ask Agent (`/agent?prompt=...`).
+- **Legacy route compatibility**: Fully preserves `/analytics` and `/ai-usage` routes while powering `/insights?view=performance|learning|ai-usage`.
+
+### Backend additions
+
+- Extended `AnalyticsSummary` in `server/content/learning/summary.ts` to include
+  `metricTotals: Array<{ metric: string; total: number; observedCount: number; notAvailableCount: number }>`.
+  Groups durable `performanceSignals` by metric type, strictly accumulating values for observed records and counting unobserved records without coercing them to 0.
+- Verified with durable Postgres tests in `server/content/learning.dbtest.ts`.
+
+### Frontend components
+
+- `client/src/lib/insights-state.ts`: Pure helpers for formatting metric values/rates, humanizing confidence levels, formatting style provenance, and generating canonical handoff URLs.
+- `client/src/components/insights/learning-view.tsx`: Surfaces Writing Style Patterns, Workflow Learning Signals, and Channel Performance Signals with independent query error handling and empty states.
+- `client/src/pages/analytics.tsx`: Refactored to power both Performance view and legacy `/analytics`, with explicit time scope ("All time"), learning summary strip, top posts with canonical `[ View content ]` links, and `ErrorState` retry.
+- `client/src/pages/ai-usage.tsx`: Added `ErrorState` retry recovery and accessible table semantics.
+- `client/src/pages/insights.tsx`: 3-tab navigation (`Performance`, `Learning`, `AI Usage`) wrapped in Radix `<Tabs>` and synced with `?view=` query parameter.
+
+### Tests
+
+- TypeScript: `npm run check` — clean (0 errors).
+- Production build: `npm run build` — clean.
+- Unit tests: **15/15 pass** in `client/src/lib/insights-state.test.ts`.
+- DB tests: **11/11 pass** in `server/content/learning.dbtest.ts`.
+- Browser/Playwright E2E: **11/11 pass** in `e2e/insights.e2e.spec.ts` (Journeys A through J).
+- Accessibility: **19/19 pass** in `e2e/accessibility.e2e.spec.ts` (0 Axe violations on `/insights`, `/insights?view=performance`, `/insights?view=learning`, `/insights?view=ai-usage`).
+- Regressions: All suites pass (**13/13** `canonical-ia`, **11/11** `create-workflow`, **10/10** `sources-workflow`, **7/7** `today-schedule`, **8/8** `agent-workspace`).
+
+### Deferred (explicitly, per spec)
+
+Autonomous policy mutations or automated prompt changes (owned by Phase 29),
+paid third-party analytics connectors, 28.2H (mobile and accessibility re-audit).
+
+
 ## Phase 28.2F — Today + Schedule Consolidation
 
 **Status:** IMPLEMENTED.
