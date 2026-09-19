@@ -2850,5 +2850,21 @@ with zero leaked environment variables, responsive mobile layout (390×844 singl
 and 100% test verification (11 Playwright Journeys A–J with 0 Axe violations, 13 unit tests,
 619 unit tests passing, zero regressions across 92 total E2E tests).
 
+## Phase 28.2F — Today + Schedule Consolidation (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2F`) and
+`docs/today-schedule-ux.md`. Summary: turned `/today` and `/schedule` — placeholders
+since 28.2B — into the real daily operating surface (Attention → Today's
+Schedule → Recent Activity → Quick Actions). Confirmed Queue/Calendar (legacy
+`posts`) and the canonical `Story→Artifact→Schedule→Publication→Result`
+pipeline have zero DB link; rather than merging them (the R10 decision the
+audit deferred to the owner), added a `Publications` tab to Schedule so the
+canonical pipeline — previously invisible anywhere in the UI — has a home.
+New owner-scoped list endpoints (`GET /api/artifacts`, `GET
+/api/schedule-occurrences`, `GET /api/publications`, `needsApproval` on `GET
+/api/agent/runs`) — none existed before; every prior route was scoped to a
+single id or opportunity. 631 unit tests passing, 273/274 DB tests (1
+pre-existing flake), 102/102 Playwright chromium tests, 0 axe violations.
+
 
 

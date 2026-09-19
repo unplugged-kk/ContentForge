@@ -12,6 +12,7 @@ const routes = [
   "/settings",
   "/queue",
   "/calendar",
+  "/schedule?tab=publications",
 ];
 
 for (const path of routes) {

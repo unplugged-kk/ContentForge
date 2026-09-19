@@ -3,6 +3,88 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2F — Today + Schedule Consolidation
+
+**Status:** IMPLEMENTED.
+
+Sixth slice of the UX roadmap. Turns `/today` and `/schedule` — placeholders
+since 28.2B — into the real daily operating surface. Full architectural
+reference: `docs/today-schedule-ux.md`.
+
+### Key decision: kept the two content models separate (R10 untouched)
+
+Confirmed by code audit: Queue/Calendar (legacy `posts`/`tweets`) and the
+canonical pipeline (`Story → Artifact → Schedule → Occurrence → Publication
+→ Result`, written by Create Studio/Agent Workspace) have zero DB link —
+nothing scheduled/published via Create Studio was visible anywhere in the
+UI before this phase. Rather than merging the two models (the R10
+architecture decision the audit explicitly deferred to the owner) or
+rebuilding the scheduling backend, Schedule gained a third **Publications**
+tab surfacing the canonical pipeline. `Schedule = Queue + Calendar +
+Publications`, as three real views. Queue/Calendar are otherwise untouched.
+
+### Backend additions (new, additive, owner-scoped — none of these list
+endpoints existed before; every prior artifact/schedule/publication route
+was scoped to a single id or opportunity)
+
+- `GET /api/artifacts?readiness=&limit=` (`storage.listArtifactsByOwner`)
+- `GET /api/schedule-occurrences?from=&to=&limit=` (`storage.listOccurrencesByOwnerRange`, joins occurrence→schedule→artifact)
+- `GET /api/publications?state=&limit=` (`storage.listPublicationsByOwner`, LEFT JOINs `results`)
+- `GET /api/agent/runs` now returns `needsApproval: boolean` per run (one extra query, no N+1 per-run event fetch)
+
+### Today
+
+Four independent sections (`client/src/pages/today.tsx`), each with its own
+loading/error/empty/data state so one failing query never blanks the page:
+
+- **Attention** — needs-review artifacts, agent runs waiting for approval,
+  failed publications, publications needing verification (`result.outcome
+  = "unknown"`), priority-sorted by `deriveAttentionItems`
+  (`client/src/lib/today-schedule-state.ts`).
+- **Today's Schedule** — legacy queue-today posts merged with canonical
+  occurrences-today, sorted by time.
+- **Recent Activity** — bounded, composed client-side from existing
+  timestamped rows (`audit_logs` is an HTTP request log, not a domain-event
+  feed — confirmed no such table exists; no new event system was invented).
+- **Quick Actions** — Create / Research / Ask Agent / Capture a link (the
+  latter dispatches a `contentforge:open-quick-capture` window event that
+  `quick-capture.tsx` listens for — no lifted/duplicated dialog state).
+
+### Schedule
+
+New `Publications` tab (`client/src/components/schedule/publications-view.tsx`),
+deep-linkable via `/schedule?tab=publications`. Per-state action gating:
+`View` (published), `View details` (failed, with the Result's error message
+when available — never a raw provider exception), `Check status` (unknown)
+— all route to the existing canonical `/create?artifact=<id>` Review
+surface; no second detail page was built.
+
+### Tests
+
+- TypeScript: `npm run check` — clean.
+- Production build: `npm run build` — clean.
+- Unit: `npm run test:unit` — **631/631 pass** (12 new in
+  `client/src/lib/today-schedule-state.test.ts`).
+- DB: `npm run test:db` — **273/274 pass** (1 pre-existing timing flake in
+  `automation.dbtest.ts`, unrelated file, documented since 28.2A; the new
+  `server/content/today-schedule.dbtest.ts` (3 tests: owner isolation +
+  readiness filter, date-range occurrence join, state filter + Result join)
+  and the new `agent.dbtest.ts` `needsApproval` test all pass).
+- Browser/Playwright (`chromium` project): **102/102 pass**, 2 skipped with
+  the same documented pre-existing environment gaps as prior phases (no
+  outbound network for one ingest test; a stale `AI_TEXT_MODEL` id on
+  OpenRouter blocks the agent-publish spec's full research pipeline).
+- Accessibility: `/today`, `/schedule`, and `/schedule?tab=publications`
+  all pass the axe sweep — 0 violations for `document-title`/
+  `meta-viewport`/`button-name`/`label`.
+
+### Deferred (explicitly, per spec)
+
+28.2G (Insights/performance/learning surface), notifications system,
+multi-account, TikTok, automation/external schedulers, recurrence redesign,
+merging the two content models (R10, still an owner decision), 28.2H
+(mobile/polish re-audit).
+
 ## Phase 28.2E — Sources / Research UX
 
 **Status:** IMPLEMENTED.
