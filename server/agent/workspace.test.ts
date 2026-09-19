@@ -107,6 +107,37 @@ describe("agent state reducer", () => {
     assert.ok(view.activity.includes("Researching…"));
     assert.equal(view.refs.researchJobId, 4);
   });
+
+  it("does not report completed when a required tool call failed (UX-10)", () => {
+    const view = reduceAgentEvents([
+      { type: "RUN_STARTED", runId: 5, payload: { backendId: "fixture", runId: 5 } },
+      { type: "TOOL_CALL_START", payload: { toolCallId: "1", toolCallName: "create_story" } },
+      {
+        type: "TOOL_CALL_RESULT",
+        payload: { toolCallId: "1", status: "completed", result: { status: "completed" } },
+      },
+      { type: "TOOL_CALL_START", payload: { toolCallId: "2", toolCallName: "repurpose_story" } },
+      {
+        type: "TOOL_CALL_RESULT",
+        payload: { toolCallId: "2", status: "failed", result: { status: "failed", error: "storyId Required" } },
+      },
+      { type: "RUN_FINISHED", payload: { result: "completed" } },
+    ]);
+    assert.equal(view.status, "completed_with_errors");
+  });
+
+  it("still reports completed when every tool call succeeded", () => {
+    const view = reduceAgentEvents([
+      { type: "RUN_STARTED", runId: 6, payload: { backendId: "fixture", runId: 6 } },
+      { type: "TOOL_CALL_START", payload: { toolCallId: "1", toolCallName: "create_story" } },
+      {
+        type: "TOOL_CALL_RESULT",
+        payload: { toolCallId: "1", status: "completed", result: { status: "completed" } },
+      },
+      { type: "RUN_FINISHED", payload: { result: "completed" } },
+    ]);
+    assert.equal(view.status, "completed");
+  });
 });
 
 describe("error and capability mapping", () => {

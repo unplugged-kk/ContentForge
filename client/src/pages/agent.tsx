@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { subscribeAgentStream } from "@/lib/agui-stream";
 import { ArtifactReviewCard } from "@/components/agent/artifact-review";
-import { AgentCopilotProvider } from "@/components/agent/copilot-provider";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { StyleIntelligencePanel } from "@/components/agent/style-panel";
 import { RepurposePanel } from "@/components/agent/repurpose-panel";
 import { ResearchPanel } from "@/components/agent/research-panel";
@@ -75,11 +76,7 @@ async function readJson(path: string): Promise<unknown> {
 }
 
 export default function AgentWorkspacePage() {
-  return (
-    <AgentCopilotProvider>
-      <AgentWorkspaceInner />
-    </AgentCopilotProvider>
-  );
+  return <AgentWorkspaceInner />;
 }
 
 function AgentWorkspaceInner() {
@@ -271,18 +268,33 @@ function AgentWorkspaceInner() {
     if (selectedRunId) void pumpWorkspace(selectedRunId);
   };
 
+  const resumeMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRunId) throw new Error("no active run");
+      const res = await apiRequest("POST", `/api/agent/runs/${selectedRunId}/resume`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      if (selectedRunId) void hydrateRun(selectedRunId);
+    },
+    onError: (err: Error) => {
+      const classified = classifyAgentError({ message: err.message });
+      toast({ title: classified.class, description: classified.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="h-full overflow-hidden bg-background" data-testid="page-agent-workspace">
       <div className="grid h-full grid-cols-1 lg:grid-cols-[18rem_1fr_24rem]">
         <aside className="border-r p-3 space-y-3 overflow-y-auto">
           <div>
             <h1 className="text-sm font-semibold" data-testid="text-agent-workspace-title">Agent Workspace</h1>
-            <p className="text-[11px] text-muted-foreground">CopilotKit + AG-UI over ContentForge Agent Runtime</p>
+            <p className="text-[11px] text-muted-foreground">AG-UI over ContentForge Agent Runtime</p>
           </div>
           <div className="space-y-1" data-testid="panel-agent-backends">
             <p className="text-[11px] font-medium">Backend</p>
             <Select value={backendId} onValueChange={setBackendId}>
-              <SelectTrigger data-testid="select-agent-backend">
+              <SelectTrigger aria-label="Agent backend" data-testid="select-agent-backend">
                 <SelectValue placeholder="Select backend" />
               </SelectTrigger>
               <SelectContent>
@@ -305,23 +317,36 @@ function AgentWorkspaceInner() {
           </div>
           <div className="space-y-2" data-testid="list-agent-runs">
             <p className="text-[11px] font-medium">Run history</p>
-            {(runsQuery.data?.runs ?? []).map((run) => (
-              <AgentRunCard
-                key={run.id}
-                run={run}
-                active={run.id === selectedRunId}
-                onOpen={setSelectedRunId}
+            {runsQuery.isError ? (
+              <ErrorState
+                title="Couldn't load run history"
+                description="Something went wrong while loading your agent runs."
+                onRetry={() => runsQuery.refetch()}
               />
-            ))}
-            {runsQuery.data?.runs?.length === 0 && (
-              <p className="text-[11px] text-muted-foreground">No runs yet.</p>
+            ) : (
+              <>
+                {(runsQuery.data?.runs ?? []).map((run) => (
+                  <AgentRunCard
+                    key={run.id}
+                    run={run}
+                    active={run.id === selectedRunId}
+                    onOpen={setSelectedRunId}
+                  />
+                ))}
+                {runsQuery.data?.runs?.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">No runs yet.</p>
+                )}
+              </>
             )}
           </div>
         </aside>
 
         <section className="flex flex-col min-w-0">
           <div className="border-b p-3 space-y-2">
+            <Label htmlFor="agent-composer" className="sr-only">Agent objective</Label>
             <Textarea
+              id="agent-composer"
+              aria-label="Agent objective"
               value={composer}
               onChange={(e) => setComposer(e.target.value)}
               className="min-h-[88px]"
@@ -344,7 +369,13 @@ function AgentWorkspaceInner() {
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Bot className="h-4 w-4" />
                     Agent activity
-                    {view.status ? <Badge variant="secondary">{view.status}</Badge> : null}
+                    {view.status ? (
+                      view.status === "completed_with_errors" ? (
+                        <Badge variant="destructive" data-testid="badge-run-status">Completed with errors</Badge>
+                      ) : (
+                        <Badge variant="secondary" data-testid="badge-run-status">{view.status}</Badge>
+                      )
+                    ) : null}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="text-sm space-y-1">
@@ -361,7 +392,25 @@ function AgentWorkspaceInner() {
                     </div>
                   )}
                   {view.waitingForApproval && (
-                    <p className="text-xs" data-testid="text-auth-required">Privileged action requires explicit user authorization.</p>
+                    <div className="flex items-center gap-2 text-xs" data-testid="text-auth-required">
+                      <p>Privileged action requires explicit user authorization.</p>
+                      <Button
+                        size="sm"
+                        onClick={() => resumeMutation.mutate()}
+                        disabled={resumeMutation.isPending}
+                        data-testid="button-run-approve"
+                      >
+                        Approve &amp; continue
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setView((prev) => ({ ...prev, waitingForApproval: false }))}
+                        data-testid="button-run-dismiss"
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>

@@ -497,6 +497,10 @@ export function reduceAgentEvents(events: AgentUiEvent[], prev: AgentWorkspaceVi
   if (view.toolCalls.some((call) => call.name === "approve_artifact" && call.status === "denied")) {
     view.waitingForApproval = true;
   }
+  const FAILURE_STATUSES = new Set(["failed", "invalid", "not_found", "conflict"]);
+  if (view.status === "completed" && view.toolCalls.some((call) => FAILURE_STATUSES.has(call.status))) {
+    view.status = "completed_with_errors";
+  }
   return view;
 }
 

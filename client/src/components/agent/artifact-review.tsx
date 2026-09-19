@@ -4,6 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { SchedulePicker } from "@/components/ui-shared/schedule-picker";
+import { PublishPreview } from "@/components/ui-shared/publish-preview";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { classifyAgentError } from "@shared/agent-ui";
@@ -38,6 +41,13 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleIso, setScheduleIso] = useState<string | null>(null);
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+
+  const accountsQuery = useQuery<Array<{ platform: string; username: string | null }>>({
+    queryKey: ["/api/accounts"],
+  });
 
   const artifactQuery = useQuery<Artifact>({
     queryKey: ["/api/artifacts", artifactId],
@@ -133,15 +143,18 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   });
 
   const schedule = useMutation({
-    mutationFn: async () => {
-      const startAt = new Date(Date.now() + 60_000).toISOString();
+    mutationFn: async (startAt: string) => {
       const res = await apiRequest("POST", "/api/schedules", {
         artifactId,
         startAt,
       });
       return res.json();
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setScheduleOpen(false);
+      setScheduleIso(null);
+      invalidate();
+    },
     onError,
   });
 
@@ -153,9 +166,19 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
       });
       return res.json();
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setPublishConfirmOpen(false);
+      toast({ title: "Published", description: `Sent to ${artifact?.channel ?? "the target channel"}.` });
+      invalidate();
+    },
     onError,
   });
+
+  const accountLabel = (() => {
+    const match = accountsQuery.data?.find((a) => a.platform === artifact?.channel);
+    if (match) return match.username ? `@${match.username}` : match.platform;
+    return artifact?.channel ?? "";
+  })();
 
   if (artifactQuery.isLoading) {
     return <p className="text-sm text-muted-foreground" data-testid="text-artifact-loading">Loading artifact…</p>;
@@ -236,16 +259,17 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
           )}
           <Button
             size="sm"
+            variant="secondary"
             onClick={() => approve.mutate()}
             disabled={approve.isPending || approved}
             data-testid="button-artifact-approve"
           >
             Approve
           </Button>
-          <Button size="sm" variant="outline" onClick={() => schedule.mutate()} disabled={schedule.isPending || !approved} data-testid="button-artifact-schedule">
+          <Button size="sm" variant="outline" onClick={() => setScheduleOpen(true)} disabled={!approved} data-testid="button-artifact-schedule">
             Schedule
           </Button>
-          <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || !approved} data-testid="button-artifact-publish">
+          <Button size="sm" onClick={() => setPublishConfirmOpen(true)} disabled={!approved} data-testid="button-artifact-publish">
             Publish Now
           </Button>
         </div>
@@ -256,6 +280,40 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
           <PublicationCard key={pub.id} publication={pub} />
         ))}
       </CardContent>
+
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent data-testid="dialog-artifact-schedule">
+          <DialogHeader>
+            <DialogTitle>Schedule this artifact</DialogTitle>
+          </DialogHeader>
+          <SchedulePicker onChange={setScheduleIso} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setScheduleOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!scheduleIso || schedule.isPending}
+              onClick={() => scheduleIso && schedule.mutate(scheduleIso)}
+              data-testid="button-confirm-schedule"
+            >
+              Confirm schedule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={publishConfirmOpen} onOpenChange={setPublishConfirmOpen}>
+        <DialogContent data-testid="dialog-artifact-publish">
+          <DialogHeader>
+            <DialogTitle>Publish now?</DialogTitle>
+          </DialogHeader>
+          <PublishPreview channel={artifact.channel} accountLabel={accountLabel} text={text} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPublishConfirmOpen(false)} data-testid="button-publish-cancel">Cancel</Button>
+            <Button disabled={publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-confirm">
+              Publish
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
