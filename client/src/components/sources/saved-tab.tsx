@@ -157,7 +157,7 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
   const isLoading = vaultQuery.isLoading || ideasQuery.isLoading || referencesQuery.isLoading;
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6" data-testid="container-saved-tab">
       {/* Title & Filter bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b pb-3">
         <div>

@@ -39,9 +39,9 @@ export function ToolCallCard({
         {call.renderer === "research_topic" && (
           <div className="text-xs space-y-1">
             {sourceCount > 0 ? <p>{sourceCount} sources</p> : null}
-            {researchJobId > 0 ? <p>ResearchJob {researchJobId}</p> : null}
+            {researchJobId > 0 ? <p>Research #{researchJobId}</p> : null}
             {storyId > 0 ? <p>1 Story</p> : null}
-            <Badge variant="outline">Source Content UNTRUSTED</Badge>
+            <Badge variant="outline">External Source (Unverified)</Badge>
             {researchJobId > 0 && (
               <Button size="sm" variant="outline" onClick={() => onOpen?.("research", researchJobId)} data-testid={`button-open-research-${call.id}`}>
                 Open Research
@@ -51,7 +51,7 @@ export function ToolCallCard({
         )}
         {call.renderer === "generate_artifact" && (
           <div className="text-xs space-y-1">
-            {Number(refs.opportunityId) > 0 ? <p>Opportunity: opp_{String(refs.opportunityId)}</p> : null}
+            {Number(refs.opportunityId) > 0 ? <p>Opportunity #{String(refs.opportunityId)}</p> : null}
             {textField(call.arguments.format) ? <p>Format: {textField(call.arguments.format)}</p> : null}
             {artifactId > 0 && (
               <Button size="sm" variant="outline" onClick={() => onOpen?.("artifact", artifactId)} data-testid={`button-view-artifact-${call.id}`}>
@@ -80,7 +80,7 @@ export function StoryCard({ story }: { story: Record<string, unknown> }) {
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p>Status: {textField(story.status)}</p>
-        {story.researchJobId != null ? <p>ResearchJob {String(story.researchJobId)}</p> : null}
+        {story.researchJobId != null ? <p>Research #{String(story.researchJobId)}</p> : null}
       </CardContent>
     </Card>
   );
@@ -254,7 +254,7 @@ export function AgentRunCard({
 export function UntrustedSource({ text }: { text: string }) {
   return (
     <div className="rounded-md border border-dashed p-2 bg-muted/40" data-testid="panel-untrusted-source">
-      <Badge variant="outline">Source Content UNTRUSTED</Badge>
+      <Badge variant="outline">External Source (Unverified)</Badge>
       <p className="text-xs mt-1 whitespace-pre-wrap break-words">{text}</p>
     </div>
   );

@@ -3,6 +3,54 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2H — Full Product UX Re-Audit + Responsive Polish
+
+**Status:** IMPLEMENTED.
+
+Final consolidation slice of the ContentForge UX roadmap. Conducts a rigorous full-product
+re-audit across all 7 canonical destinations and key deep-linked routes, verifying that
+ContentForge operates as ONE unified, production-grade product. Full reference: `docs/full-product-ux-audit.md`.
+
+### Key Polish & Fixes Shipped
+- **Standardized PageHeader on Settings**: Consolidated `/settings` from a custom container into the canonical `PageHeader` (`page-header-settings`), achieving 100% header consistency across all seven canonical destinations.
+- **Settings Mobile Tabs Polish**: Added `overflow-x-auto no-scrollbar` to Settings `TabsList`, eliminating mobile horizontal clipping on 390px and 430px viewports (resolving UX-30).
+- **Leaked Domain Jargon Eliminated**: Cleaned up internal tokens in `workspace-cards.tsx` and `artifact-review.tsx`:
+  - `ResearchJob 1` → `Research #1`
+  - `Source Content UNTRUSTED` → `External Source (Unverified)`
+  - `Opportunity: opp_12` → `Opportunity #12`
+  - `supersedes 101` → `replaces revision #101`
+- **Trimmed External Font Request**: Replaced the massive ~25-family Google Font link in `client/index.html` with strictly Open Sans (the only active `--font-sans` family), reducing HTML payload from 2.03kB to 0.73kB and eliminating tunnel latency/timeouts (resolving UX-31).
+- **Comprehensive Viewport Matrix Verification**: Verified all 7 canonical routes across all 7 required viewports (1440×900, 1280×800, 1024×768, 820×1180, 768×1024, 430×932, 390×844) with 0 horizontal scroll overflows (`scrollWidth <= clientWidth + 1`).
+- **Complete User Journeys (A through H) Tested**: Automated test coverage verifies the full user flows:
+  - Journey A: Sources → Research → Story → Create
+  - Journey B: Agent → Review in Studio
+  - Journey C: Review → Schedule (`SchedulePicker`)
+  - Journey D: Review → Publish (`PublishPreview` double confirmation)
+  - Journey E: Today → Attention → Action
+  - Journey F: Schedule → Canonical Publications
+  - Journey G: Publication → Insights Performance
+  - Journey H: Insights Learning patterns → Explore in Sources / Ask Agent
+- **Zero Accessibility Violations**: 0 Axe-core violations across all canonical routes, tabs, and deep links. Verified keyboard flow, visible focus states, landmarks, and skip link.
+
+### Tests
+- TypeScript: `npm run check` — **clean (0 errors)**.
+- Production build: `npm run build` — **clean**.
+- Client unit tests: **72/72 pass** (across all state helpers).
+- Full product audit E2E: **70/70 pass** in `e2e/full-product-audit.e2e.spec.ts`.
+- Full regression suites: **76/76 pass** (1 skipped for unmocked external network access as documented).
+
+### Frozen Architectural Decisions
+- 7 canonical destinations: Today, Create, Sources, Agent, Schedule, Insights, Settings.
+- Create owns authoring, generation, and artifact review.
+- Sources owns research, discovery, and saved knowledge base.
+- Agent orchestrates and hands off to canonical Review.
+- Schedule unifies Queue, Calendar, and Publications.
+- Insights owns performance, learning signals, and AI usage visibility.
+- Settings owns accounts, runtime verification, and brand profile.
+- Phase 29 owns autonomous learning and policy optimization.
+
+
+
 ## Phase 28.2G — Insights / Performance Visibility + Learning Surface
 
 **Status:** IMPLEMENTED.

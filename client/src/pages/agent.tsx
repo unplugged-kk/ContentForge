@@ -413,6 +413,7 @@ function AgentWorkspaceInner() {
       {/* Canonical PageHeader */}
       <PageHeader
         title="Agent"
+        testId="page-header-agent"
         titleTestId="text-agent-workspace-title"
         description="Orchestrate research, cross-channel drafting, and publication workflows"
         action={

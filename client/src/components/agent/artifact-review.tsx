@@ -210,7 +210,7 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
       <CardContent className="space-y-3 text-sm">
         <p className="text-xs text-muted-foreground">
           {artifact.format} · {artifact.channel} · {artifact.provenance ?? "generated"}
-          {artifact.supersedesId ? ` · supersedes ${artifact.supersedesId}` : ""}
+          {artifact.supersedesId ? ` · replaces revision #${artifact.supersedesId}` : ""}
         </p>
         {historyQuery.data && historyQuery.data.length > 0 && (
           <div className="flex flex-wrap gap-1" data-testid="list-artifact-revisions">

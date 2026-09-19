@@ -57,7 +57,9 @@ export default function SchedulePage() {
         ) : activeTab === "calendar" ? (
           <CalendarPage hideHeader={true} />
         ) : (
-          <PublicationsView />
+          <div className="h-full overflow-y-auto" data-testid="container-publications">
+            <PublicationsView />
+          </div>
         )}
       </div>
     </div>

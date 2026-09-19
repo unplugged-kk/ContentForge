@@ -2882,6 +2882,21 @@ Includes backend metric aggregations (`metricTotals` in `server/content/learning
 with 15 unit tests (`client/src/lib/insights-state.ts`), 11/11 DB tests in `server/content/learning.dbtest.ts`,
 11 Playwright Journeys A–J with 0 Axe accessibility violations (`e2e/insights.e2e.spec.ts`), and 100% regression passing.
 
+## Phase 28.2H — Full Product UX Re-Audit + Responsive Polish (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2H`) and
+`docs/full-product-ux-audit.md`. Summary: final consolidation and audit pass across the
+seven canonical destinations (Today, Create, Sources, Agent, Schedule, Insights, Settings)
+and compatibility routes. Standardized `PageHeader` on Settings, eliminating custom header
+discrepancies. Fixed mobile horizontal clipping on Settings `TabsList` (UX-30). Replaced
+internal leaked jargon with user-facing terms (`Research #1`, `External Source (Unverified)`,
+`replaces revision #101`). Trimmed external Google Fonts to strictly Open Sans (UX-31),
+reducing initial HTML payload by ~64%. Verified all 7 canonical destinations across all 7
+target viewports (1440×900, 1280×800, 1024×768, 820×1180, 768×1024, 430×932, 390×844)
+with 0 horizontal scroll overflows. Automated full user journeys A through H with 100% pass rate.
+Achieved 0 Axe accessibility violations across all routes. Frozen 7-destination architecture.
+
+
 
 
 

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/ui-shared/page-header";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -366,13 +367,15 @@ export default function SettingsPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b">
-        <h1 className="text-lg font-semibold" data-testid="text-settings-title">Settings</h1>
-        <p className="text-xs text-muted-foreground">Configure your ContentForge workspace</p>
-      </div>
-      <div className="flex-1 overflow-auto p-6">
+      <PageHeader
+        title="Settings"
+        description="Configure your ContentForge workspace"
+        testId="page-header-settings"
+        titleTestId="text-settings-title"
+      />
+      <div className="flex-1 overflow-auto p-4 sm:p-6">
         <Tabs defaultValue="accounts">
-          <TabsList>
+          <TabsList className="flex overflow-x-auto max-w-full justify-start sm:justify-center no-scrollbar h-auto p-1 gap-1">
             <TabsTrigger value="accounts" data-testid="tab-accounts">
               <Globe className="h-3.5 w-3.5 mr-1.5" />
               Connected Accounts
