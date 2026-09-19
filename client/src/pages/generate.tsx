@@ -207,7 +207,7 @@ export default function GeneratePage() {
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Content Pillar</label>
                   <Select value={pillar} onValueChange={setPillar}>
-                    <SelectTrigger data-testid="select-pillar">
+                    <SelectTrigger aria-label="Content Pillar" data-testid="select-pillar">
                       <SelectValue placeholder="Select a pillar..." />
                     </SelectTrigger>
                     <SelectContent>
@@ -227,7 +227,7 @@ export default function GeneratePage() {
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Post Type</label>
                     <Select value={postType} onValueChange={setPostType}>
-                      <SelectTrigger data-testid="select-post-type">
+                      <SelectTrigger aria-label="Post Type" data-testid="select-post-type">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -240,7 +240,7 @@ export default function GeneratePage() {
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Tone</label>
                     <Select value={tone} onValueChange={setTone}>
-                      <SelectTrigger data-testid="select-tone">
+                      <SelectTrigger aria-label="Tone" data-testid="select-tone">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -366,6 +366,7 @@ export default function GeneratePage() {
                             size="icon"
                             variant="ghost"
                             onClick={() => handleCopy(content)}
+                            aria-label="Copy"
                             data-testid={`button-copy-${tIdx}`}
                           >
                             <Copy className="h-3 w-3" />

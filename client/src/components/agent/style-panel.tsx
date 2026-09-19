@@ -113,7 +113,7 @@ export function StyleIntelligencePanel() {
         <div className="space-y-1">
           <p className="font-medium">Add reference</p>
           <Select value={sourceType} onValueChange={setSourceType}>
-            <SelectTrigger data-testid="select-style-source-type">
+            <SelectTrigger aria-label="Reference source type" data-testid="select-style-source-type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

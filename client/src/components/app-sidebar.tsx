@@ -139,6 +139,7 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
             disabled={logoutMutation.isPending}
             data-testid="button-logout"
             title="Sign out"
+            aria-label="Sign out"
           >
             <LogOut className="h-3.5 w-3.5" />
           </Button>

@@ -74,17 +74,17 @@ export function TipTapEditor({ content, onChange, placeholder }: TipTapEditorPro
   if (!editor) return null;
 
   const toolbarItems = [
-    { icon: Bold, action: () => editor.chain().focus().toggleBold().run(), active: editor.isActive("bold"), testId: "toolbar-bold" },
-    { icon: Italic, action: () => editor.chain().focus().toggleItalic().run(), active: editor.isActive("italic"), testId: "toolbar-italic" },
-    { icon: UnderlineIcon, action: () => editor.chain().focus().toggleUnderline().run(), active: editor.isActive("underline"), testId: "toolbar-underline" },
-    { icon: Heading2, action: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), active: editor.isActive("heading", { level: 2 }), testId: "toolbar-h2" },
-    { icon: Heading3, action: () => editor.chain().focus().toggleHeading({ level: 3 }).run(), active: editor.isActive("heading", { level: 3 }), testId: "toolbar-h3" },
-    { icon: List, action: () => editor.chain().focus().toggleBulletList().run(), active: editor.isActive("bulletList"), testId: "toolbar-bullet-list" },
-    { icon: ListOrdered, action: () => editor.chain().focus().toggleOrderedList().run(), active: editor.isActive("orderedList"), testId: "toolbar-ordered-list" },
-    { icon: Code2, action: () => editor.chain().focus().toggleCodeBlock().run(), active: editor.isActive("codeBlock"), testId: "toolbar-code-block" },
-    { icon: Quote, action: () => editor.chain().focus().toggleBlockquote().run(), active: editor.isActive("blockquote"), testId: "toolbar-blockquote" },
-    { icon: Minus, action: () => editor.chain().focus().setHorizontalRule().run(), active: false, testId: "toolbar-horizontal-rule" },
-    { icon: LinkIcon, action: toggleLink, active: editor.isActive("link"), testId: "toolbar-link" },
+    { icon: Bold, action: () => editor.chain().focus().toggleBold().run(), active: editor.isActive("bold"), testId: "toolbar-bold", label: "Bold" },
+    { icon: Italic, action: () => editor.chain().focus().toggleItalic().run(), active: editor.isActive("italic"), testId: "toolbar-italic", label: "Italic" },
+    { icon: UnderlineIcon, action: () => editor.chain().focus().toggleUnderline().run(), active: editor.isActive("underline"), testId: "toolbar-underline", label: "Underline" },
+    { icon: Heading2, action: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), active: editor.isActive("heading", { level: 2 }), testId: "toolbar-h2", label: "Heading 2" },
+    { icon: Heading3, action: () => editor.chain().focus().toggleHeading({ level: 3 }).run(), active: editor.isActive("heading", { level: 3 }), testId: "toolbar-h3", label: "Heading 3" },
+    { icon: List, action: () => editor.chain().focus().toggleBulletList().run(), active: editor.isActive("bulletList"), testId: "toolbar-bullet-list", label: "Bullet list" },
+    { icon: ListOrdered, action: () => editor.chain().focus().toggleOrderedList().run(), active: editor.isActive("orderedList"), testId: "toolbar-ordered-list", label: "Numbered list" },
+    { icon: Code2, action: () => editor.chain().focus().toggleCodeBlock().run(), active: editor.isActive("codeBlock"), testId: "toolbar-code-block", label: "Code block" },
+    { icon: Quote, action: () => editor.chain().focus().toggleBlockquote().run(), active: editor.isActive("blockquote"), testId: "toolbar-blockquote", label: "Blockquote" },
+    { icon: Minus, action: () => editor.chain().focus().setHorizontalRule().run(), active: false, testId: "toolbar-horizontal-rule", label: "Horizontal rule" },
+    { icon: LinkIcon, action: toggleLink, active: editor.isActive("link"), testId: "toolbar-link", label: "Link" },
   ];
 
   return (
@@ -98,6 +98,7 @@ export function TipTapEditor({ content, onChange, placeholder }: TipTapEditorPro
             size="icon"
             className={`toggle-elevate ${item.active ? "toggle-elevated" : ""}`}
             onClick={item.action}
+            aria-label={item.label}
             data-testid={item.testId}
           >
             <item.icon className="h-4 w-4" />

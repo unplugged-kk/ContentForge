@@ -189,6 +189,7 @@ export default function TemplatesPage() {
                       size="icon"
                       variant="outline"
                       onClick={() => handleCopy(filledContent)}
+                      aria-label="Copy"
                       data-testid="button-copy-filled"
                     >
                       <Copy className="h-4 w-4" />

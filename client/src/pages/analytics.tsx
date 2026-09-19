@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { BarChart3, TrendingUp, Eye, Heart, MessageCircle, Repeat2, Bookmark } from "lucide-react";
 import { SiX, SiThreads } from "react-icons/si";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from "recharts";
@@ -53,7 +54,7 @@ type InsightsPayload = {
 };
 
 export default function AnalyticsPage() {
-  const { data: summary, isLoading } = useQuery<AnalyticsSummary>({
+  const { data: summary, isLoading, isError, refetch } = useQuery<AnalyticsSummary>({
     queryKey: ["/api/analytics/summary"],
   });
 
@@ -82,6 +83,22 @@ export default function AnalyticsPage() {
             <Card className="p-4"><Skeleton className="h-48" /></Card>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="p-4 border-b">
+          <h1 className="text-lg font-semibold">Analytics</h1>
+          <p className="text-xs text-muted-foreground">Track your content performance</p>
+        </div>
+        <ErrorState
+          title="Couldn't load analytics"
+          description="Something went wrong while loading your analytics."
+          onRetry={() => refetch()}
+        />
       </div>
     );
   }

@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import { useEffect } from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient, getQueryFn } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -32,7 +33,36 @@ import AiUsagePage from "@/pages/ai-usage";
 import AgentWorkspacePage from "@/pages/agent";
 import { QuickCapture } from "@/components/quick-capture";
 
+const ROUTE_TITLES: Record<string, string> = {
+  "/": "Generate",
+  "/calendar": "Calendar",
+  "/ideas": "Ideas",
+  "/templates": "Templates",
+  "/analytics": "Analytics",
+  "/settings": "Settings",
+  "/articles": "Articles",
+  "/references": "References",
+  "/discover": "Discover",
+  "/ingest": "Ingest",
+  "/images": "Images",
+  "/vault": "Vault",
+  "/hooks": "Hooks",
+  "/carousel": "Carousel",
+  "/chat": "Chat",
+  "/youtube": "YouTube",
+  "/formatter": "Formatter",
+  "/canned-responses": "Canned Responses",
+  "/queue": "Queue",
+  "/ai-usage": "AI Usage",
+  "/agent": "Agent Workspace",
+};
+
 function Router() {
+  const [location] = useLocation();
+  useEffect(() => {
+    document.title = `ContentForge — ${ROUTE_TITLES[location] ?? "Not Found"}`;
+  }, [location]);
+
   return (
     <Switch>
       <Route path="/" component={GeneratePage} />
@@ -88,14 +118,22 @@ function AppShell() {
 
   return (
     <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
+      >
+        Skip to main content
+      </a>
       <div className="flex h-screen w-full">
-        <AppSidebar user={user as any} />
+        <nav aria-label="Primary">
+          <AppSidebar user={user as any} />
+        </nav>
         <div className="flex flex-col flex-1 min-w-0">
           <header className="flex items-center justify-between gap-2 px-2 py-1.5 border-b bg-background sticky top-0 z-50">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <ThemeToggle />
           </header>
-          <main className="flex-1 overflow-hidden">
+          <main id="main-content" className="flex-1 overflow-hidden">
             <Router />
           </main>
           <QuickCapture />
