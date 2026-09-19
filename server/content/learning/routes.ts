@@ -14,8 +14,10 @@ import { CANONICAL_METRICS } from "./constants";
 import type { LearningStoragePort } from "./store";
 import { computeAnalyticsSummary } from "./summary";
 import { ingestExplicitMetrics, refreshPublicationMetrics } from "./refresh";
-import type { NormalizedMetric } from "./metrics";
+import { type NormalizedMetric } from "./metrics";
 import { lineageToExplain, resolveLineage } from "./lineage";
+import { extractObservationsAndProposals } from "./proposals";
+import type { ProposalStatus } from "@shared/schema";
 
 const observationBody = z.object({
   observedAt: z.string().datetime().optional(),
@@ -167,6 +169,103 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
       const ownerId = getUserId(req) ?? 1;
       const summary = await computeAnalyticsSummary(deps.database, ownerId);
       return res.json(summary);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/proposals", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const limit = Math.min(Number(req.query.limit) || 50, 100);
+      const status =
+        typeof req.query.status === "string" && req.query.status.trim()
+          ? (req.query.status.trim() as ProposalStatus)
+          : undefined;
+      const proposalType =
+        typeof req.query.type === "string" && req.query.type.trim()
+          ? req.query.type.trim()
+          : undefined;
+      const rows = await deps.learning.listLearningProposalsForOwner(ownerId, limit, {
+        status,
+        proposalType,
+      });
+      return res.json(rows);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/proposals/:id", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
+      if (!row) return res.status(404).json({ message: "Proposal not found" });
+      return res.json(row);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/proposals/:id/accept", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
+      if (!row) return res.status(404).json({ message: "Proposal not found" });
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : undefined;
+      const updated = await deps.learning.updateProposalStatus(id, ownerId, "accepted", ownerId, notes);
+      return res.json(updated);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/proposals/:id/reject", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
+      if (!row) return res.status(404).json({ message: "Proposal not found" });
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : undefined;
+      const updated = await deps.learning.updateProposalStatus(id, ownerId, "rejected", ownerId, notes);
+      return res.json(updated);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/observations", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const limit = Math.min(Number(req.query.limit) || 50, 100);
+      const dimension =
+        typeof req.query.dimension === "string" && req.query.dimension.trim()
+          ? req.query.dimension.trim()
+          : undefined;
+      const observationType =
+        typeof req.query.type === "string" && req.query.type.trim()
+          ? req.query.type.trim()
+          : undefined;
+      const rows = await deps.learning.listLearningObservationsForOwner(ownerId, limit, {
+        dimension,
+        observationType,
+      });
+      return res.json(rows);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/extract", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const result = await extractObservationsAndProposals(deps.database, deps.learning, ownerId);
+      return res.json(result);
     } catch (error) {
       return next(error);
     }

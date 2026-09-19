@@ -1823,6 +1823,105 @@ export type InsertLearningSignal = z.infer<typeof insertLearningSignalSchema>;
 export type LearningSignalType = "edit" | "approval" | "publication" | "performance" | "derived";
 export type PerformanceAvailability = "observed" | "not_available";
 
+/**
+ * LearningObservation — durable persistence of multi-sample empirical observations
+ * across content, distribution, style, and production dimensions.
+ * Retains candidate vs comparison population, measured values, and evidence quality.
+ */
+export const learningObservations = pgTable(
+  "learning_observations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    /** content | distribution | style | production */
+    dimension: varchar("dimension", { length: 40 }).notNull(),
+    /** e.g. format_channel_performance | style_approval_rate | model_cost_efficiency | workflow_reliability */
+    observationType: varchar("observation_type", { length: 60 }).notNull(),
+    /** e.g. channel:linkedin | format:carousel | model:gemini-1.5-pro */
+    targetScope: varchar("target_scope", { length: 100 }).notNull(),
+    /** Candidate population criteria, sample count, and primary entity IDs */
+    candidatePopulation: jsonb("candidate_population").$type<Record<string, unknown>>().notNull().default({}),
+    /** Baseline/comparison population criteria, sample count, and comparison entity IDs */
+    comparisonPopulation: jsonb("comparison_population").$type<Record<string, unknown>>().notNull().default({}),
+    /** e.g. engagement_rate | approval_rate | failure_rate | duration_ms | cost */
+    metricName: varchar("metric_name", { length: 60 }).notNull(),
+    candidateValue: decimal("candidate_value", { precision: 12, scale: 4 }),
+    comparisonValue: decimal("comparison_value", { precision: 12, scale: 4 }),
+    differencePercentage: decimal("difference_percentage", { precision: 8, scale: 2 }),
+    /** insufficient_data | observed | directional | repeatable | confirmed */
+    evidenceQuality: varchar("evidence_quality", { length: 30 }).notNull(),
+    /** Bounded IDs of artifacts, publications, results, or learning signals supporting this observation */
+    evidenceEntityIds: jsonb("evidence_entity_ids").$type<Record<string, number[]>>().notNull().default({}),
+    measurementWindow: varchar("measurement_window", { length: 80 }),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("learning_observations_identity_uq").on(table.identityKey),
+    index("learning_observations_user_idx").on(table.userId),
+    index("learning_observations_dimension_idx").on(table.dimension),
+    index("learning_observations_type_idx").on(table.observationType),
+  ],
+);
+
+/**
+ * LearningProposal — durable optimization proposals grounded in learning observations.
+ * A proposal is NOT an applied production change.
+ * States: proposed | accepted | rejected | superseded | expired.
+ */
+export const learningProposals = pgTable(
+  "learning_proposals",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    observationId: integer("observation_id").references(() => learningObservations.id),
+    /** format_distribution | style_association | cost_efficiency | workflow_reliability */
+    proposalType: varchar("proposal_type", { length: 60 }).notNull(),
+    targetScope: varchar("target_scope", { length: 100 }).notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    rationale: text("rationale").notNull(),
+    expectedImpactHypothesis: text("expected_impact_hypothesis").notNull(),
+    /** insufficient_data | observed | directional | repeatable | confirmed */
+    evidenceQuality: varchar("evidence_quality", { length: 30 }).notNull(),
+    /** Summary snapshot: sample counts, candidate vs baseline values, source IDs */
+    evidenceSummary: jsonb("evidence_summary").$type<Record<string, unknown>>().notNull().default({}),
+    /** proposed | accepted | rejected | superseded | expired */
+    status: varchar("status", { length: 30 }).notNull().default("proposed"),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewedBy: integer("reviewed_by"),
+    reviewNotes: text("review_notes"),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("learning_proposals_identity_uq").on(table.identityKey),
+    index("learning_proposals_user_idx").on(table.userId),
+    index("learning_proposals_status_idx").on(table.status),
+    index("learning_proposals_type_idx").on(table.proposalType),
+  ],
+);
+
+export const insertLearningObservationSchema = createInsertSchema(learningObservations).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertLearningProposalSchema = createInsertSchema(learningProposals).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type LearningObservation = typeof learningObservations.$inferSelect;
+export type InsertLearningObservation = z.infer<typeof insertLearningObservationSchema>;
+export type LearningProposal = typeof learningProposals.$inferSelect;
+export type InsertLearningProposal = z.infer<typeof insertLearningProposalSchema>;
+
+export type EvidenceQuality = "insufficient_data" | "observed" | "directional" | "repeatable" | "confirmed";
+export type ProposalStatus = "proposed" | "accepted" | "rejected" | "superseded" | "expired";
+export type ProposalType = "format_distribution" | "style_association" | "cost_efficiency" | "workflow_reliability";
+export type LearningDimension = "content" | "distribution" | "style" | "production";
+
 // ── AGENT RUNTIME (Phase 22) ─────────────────────────────────────────────────
 // Durable agent execution identity. Agents never write domain tables; they
 // create AgentRun / AgentToolCall rows and invoke existing domain services.

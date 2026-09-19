@@ -29,4 +29,12 @@ export {
   type AnalyticsRefreshDeps,
 } from "./refresh";
 export { computeAnalyticsSummary, learningSummaryForContext } from "./summary";
+export {
+  evaluateEvidenceQuality,
+  extractObservationsAndProposals,
+  observationIdentityKey,
+  proposalIdentityKey,
+  MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL,
+  type ExtractionResult,
+} from "./proposals";
 export { createLearningRouter, type LearningApiDeps } from "./routes";

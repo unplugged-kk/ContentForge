@@ -1,9 +1,16 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
+  learningObservations,
+  learningProposals,
   learningSignals,
   performanceSignals,
+  type InsertLearningObservation,
+  type InsertLearningProposal,
+  type LearningObservation,
+  type LearningProposal,
   type LearningSignal,
   type PerformanceSignal,
+  type ProposalStatus,
 } from "@shared/schema";
 import { db as defaultDb } from "../../db";
 import type { ContentDatabase, JsonRecord } from "../storage";
@@ -72,6 +79,33 @@ export interface LearningStoragePort {
   listPublishedPublicationIdsForOwner(ownerId: number, limit: number): Promise<number[]>;
   listRecentPublishedPublicationIds(limit: number): Promise<number[]>;
   countSignalsByType(ownerId: number): Promise<Record<string, number>>;
+
+  insertLearningObservation(
+    row: InsertLearningObservation,
+  ): Promise<{ row: LearningObservation; created: boolean }>;
+  getLearningObservationForOwner(id: number, ownerId: number): Promise<LearningObservation | undefined>;
+  listLearningObservationsForOwner(
+    ownerId: number,
+    limit?: number,
+    filters?: { dimension?: string; observationType?: string },
+  ): Promise<LearningObservation[]>;
+
+  insertLearningProposal(
+    row: InsertLearningProposal,
+  ): Promise<{ row: LearningProposal; created: boolean }>;
+  getLearningProposalForOwner(id: number, ownerId: number): Promise<LearningProposal | undefined>;
+  listLearningProposalsForOwner(
+    ownerId: number,
+    limit?: number,
+    filters?: { status?: ProposalStatus; proposalType?: string },
+  ): Promise<LearningProposal[]>;
+  updateProposalStatus(
+    id: number,
+    ownerId: number,
+    status: ProposalStatus,
+    reviewedBy?: number,
+    notes?: string,
+  ): Promise<LearningProposal | undefined>;
 }
 
 export class DatabaseLearningStorage implements LearningStoragePort {
@@ -211,6 +245,111 @@ export class DatabaseLearningStorage implements LearningStoragePort {
     const out: Record<string, number> = {};
     for (const row of rows) out[row.signalType] = Number(row.c);
     return out;
+  }
+
+  async insertLearningObservation(
+    row: InsertLearningObservation,
+  ): Promise<{ row: LearningObservation; created: boolean }> {
+    const inserted = await this.database
+      .insert(learningObservations)
+      .values(row)
+      .onConflictDoNothing({ target: learningObservations.identityKey })
+      .returning();
+    if (inserted[0]) return { row: inserted[0], created: true };
+    const [existing] = await this.database
+      .select()
+      .from(learningObservations)
+      .where(eq(learningObservations.identityKey, row.identityKey))
+      .limit(1);
+    return { row: existing!, created: false };
+  }
+
+  async getLearningObservationForOwner(id: number, ownerId: number): Promise<LearningObservation | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(learningObservations)
+      .where(and(eq(learningObservations.id, id), eq(learningObservations.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
+  async listLearningObservationsForOwner(
+    ownerId: number,
+    limit = 50,
+    filters: { dimension?: string; observationType?: string } = {},
+  ): Promise<LearningObservation[]> {
+    const clauses = [eq(learningObservations.userId, ownerId)];
+    if (filters.dimension) clauses.push(eq(learningObservations.dimension, filters.dimension));
+    if (filters.observationType) clauses.push(eq(learningObservations.observationType, filters.observationType));
+    return this.database
+      .select()
+      .from(learningObservations)
+      .where(and(...clauses))
+      .orderBy(desc(learningObservations.id))
+      .limit(limit);
+  }
+
+  async insertLearningProposal(
+    row: InsertLearningProposal,
+  ): Promise<{ row: LearningProposal; created: boolean }> {
+    const inserted = await this.database
+      .insert(learningProposals)
+      .values(row)
+      .onConflictDoNothing({ target: learningProposals.identityKey })
+      .returning();
+    if (inserted[0]) return { row: inserted[0], created: true };
+    const [existing] = await this.database
+      .select()
+      .from(learningProposals)
+      .where(eq(learningProposals.identityKey, row.identityKey))
+      .limit(1);
+    return { row: existing!, created: false };
+  }
+
+  async getLearningProposalForOwner(id: number, ownerId: number): Promise<LearningProposal | undefined> {
+    const [row] = await this.database
+      .select()
+      .from(learningProposals)
+      .where(and(eq(learningProposals.id, id), eq(learningProposals.userId, ownerId)))
+      .limit(1);
+    return row;
+  }
+
+  async listLearningProposalsForOwner(
+    ownerId: number,
+    limit = 50,
+    filters: { status?: ProposalStatus; proposalType?: string } = {},
+  ): Promise<LearningProposal[]> {
+    const clauses = [eq(learningProposals.userId, ownerId)];
+    if (filters.status) clauses.push(eq(learningProposals.status, filters.status));
+    if (filters.proposalType) clauses.push(eq(learningProposals.proposalType, filters.proposalType));
+    return this.database
+      .select()
+      .from(learningProposals)
+      .where(and(...clauses))
+      .orderBy(desc(learningProposals.id))
+      .limit(limit);
+  }
+
+  async updateProposalStatus(
+    id: number,
+    ownerId: number,
+    status: ProposalStatus,
+    reviewedBy?: number,
+    notes?: string,
+  ): Promise<LearningProposal | undefined> {
+    const [updated] = await this.database
+      .update(learningProposals)
+      .set({
+        status,
+        reviewedAt: new Date(),
+        reviewedBy: reviewedBy ?? ownerId,
+        reviewNotes: notes ?? null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(learningProposals.id, id), eq(learningProposals.userId, ownerId)))
+      .returning();
+    return updated;
   }
 }
 

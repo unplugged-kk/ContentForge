@@ -65,12 +65,41 @@ export function humanizeConfidence(
 
   if (typeof confidence === "string") {
     const lower = confidence.toLowerCase();
-    if (lower === "high" || lower === "strong") return { label: "Strong signal", variant: "success" };
-    if (lower === "medium" || lower === "moderate") return { label: "Emerging pattern", variant: "warning" };
-    if (lower === "low" || lower === "weak") return { label: "Limited evidence", variant: "outline" };
+    if (lower === "confirmed" || lower === "repeatable" || lower === "high" || lower === "strong") {
+      return { label: "Strong signal", variant: "success" };
+    }
+    if (lower === "directional" || lower === "medium" || lower === "moderate") {
+      return { label: "Emerging pattern", variant: "warning" };
+    }
+    if (lower === "observed" || lower === "low" || lower === "weak") {
+      return { label: "Limited evidence", variant: "outline" };
+    }
   }
 
   return { label: "Insufficient data", variant: "secondary" };
+}
+
+/**
+ * Maps deterministic evidence quality to user-facing badges and descriptions.
+ */
+export function formatEvidenceQuality(quality?: string | null): {
+  label: string;
+  variant: "success" | "warning" | "outline" | "secondary";
+  sampleDescription: string;
+} {
+  switch (quality) {
+    case "confirmed":
+      return { label: "Confirmed", variant: "success", sampleDescription: ">20 verified items" };
+    case "repeatable":
+      return { label: "Repeatable", variant: "success", sampleDescription: "11–20 verified items" };
+    case "directional":
+      return { label: "Directional", variant: "warning", sampleDescription: "6–10 verified items" };
+    case "observed":
+      return { label: "Observed", variant: "outline", sampleDescription: "3–5 verified items" };
+    case "insufficient_data":
+    default:
+      return { label: "Insufficient Data", variant: "secondary", sampleDescription: "<3 items" };
+  }
 }
 
 /**

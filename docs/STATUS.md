@@ -3,6 +3,57 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 29.1 — Learning Foundation & Evidence-Backed Optimization
+
+**Status:** IMPLEMENTED (Autonomous prompt mutation: DEFERRED to Phase 29.2).
+
+First slice of Phase 29 learning architecture (*LEARN BEFORE YOU MUTATE*). Builds a durable, explainable, versioned learning foundation on PostgreSQL that answers: *"What happened, what evidence supports the observation, what changed, and what optimization candidate can be proposed?"*
+Adheres strictly to the paradigm: `Observe → Attribute → Learn → Propose`. Zero autonomous policy/prompt mutation in this phase. Full reference: `docs/phase-29-learning-architecture.md`.
+
+### Key Capabilities & Foundation Shipped
+- **Durable PostgreSQL Schema**:
+  - `learning_observations`: Stores empirical comparisons with dimension (`format`, `topic`, `timing`, `channel`), target scope, candidate vs comparison populations, baseline vs candidate metric values, difference percentage, evidence quality score, and evidence entity IDs (publication/result IDs).
+  - `learning_proposals`: Stores structured, human-reviewable optimization candidates with observation lineage, proposal type, title, rationale, expected impact hypothesis, evidence quality, review status (`proposed`, `accepted`, `dismissed`, `applied`), reviewer metadata, and review notes.
+- **Strict Evidence Qualification & Thresholds**:
+  - Deterministic evaluation: `<3` samples = `insufficient_data` (ineligible for proposals), `3..5` = `observed`, `6..10` = `directional`, `11..20` = `repeatable`, `>20` = `confirmed`.
+  - Zero fabricated zeroes: Missing or `not_available` metrics are never coerced to 0 or averaged into real numbers.
+  - Honest correlation language: Proposals formulate hypotheses ("Content published with format X observed Y% higher engagement across N samples; consider testing X"), never causal certainty.
+- **Deterministic Identity & Idempotency**:
+  - `observationIdentityKey` and `proposalIdentityKey` derived via SHA-256 over owner, dimension/type, scope, and measurement window.
+  - Multi-run extraction runs idempotently without duplicate observations or duplicate pending proposals.
+- **REST Endpoints & Background Processing**:
+  - `GET /api/learning/proposals`: Owner-scoped proposals listing with status and dimension filters.
+  - `GET /api/learning/proposals/:id`: Single proposal detail with linked observation.
+  - `POST /api/learning/proposals/:id/accept`: Human acceptance (updates status to `accepted`, does not mutate prompts/policies).
+  - `POST /api/learning/proposals/:id/reject`: Human dismissal (updates status to `dismissed`).
+  - `GET /api/learning/observations`: Owner-scoped empirical observations listing.
+  - `POST /api/learning/extract`: Owner-scoped synchronous pattern extraction trigger.
+  - Background job `learning.extract` registered with pg-boss (`registerLearningExtractJob`).
+- **3-Tier Insights Learning Surface**:
+  - **Proposed (Optimization Candidates)**: Actionable cards with title, rationale, expected impact hypothesis, and collapsible "Inspect Evidence" drawer revealing sample size, baseline/candidate values, percentage delta, and publication IDs. Action buttons for Accept and Dismiss with loading states, plus manual "Analyze Signals" trigger.
+  - **Learned (Inferred Patterns & Voice)**: Displays Writing Style Patterns and multi-sample Empirical Observations with evidence quality badges.
+  - **Observed (Measured Production Signals)**: Draft approval rate, publication delivery rate, format distribution, and platform performance coverage table without fabricated zeroes.
+- **Non-Goals & Deferred Capabilities**:
+  - Autonomous prompt rewriting: **DEFERRED to Phase 29.2**.
+  - Autonomous GenerationPolicy mutation: **DEFERRED to Phase 29.2**.
+  - Style-profile automated mutation: **DEFERRED to Phase 29.2**.
+  - Automatic provider switching or autonomous scheduling changes: **DEFERRED**.
+
+### Tests & Verification
+- TypeScript: `npm run check` — **clean (0 errors)**.
+- Production build: `npm run build` — **clean (2.45s build time)**.
+- Unit tests: **658/658 pass** (including 12/12 in `server/content/learning/proposals.test.ts`).
+- Database tests:
+  - `server/content/learning/proposals.dbtest.ts`: **3/3 pass** (idempotency, review lifecycle, real content/result extraction).
+  - `server/content/learning.dbtest.ts`: **11/11 pass**.
+  - `server/content/automation.dbtest.ts`: **14/14 pass**.
+  - `server/social/youtube.oauth.dbtest.ts`: **3/3 pass**.
+  - `server/research/migration.dbtest.ts`: **2/2 pass** (fresh bootstrap & historical upgrade paths on migration 0027).
+- Playwright E2E tests:
+  - `e2e/learning-proposals.e2e.spec.ts`: **5/5 pass** (renders 3 tiers, evidence drawer, human review accept, 0 Axe accessibility violations).
+  - `e2e/insights.e2e.spec.ts`: **11/11 pass** (full regression).
+  - `e2e/full-product-audit.e2e.spec.ts`: **70/70 pass** (full regression across all 7 canonical destinations).
+
 ## Phase 28.2H — Full Product UX Re-Audit + Responsive Polish
 
 **Status:** IMPLEMENTED.

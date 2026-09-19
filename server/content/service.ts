@@ -641,6 +641,66 @@ export async function enqueueAnalyticsRefreshJob(
   return !result.deduplicated;
 }
 
+export const LEARNING_EXTRACT_JOB_TYPE = "learning.extract";
+
+export const learningExtractPayloadSchema = z.object({
+  ownerId: z.number().int().positive(),
+});
+
+export type LearningExtractPayload = z.infer<typeof learningExtractPayloadSchema>;
+
+export function registerLearningExtractJob(
+  queueOverrides: Partial<JobQueueConfig> = {},
+): JobDefinition<LearningExtractPayload> | undefined {
+  if (hasJob(LEARNING_EXTRACT_JOB_TYPE)) return undefined;
+  const learningStore = learningStorage;
+  const database = db;
+
+  const definition: JobDefinition<LearningExtractPayload> = {
+    jobType: LEARNING_EXTRACT_JOB_TYPE,
+    description: "Extract empirical observations and optimization proposals (Phase 29.1)",
+    payloadSchema: learningExtractPayloadSchema,
+    queue: {
+      retryLimit: 2,
+      retryDelaySeconds: 60,
+      retryBackoff: true,
+      expireInSeconds: 10 * 60,
+      singletonSeconds: 60,
+      ...queueOverrides,
+    },
+    handler: async (payload, ctx) => {
+      const { extractObservationsAndProposals } = await import("./learning/proposals");
+      const result = await extractObservationsAndProposals(database, learningStore, payload.ownerId);
+      ctx.logger.info(
+        {
+          ownerId: payload.ownerId,
+          observationsCount: result.observations.length,
+          proposalsCount: result.proposals.length,
+          stats: result.stats,
+        },
+        "learning extraction complete",
+      );
+    },
+  };
+  registerJob(definition);
+  return definition;
+}
+
+export async function enqueueLearningExtractJob(
+  ownerId: number,
+  correlationId: string,
+): Promise<boolean> {
+  const { getJobRuntime } = await import("../jobs/bootstrap");
+  const window = hourWindow(new Date());
+  const result = await getJobRuntime().enqueue({
+    jobType: LEARNING_EXTRACT_JOB_TYPE,
+    payload: { ownerId },
+    correlationId,
+    idempotencyKey: `learning:extract:${ownerId}:${window.window}`,
+  });
+  return !result.deduplicated;
+}
+
 /** Idempotent: register everything the content lifecycle offers. */
 export function registerContentJobs(): void {
   registerBuiltinChannelAdapters();
@@ -654,6 +714,7 @@ export function registerContentJobs(): void {
   registerVideoRepurposeJob();
   registerAutomationRunJob();
   registerAnalyticsRefreshJob();
+  registerLearningExtractJob();
 }
 
 // ── Durable scheduler tick ────────────────────────────────────────────────────

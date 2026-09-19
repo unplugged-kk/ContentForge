@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 57, `expected 57 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 27, "all twenty-seven migrations recorded");
+      assert.equal(tables.length, 59, `expected 59 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 28, "all twenty-eight migrations recorded");
 
       for (const table of [
         "research_jobs",
@@ -116,6 +116,8 @@ describeDb("migration chain (db)", () => {
         "automation_runs",
         "learning_signals",
         "performance_signals",
+        "learning_observations",
+        "learning_proposals",
         "rss_sources",
         "agent_runs",
         "agent_tool_calls",
@@ -210,8 +212,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 57, `expected 57 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 27, "0003-0026 recorded after upgrade");
+      assert.equal(tables.length, 59, `expected 59 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), 28, "0003-0027 recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
@@ -220,6 +222,8 @@ describeDb("migration chain (db)", () => {
       assert.ok(tables.includes("automation_runs"), "0016 table created on the upgrade path");
       assert.ok(tables.includes("learning_signals"), "0017 table created on the upgrade path");
       assert.ok(tables.includes("performance_signals"), "0017 table created on the upgrade path");
+      assert.ok(tables.includes("learning_observations"), "0027 table created on the upgrade path");
+      assert.ok(tables.includes("learning_proposals"), "0027 table created on the upgrade path");
 
       const intentCol = await pool.query<{ column_name: string }>(
         `select column_name from information_schema.columns
