@@ -1,4 +1,4 @@
-import { Sparkles, Calendar, Lightbulb, LayoutTemplate, BarChart3, Settings, FileText, Search, Compass, Globe, Image, LogOut, Database, Zap, LayoutGrid, MessageSquare, Youtube, ListChecks, Bot, CaseSensitive, Quote } from "lucide-react";
+import { CalendarCheck, Sparkles, Database, Bot, Calendar, BarChart3, Settings, LogOut } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -7,7 +7,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -17,62 +16,74 @@ import {
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 
-const createItems = [
-  { title: "Agent Workspace", url: "/agent", icon: Bot },
-  { title: "Generate", url: "/", icon: Sparkles },
-  { title: "Post Formatter", url: "/formatter", icon: CaseSensitive },
-  { title: "Canned Responses", url: "/canned-responses", icon: Quote },
-  { title: "Chat → Post", url: "/chat", icon: MessageSquare },
-  { title: "YouTube → Post", url: "/youtube", icon: Youtube },
-  { title: "Hook Generator", url: "/hooks", icon: Zap },
-  { title: "Carousel Builder", url: "/carousel", icon: LayoutGrid },
-  { title: "AI Images", url: "/images", icon: Image },
-  { title: "Articles", url: "/articles", icon: FileText },
-  { title: "Templates", url: "/templates", icon: LayoutTemplate },
-];
+export interface NavItem {
+  title: string;
+  url: string;
+  icon: typeof CalendarCheck;
+}
 
-const discoverItems = [
-  { title: "Ingest", url: "/ingest", icon: Globe },
-  { title: "Discover", url: "/discover", icon: Compass },
-  { title: "Context Vault", url: "/vault", icon: Database },
-  { title: "References", url: "/references", icon: Search },
-  { title: "Ideas", url: "/ideas", icon: Lightbulb },
-];
-
-const manageItems = [
-  { title: "Today's queue", url: "/queue", icon: ListChecks },
-  { title: "Calendar", url: "/calendar", icon: Calendar },
-  { title: "Analytics", url: "/analytics", icon: BarChart3 },
-  { title: "AI Usage", url: "/ai-usage", icon: Bot },
+export const CANONICAL_NAV_ITEMS: NavItem[] = [
+  { title: "Today", url: "/today", icon: CalendarCheck },
+  { title: "Create", url: "/create", icon: Sparkles },
+  { title: "Sources", url: "/sources", icon: Database },
+  { title: "Agent", url: "/agent", icon: Bot },
+  { title: "Schedule", url: "/schedule", icon: Calendar },
+  { title: "Insights", url: "/insights", icon: BarChart3 },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
-function NavGroup({ label, items }: { label: string; items: typeof createItems }) {
-  const [location] = useLocation();
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{label}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {items.map((item) => {
-            const isActive = item.url === "/"
-              ? location === "/"
-              : location.startsWith(item.url);
-            return (
-              <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild isActive={isActive}>
-                  <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-")}`}>
-                    <item.icon className="h-4 w-4" />
-                    <span>{item.title}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          })}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
+/**
+ * Route-aware active navigation helper.
+ * Activates canonical destinations for exact, nested, and compatibility routes.
+ */
+export function isRouteActive(itemUrl: string, currentPath: string): boolean {
+  if (itemUrl === "/today") {
+    return currentPath === "/" || currentPath === "/today" || currentPath.startsWith("/today/");
+  }
+  if (itemUrl === "/create") {
+    if (currentPath === "/create" || currentPath.startsWith("/create/")) return true;
+    const legacyCreateRoutes = [
+      "/generate",
+      "/formatter",
+      "/hooks",
+      "/carousel",
+      "/images",
+      "/articles",
+      "/templates",
+      "/canned-responses",
+      "/chat",
+    ];
+    return legacyCreateRoutes.some((route) => currentPath === route || currentPath.startsWith(route + "/"));
+  }
+  if (itemUrl === "/sources") {
+    if (currentPath === "/sources" || currentPath.startsWith("/sources/")) return true;
+    const legacySourcesRoutes = [
+      "/ingest",
+      "/discover",
+      "/ideas",
+      "/vault",
+      "/references",
+      "/youtube",
+    ];
+    return legacySourcesRoutes.some((route) => currentPath === route || currentPath.startsWith(route + "/"));
+  }
+  if (itemUrl === "/agent") {
+    return currentPath === "/agent" || currentPath.startsWith("/agent/");
+  }
+  if (itemUrl === "/schedule") {
+    if (currentPath === "/schedule" || currentPath.startsWith("/schedule/")) return true;
+    const legacyScheduleRoutes = ["/queue", "/calendar"];
+    return legacyScheduleRoutes.some((route) => currentPath === route || currentPath.startsWith(route + "/"));
+  }
+  if (itemUrl === "/insights") {
+    if (currentPath === "/insights" || currentPath.startsWith("/insights/")) return true;
+    const legacyInsightsRoutes = ["/analytics", "/ai-usage"];
+    return legacyInsightsRoutes.some((route) => currentPath === route || currentPath.startsWith(route + "/"));
+  }
+  if (itemUrl === "/settings") {
+    return currentPath === "/settings" || currentPath.startsWith("/settings/");
+  }
+  return false;
 }
 
 interface SidebarUser {
@@ -84,7 +95,9 @@ interface SidebarUser {
 }
 
 export function AppSidebar({ user }: { user?: SidebarUser }) {
+  const [location] = useLocation();
   const { toast } = useToast();
+
   const logoutMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/auth/logout", {});
@@ -99,37 +112,80 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
   });
 
   const initials = user?.name
-    ? user.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
+    ? user.name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2)
     : "KK";
 
   return (
     <Sidebar>
       <SidebarHeader className="p-4">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary">
+        <Link href="/today" className="flex items-center gap-2" data-testid="link-app-home">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary shrink-0">
             <Sparkles className="h-4 w-4 text-primary-foreground" />
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold tracking-tight" data-testid="text-app-title">ContentForge</span>
-            <span className="text-[10px] text-muted-foreground leading-none">Content Creation Hub</span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-sm font-semibold tracking-tight truncate" data-testid="text-app-title">
+              ContentForge
+            </span>
+            <span className="text-[10px] text-muted-foreground leading-none truncate">
+              Content Operating System
+            </span>
           </div>
         </Link>
       </SidebarHeader>
+
       <SidebarContent>
-        <NavGroup label="Create" items={createItems} />
-        <NavGroup label="Research" items={discoverItems} />
-        <NavGroup label="Manage" items={manageItems} />
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {CANONICAL_NAV_ITEMS.map((item) => {
+                const isActive = isRouteActive(item.url, location);
+                const testId = `link-nav-${item.title.toLowerCase()}`;
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      tooltip={item.title}
+                    >
+                      <Link
+                        href={item.url}
+                        data-testid={testId}
+                        aria-label={item.title}
+                        aria-current={isActive ? "page" : undefined}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="truncate">{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
+
       <SidebarFooter className="p-3 border-t">
         <div className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-primary shrink-0 overflow-hidden">
-            {user?.avatar
-              ? <img src={user.avatar} alt={user.name} className="h-8 w-8 rounded-full object-cover" />
-              : initials}
+            {user?.avatar ? (
+              <img src={user.avatar} alt={user.name} className="h-8 w-8 rounded-full object-cover" />
+            ) : (
+              initials
+            )}
           </div>
           <div className="flex flex-col flex-1 min-w-0">
-            <span className="text-xs font-medium truncate" data-testid="text-user-name">{user?.name || "Kishore Kumar"}</span>
-            <span className="text-[10px] text-muted-foreground truncate" data-testid="text-user-title">{user?.title || "Infra Engineering Lead"}</span>
+            <span className="text-xs font-medium truncate" data-testid="text-user-name">
+              {user?.name || "Kishore Kumar"}
+            </span>
+            <span className="text-[10px] text-muted-foreground truncate" data-testid="text-user-title">
+              {user?.title || "Infra Engineering Lead"}
+            </span>
           </div>
           <Button
             variant="ghost"

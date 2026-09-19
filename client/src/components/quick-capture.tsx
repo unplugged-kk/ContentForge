@@ -61,7 +61,7 @@ export function QuickCapture() {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent data-testid="dialog-quick-capture">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Link2 className="h-4 w-4" /> Quick Capture

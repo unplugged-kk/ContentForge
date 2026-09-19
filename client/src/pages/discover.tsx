@@ -476,7 +476,9 @@ export default function DiscoverPage() {
       <div className="flex items-center gap-2 flex-wrap">
         <Filter className="h-4 w-4 text-muted-foreground" />
         <Select value={filterCategory} onValueChange={setFilterCategory}>
-          <SelectTrigger className="w-[160px]" data-testid="select-filter-category"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-[160px]" data-testid="select-filter-category" aria-label="Filter by category">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Categories</SelectItem>
             {Object.entries(categoryLabels).filter(([k]) => k !== "all").map(([k, v]) => (
@@ -485,7 +487,9 @@ export default function DiscoverPage() {
           </SelectContent>
         </Select>
         <Select value={filterSource} onValueChange={setFilterSource}>
-          <SelectTrigger className="w-[160px]" data-testid="select-filter-source"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-[160px]" data-testid="select-filter-source" aria-label="Filter by source">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Sources</SelectItem>
             {Object.entries(sourceTypeLabels).map(([k, v]) => (

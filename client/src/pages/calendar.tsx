@@ -39,7 +39,7 @@ function PlatformBadge({ platform }: { platform: string }) {
   );
 }
 
-export default function CalendarPage() {
+export default function CalendarPage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -150,11 +150,13 @@ export default function CalendarPage() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between p-4 border-b">
-        <div>
-          <h1 className="text-lg font-semibold" data-testid="text-calendar-title">Content Calendar</h1>
-          <p className="text-xs text-muted-foreground">Plan and schedule your content</p>
-        </div>
-        <div className="flex items-center gap-2">
+        {!hideHeader && (
+          <div>
+            <h1 className="text-lg font-semibold" data-testid="text-calendar-title">Content Calendar</h1>
+            <p className="text-xs text-muted-foreground">Plan and schedule your content</p>
+          </div>
+        )}
+        <div className="flex items-center gap-2 ml-auto">
           <Button
             variant="outline"
             size="sm"

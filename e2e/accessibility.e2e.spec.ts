@@ -1,7 +1,18 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
-const routes = ["/", "/queue", "/calendar", "/settings", "/agent"];
+const routes = [
+  "/",
+  "/today",
+  "/create",
+  "/sources",
+  "/agent",
+  "/schedule",
+  "/insights",
+  "/settings",
+  "/queue",
+  "/calendar",
+];
 
 for (const path of routes) {
   test(`axe: ${path} has 0 document-title/meta-viewport/button-name/label violations`, async ({ page }) => {
@@ -31,10 +42,22 @@ test("app shell exposes a nav landmark and a skip link", async ({ page }) => {
 });
 
 test("route titles are meaningful and change per route", async ({ page }) => {
-  await page.goto("/queue");
-  await expect(page).toHaveTitle(/ContentForge.*Queue/);
+  await page.goto("/today");
+  await expect(page).toHaveTitle(/ContentForge.*Today/);
+  await page.goto("/create");
+  await expect(page).toHaveTitle(/ContentForge.*Create/);
+  await page.goto("/sources");
+  await expect(page).toHaveTitle(/ContentForge.*Sources/);
+  await page.goto("/schedule");
+  await expect(page).toHaveTitle(/ContentForge.*Schedule/);
+  await page.goto("/insights");
+  await expect(page).toHaveTitle(/ContentForge.*Insights/);
   await page.goto("/settings");
   await expect(page).toHaveTitle(/ContentForge.*Settings/);
+  await page.goto("/agent");
+  await expect(page).toHaveTitle(/ContentForge.*Agent/);
+  await page.goto("/queue");
+  await expect(page).toHaveTitle(/ContentForge.*Queue/);
 });
 
 test("browser zoom is not disabled by the viewport meta tag", async ({ page }) => {

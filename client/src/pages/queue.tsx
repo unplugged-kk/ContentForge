@@ -43,7 +43,7 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
   return "outline";
 }
 
-export default function QueuePage() {
+export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
@@ -464,13 +464,17 @@ export default function QueuePage() {
   return (
     <div className="flex flex-col h-full overflow-auto">
       <div className="p-4 border-b">
-        <h1 className="text-lg font-semibold flex items-center gap-2" data-testid="text-queue-title">
-          <ListChecks className="h-5 w-5" />
-          Today's Queue
-        </h1>
-        <p className="text-xs text-muted-foreground mt-1">
-          Drafts from Discover → edit → mark ready → post to X when you approve.
-        </p>
+        {!hideHeader && (
+          <>
+            <h1 className="text-lg font-semibold flex items-center gap-2" data-testid="text-queue-title">
+              <ListChecks className="h-5 w-5" />
+              Today's Queue
+            </h1>
+            <p className="text-xs text-muted-foreground mt-1">
+              Drafts from Discover → edit → mark ready → post to X when you approve.
+            </p>
+          </>
+        )}
         <Alert className="mt-3 max-w-3xl" data-testid="alert-queue-x-compliance">
           <ShieldCheck className="h-4 w-4" />
           <AlertTitle className="text-sm">Publish on your terms</AlertTitle>

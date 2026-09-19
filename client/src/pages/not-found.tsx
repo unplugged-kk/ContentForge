@@ -15,8 +15,8 @@ export default function NotFound() {
           <p className="text-sm text-muted-foreground">
             The page you're looking for doesn't exist or has moved.
           </p>
-          <Button asChild data-testid="button-back-to-generate">
-            <Link href="/">Back to Generate</Link>
+          <Button asChild data-testid="button-back-to-today">
+            <Link href="/today">Back to Today</Link>
           </Button>
         </CardContent>
       </Card>

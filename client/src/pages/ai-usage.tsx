@@ -103,7 +103,7 @@ function CostTooltip({ active, payload, label }: any) {
   );
 }
 
-export default function AiUsagePage() {
+export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const [days, setDays] = useState("30");
 
   const { data, isLoading } = useQuery<DashboardData>({
@@ -114,10 +114,12 @@ export default function AiUsagePage() {
   if (isLoading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="p-4 border-b">
-          <h1 className="text-lg font-semibold" data-testid="text-ai-usage-title">AI Usage & Cost</h1>
-          <p className="text-xs text-muted-foreground">Token consumption and estimated spend</p>
-        </div>
+        {!hideHeader && (
+          <div className="p-4 border-b">
+            <h1 className="text-lg font-semibold" data-testid="text-ai-usage-title">AI Usage & Cost</h1>
+            <p className="text-xs text-muted-foreground">Token consumption and estimated spend</p>
+          </div>
+        )}
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {[1, 2, 3, 4].map((i) => (
@@ -137,15 +139,17 @@ export default function AiUsagePage() {
   const chartDays = d.daily.slice(-14);
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-4 border-b flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold flex items-center gap-2" data-testid="text-ai-usage-title">
-            <Bot className="h-5 w-5 text-purple-500" />
-            AI Usage & Cost
-          </h1>
-          <p className="text-xs text-muted-foreground">Estimated spend based on model pricing. Actual may vary by provider.</p>
-        </div>
+    <div className="flex flex-col h-full" data-testid="container-ai-usage">
+      <div className={`p-4 border-b flex items-center ${hideHeader ? "justify-end" : "justify-between"}`}>
+        {!hideHeader && (
+          <div>
+            <h1 className="text-lg font-semibold flex items-center gap-2" data-testid="text-ai-usage-title">
+              <Bot className="h-5 w-5 text-purple-500" />
+              AI Usage & Cost
+            </h1>
+            <p className="text-xs text-muted-foreground">Estimated spend based on model pricing. Actual may vary by provider.</p>
+          </div>
+        )}
         <Select value={days} onValueChange={setDays}>
           <SelectTrigger className="w-32 h-8 text-xs">
             <SelectValue />

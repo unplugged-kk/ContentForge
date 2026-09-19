@@ -1,14 +1,23 @@
 import { test, expect } from "@playwright/test";
 
-/** Logged-in smoke: each primary route renders its page chrome. */
+/** Logged-in smoke: canonical and compatibility routes render their page chrome. */
 const routes: { path: string; selector: string }[] = [
-  { path: "/", selector: '[data-testid="text-page-title"]' },
+  // Canonical routes
+  { path: "/", selector: '[data-testid="page-header-today"]' },
+  { path: "/today", selector: '[data-testid="page-header-today"]' },
+  { path: "/create", selector: '[data-testid="page-header-create"]' },
+  { path: "/sources", selector: '[data-testid="page-header-sources"]' },
   { path: "/agent", selector: '[data-testid="text-agent-workspace-title"]' },
+  { path: "/schedule", selector: '[data-testid="page-header-schedule"]' },
+  { path: "/insights", selector: '[data-testid="page-header-insights"]' },
+  { path: "/settings", selector: '[data-testid="text-settings-title"]' },
+
+  // Compatibility / legacy routes
+  { path: "/generate", selector: '[data-testid="text-page-title"]' },
   { path: "/calendar", selector: '[data-testid="text-calendar-title"]' },
   { path: "/ideas", selector: '[data-testid="text-ideas-title"]' },
   { path: "/templates", selector: '[data-testid="text-templates-title"]' },
   { path: "/analytics", selector: '[data-testid="text-analytics-title"]' },
-  { path: "/settings", selector: '[data-testid="text-settings-title"]' },
   { path: "/articles", selector: '[data-testid="text-articles-title"]' },
   { path: "/references", selector: '[data-testid="text-references-title"]' },
   { path: "/discover", selector: '[data-testid="text-discover-title"]' },
@@ -32,10 +41,26 @@ for (const { path, selector } of routes) {
   });
 }
 
-test("sidebar navigation: Discover link works", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator('[data-testid="text-page-title"]')).toBeVisible();
-  await page.locator('[data-testid="link-nav-discover"]').click();
-  await expect(page.locator('[data-testid="text-discover-title"]')).toBeVisible();
-});
+test("sidebar navigation: exactly 7 canonical links and navigation works", async ({ page }) => {
+  await page.goto("/today");
+  await expect(page.locator('[data-testid="page-header-today"]')).toBeVisible();
 
+  // Exactly 7 items in the primary navigation
+  const navLinks = page.locator('nav[aria-label="Primary"] a[data-testid^="link-nav-"]');
+  await expect(navLinks).toHaveCount(7);
+
+  // Navigate to Sources
+  await page.locator('[data-testid="link-nav-sources"]').click();
+  await expect(page.locator('[data-testid="page-header-sources"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/sources/);
+
+  // Navigate to Schedule
+  await page.locator('[data-testid="link-nav-schedule"]').click();
+  await expect(page.locator('[data-testid="page-header-schedule"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/schedule/);
+
+  // Navigate to Create
+  await page.locator('[data-testid="link-nav-create"]').click();
+  await expect(page.locator('[data-testid="page-header-create"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/create/);
+});

@@ -46,7 +46,7 @@ interface GenerationResult {
   model: string;
 }
 
-export default function GeneratePage() {
+export default function GeneratePage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [pillar, setPillar] = useState("");
@@ -193,12 +193,14 @@ export default function GeneratePage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-4 border-b">
-        <div>
-          <h1 className="text-lg font-semibold" data-testid="text-page-title">Generate Content</h1>
-          <p className="text-xs text-muted-foreground">AI-powered content creation for your personal brand</p>
+      {!hideHeader && (
+        <div className="flex items-center justify-between p-4 border-b">
+          <div>
+            <h1 className="text-lg font-semibold" data-testid="text-page-title">Generate Content</h1>
+            <p className="text-xs text-muted-foreground">AI-powered content creation for your personal brand</p>
+          </div>
         </div>
-      </div>
+      )}
       <div className="flex-1 overflow-auto">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
           <div className="space-y-4">

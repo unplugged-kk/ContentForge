@@ -2801,3 +2801,14 @@ baseline (titles, zoom, landmarks, skip link, labels). New shared components
 live under `client/src/components/ui-shared/`. No information-architecture
 change — that is 28.2B+.
 
+## Phase 28.2B — Canonical Information Architecture + Product Shell (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2B`) and
+`docs/ui-information-architecture.md`. Summary: established canonical 7-destination
+product navigation (Today, Create, Sources, Agent, Schedule, Insights, Settings),
+route hierarchy, backward-compatible legacy route mapping, route-aware active
+navigation, standardized `PageHeader` and `EmptyState` primitives, and full
+responsive Playwright + axe accessibility coverage (0 violations).
+Next phase is 28.2C (Create + Review workflow).
+
+

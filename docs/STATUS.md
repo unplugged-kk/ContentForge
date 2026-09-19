@@ -3,6 +3,101 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2B — Canonical Information Architecture + Product Shell
+
+**Status:** IMPLEMENTED.
+
+Second slice of UX roadmap (`docs/ux-audit/UX_ROADMAP.md` R09/R10/R16). Transforms
+ContentForge from 21 flat, clipped destinations into a coherent Content Operating
+System shell. Established canonical 7-destination architecture (`Today`, `Create`,
+`Sources`, `Agent`, `Schedule`, `Insights`, `Settings`), route-aware active navigation,
+standardized `PageHeader` & `EmptyState` primitives, backward-compatible legacy
+route mappings, and 100% test coverage with 0 axe violations.
+
+Full architectural reference: `docs/ui-information-architecture.md`.
+
+### Canonical Navigation Matrix
+
+| Destination | Route | Status | Notes |
+|---|---|---|---|
+| **Today** | `/today` | LIVE | Home/briefing surface. Real data from `/api/posts/queue/today`. Quick actions launchpad. |
+| **Create** | `/create` | LIVE | Unified creation workspace. Mode switcher for Post & Thread (embedded generator), Hooks, Carousel, Images, Articles, Templates, Formatter, Canned Responses, Chat. |
+| **Sources** | `/sources` | LIVE | Source material workspace. Sub-views bar for Discover, Ideas Bank, Ingest, Vault, References. Global Quick Capture action. |
+| **Agent** | `/agent` | LIVE | Canonical Agent workspace, run history, and guardrailed review cards. |
+| **Schedule** | `/schedule` | LIVE | Unified scheduling surface. Sub-views switcher toggles between Today's Queue and Content Calendar. |
+| **Insights** | `/insights` | LIVE | Consolidated analytics and AI usage/cost dashboard with tabbed view switcher. |
+| **Settings** | `/settings` | LIVE | Configuration for Connected Accounts, AI Provider, Pillars, and Brand Profile. |
+
+### Legacy Route Migration & Compatibility Matrix
+
+Every legacy route remains functional and backward-compatible (zero broken bookmarks, external links, or tests).
+
+| Legacy Route | Canonical Owner | Classification | Behavior & Compatibility Handling |
+|---|---|---|---|
+| `/` | Today | Redirect | Automatically redirects to `/today` (renders canonical Today shell). |
+| `/generate` | Create | Compatibility / Mode | Renders Post & Thread generator; activates `Create` in sidebar. |
+| `/formatter` | Create | Compatibility / Mode | Renders Post Formatter; activates `Create` in sidebar. |
+| `/hooks` | Create | Compatibility / Mode | Renders Hook Generator; activates `Create` in sidebar. |
+| `/carousel` | Create | Compatibility / Mode | Renders Carousel Builder; activates `Create` in sidebar. |
+| `/images` | Create | Compatibility / Mode | Renders AI Image Generation; activates `Create` in sidebar. |
+| `/articles` | Create | Compatibility / Mode | Renders X Articles Editor; activates `Create` in sidebar. |
+| `/templates` | Create | Compatibility / Mode | Renders Template Library; activates `Create` in sidebar. |
+| `/canned-responses` | Create | Compatibility / Mode | Renders Canned Responses; activates `Create` in sidebar. |
+| `/chat` | Create | Compatibility / Mode | Renders Chat → Post; activates `Create` in sidebar. |
+| `/ingest` | Sources | Compatibility / Subview | Renders Ingestion workspace; activates `Sources` in sidebar. |
+| `/discover` | Sources | Compatibility / Subview | Renders Idea Discovery; activates `Sources` in sidebar. |
+| `/ideas` | Sources | Compatibility / Subview | Renders Ideas Bank; activates `Sources` in sidebar. |
+| `/vault` | Sources | Compatibility / Subview | Renders Context Vault; activates `Sources` in sidebar. |
+| `/references` | Sources | Compatibility / Subview | Renders References & Source Analysis; activates `Sources` in sidebar. |
+| `/youtube` | Sources | Compatibility / Subview | Renders YouTube Ingest; activates `Sources` in sidebar. |
+| `/queue` | Schedule | Compatibility / Subview | Renders Today's Queue; activates `Schedule` in sidebar. |
+| `/calendar` | Schedule | Compatibility / Subview | Renders Content Calendar; activates `Schedule` in sidebar. |
+| `/analytics` | Insights | Compatibility / Subview | Renders Analytics Dashboard; activates `Insights` in sidebar. |
+| `/ai-usage` | Insights | Compatibility / Subview | Renders AI Usage & Spend; activates `Insights` in sidebar. |
+
+### UX Decision Records (ADRs)
+
+- **Decision 1:** The canonical product UI is organized around seven top-level destinations: `Today / Create / Sources / Agent / Schedule / Insights / Settings`.
+- **Decision 2:** The Artifact lifecycle remains the conceptual backend source of truth.
+- **Decision 3:** Legacy routes remain backward-compatible while being removed from primary navigation ("Navigation is consolidated before implementation is consolidated").
+- **Decision 4:** Specialized generators become modes/subviews under Create rather than separate products.
+- **Decision 5:** Queue and Calendar belong to Schedule.
+- **Decision 6:** Analytics and AI Usage belong to Insights.
+- **Decision 7:** Discover, Ingest, Ideas, Vault, References, and YouTube Ingestion belong to Sources.
+
+### Shared Component Foundation Reuse
+
+- `PageHeader` (`client/src/components/ui-shared/page-header.tsx`): Standardized header across all canonical destinations with product title, description, sticky backdrop, and action slot.
+- `EmptyState` (`client/src/components/ui-shared/empty-state.tsx`): Restrained, honest empty-state container with Lucide icon and CTA button.
+- `ErrorState` (`client/src/components/ui-shared/error-state.tsx`): Reused across Today, Queue, Calendar, Analytics, Discover, References, Vault, and Agent Workspace.
+- `StatusBadge` (`client/src/components/ui-shared/status-badge.tsx`): Reused for post and run statuses in Today and Agent Workspace.
+- `ConfirmDialog` (`client/src/components/ui-shared/confirm-dialog.tsx`): Preserved across 13 client deletion points.
+- `SchedulePicker` & `PublishPreview`: Preserved for post scheduling and publication preview guardrails.
+
+### Accessibility Evidence
+
+- **Axe Core Crawl:** 0 violations for `document-title`, `meta-viewport`, `button-name`, and `label` across `/`, `/today`, `/create`, `/sources`, `/agent`, `/schedule`, `/insights`, `/settings`, `/queue`, `/calendar`, and `/this-route-does-not-exist` (404).
+- **Landmarks & Skip Link:** `<nav aria-label="Primary">` wraps `AppSidebar`, `<main id="main-content">` wraps main content, and "Skip to main content" link is first focusable element.
+- **Select Trigger Labels:** Discovered and fixed missing `aria-label`s on filter select triggers in `discover.tsx` (`Filter by category`, `Filter by source`).
+- **Responsive Shell:** Tested and verified at 1440×900 (desktop), 820×1180 (tablet), and 390×844 (mobile) with zero horizontal scroll blowout.
+- **Route Titles:** Standardized per-route browser titles via centralized `getRouteTitle()` resolver (`ContentForge — Today`, `ContentForge — Create`, `ContentForge — Sources`, etc.).
+- **404 Recovery:** Honest copy and direct "Back to Today" button navigating to `/today`.
+
+### Tests
+
+- TypeScript: `npm run check` — clean (0 errors).
+- Production build: `npm run build` — clean (0 errors).
+- Unit: `DATABASE_URL=... npm run test:unit` — **587/587 pass** (8 new tests in `client/src/lib/navigation.test.ts` verifying `isRouteActive` across exact, nested, and legacy paths).
+- DB: `DATABASE_URL=... TEST_DATABASE_URL=... npm run test:db` — **264/266 pass** (the 2 pre-existing timing flakes in `automation.dbtest.ts` concurrent tick race and `researchRuntime.dbtest.ts` concurrency race are visible and documented, not regressions).
+- Browser/Playwright (`chromium` project): **68/68 pass**, 2 skipped (`deleting a reference requires confirmation` network sandboxing and OpenRouter `AI_TEXT_MODEL` 404; both pre-existing environment gaps).
+
+### Deferred (explicitly not started)
+
+28.2C (Create/review workflow), 28.2D (Agent Workspace full responsive redesign),
+28.2E (Sources/research UX), 28.2F (Today + Schedule consolidation), 28.2G
+(Insights learning signals), 28.2H (mobile/polish re-audit). TikTok and
+additional media providers remain deferred.
+
 ## Phase 28.2A — UX Foundation / Stop the Leaks
 
 **Status:** IMPLEMENTED.

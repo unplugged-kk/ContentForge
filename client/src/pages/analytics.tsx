@@ -53,7 +53,7 @@ type InsightsPayload = {
   pillarStats: Array<{ pillarId: number; pillarName: string; posts: number; avgEngagement: number }>;
 };
 
-export default function AnalyticsPage() {
+export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const { data: summary, isLoading, isError, refetch } = useQuery<AnalyticsSummary>({
     queryKey: ["/api/analytics/summary"],
   });
@@ -65,10 +65,12 @@ export default function AnalyticsPage() {
   if (isLoading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="p-4 border-b">
-          <h1 className="text-lg font-semibold">Analytics</h1>
-          <p className="text-xs text-muted-foreground">Track your content performance</p>
-        </div>
+        {!hideHeader && (
+          <div className="p-4 border-b">
+            <h1 className="text-lg font-semibold">Analytics</h1>
+            <p className="text-xs text-muted-foreground">Track your content performance</p>
+          </div>
+        )}
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {[1, 2, 3, 4].map((i) => (
@@ -90,10 +92,12 @@ export default function AnalyticsPage() {
   if (isError) {
     return (
       <div className="flex flex-col h-full">
-        <div className="p-4 border-b">
-          <h1 className="text-lg font-semibold">Analytics</h1>
-          <p className="text-xs text-muted-foreground">Track your content performance</p>
-        </div>
+        {!hideHeader && (
+          <div className="p-4 border-b">
+            <h1 className="text-lg font-semibold">Analytics</h1>
+            <p className="text-xs text-muted-foreground">Track your content performance</p>
+          </div>
+        )}
         <ErrorState
           title="Couldn't load analytics"
           description="Something went wrong while loading your analytics."
@@ -110,11 +114,13 @@ export default function AnalyticsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-4 border-b">
-        <h1 className="text-lg font-semibold" data-testid="text-analytics-title">Analytics</h1>
-        <p className="text-xs text-muted-foreground">Track your content performance</p>
-      </div>
+    <div className="flex flex-col h-full" data-testid="container-analytics">
+      {!hideHeader && (
+        <div className="p-4 border-b">
+          <h1 className="text-lg font-semibold" data-testid="text-analytics-title">Analytics</h1>
+          <p className="text-xs text-muted-foreground">Track your content performance</p>
+        </div>
+      )}
       <div className="flex-1 overflow-auto p-6 space-y-6">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Total Posts" value={stats.totalPosts} icon={BarChart3} />
