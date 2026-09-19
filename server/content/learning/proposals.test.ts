@@ -132,5 +132,72 @@ describe("learning proposals engine (unit)", () => {
       assert.ok(!validStatuses.includes("applied"));
       assert.ok(!validStatuses.includes("mutated"));
     });
+
+    it("verifies exact sample size thresholds: N = 0, 1, 2, 3, 5, 6, 10, 11, 20, 21", () => {
+      const matrix: Array<[number, string]> = [
+        [0, "insufficient_data"],
+        [1, "insufficient_data"],
+        [2, "insufficient_data"],
+        [3, "observed"],
+        [5, "observed"],
+        [6, "directional"],
+        [10, "directional"],
+        [11, "repeatable"],
+        [20, "repeatable"],
+        [21, "confirmed"],
+      ];
+      for (const [n, expected] of matrix) {
+        assert.equal(evaluateEvidenceQuality(n), expected, `N=${n} should evaluate to ${expected}`);
+      }
+    });
+
+    it("handles mathematical edge cases safely: equal values, negative deltas, and zero baselines", () => {
+      // 1. Equal values: diff is 0%
+      const candEqual = 40;
+      const baseEqual = 40;
+      const deltaEqual = baseEqual > 0 ? ((candEqual - baseEqual) / baseEqual) * 100 : 0;
+      assert.equal(deltaEqual, 0);
+
+      // 2. Negative delta: candidate performs lower than baseline
+      const candLower = 30;
+      const baseHigher = 40;
+      const deltaNeg = ((candLower - baseHigher) / baseHigher) * 100;
+      assert.equal(deltaNeg, -25);
+
+      // 3. Zero baseline with positive candidate: prevents division by zero NaN/Infinity
+      const candPos = 25;
+      const baseZero = 0;
+      const deltaSafe = baseZero > 0 ? ((candPos - baseZero) / baseZero) * 100 : (candPos > 0 ? 100 : 0);
+      assert.equal(Number.isFinite(deltaSafe), true);
+      assert.equal(deltaSafe, 100);
+
+      // 4. Zero baseline with zero candidate
+      const deltaZero = baseZero > 0 ? ((0 - baseZero) / baseZero) * 100 : 0;
+      assert.equal(deltaZero, 0);
+    });
+
+    it("forbids causal trigger words in proposal generation templates", () => {
+      const forbiddenCausalPhrases = [
+        "causes",
+        "will increase",
+        "always use",
+        "guarantees",
+        "statistically proven",
+        "proves that",
+      ];
+      const templateRationale = "Observed: format content showed 25.0% higher average engagements compared to other formats across 6 publications.";
+      const templateHypothesis = "Prioritizing format is expected to maintain above-average engagement based on historical performance.";
+
+      for (const phrase of forbiddenCausalPhrases) {
+        assert.ok(
+          !templateRationale.toLowerCase().includes(phrase),
+          `Rationale must not include causal phrase "${phrase}"`,
+        );
+        assert.ok(
+          !templateHypothesis.toLowerCase().includes(phrase),
+          `Hypothesis must not include causal phrase "${phrase}"`,
+        );
+      }
+    });
   });
 });

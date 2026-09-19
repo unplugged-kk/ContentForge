@@ -1,7 +1,14 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import pg from "pg";
 
-test.describe("ContentForge Phase 29.1 — Learning Foundation & Evidence-Backed Optimization", () => {
+async function csrfHeaders(request: APIRequestContext): Promise<Record<string, string>> {
+  const res = await request.get("/api/csrf-token");
+  const { csrfToken } = await res.json();
+  return { "X-CSRF-Token": csrfToken };
+}
+
+test.describe("ContentForge Phase 29.1 — Learning Foundation (Mocked UI Journeys)", () => {
   test.beforeEach(async ({ page }) => {
     // Mock standard style profiles
     await page.route("**/api/style/profiles", (route) => {
@@ -287,3 +294,221 @@ test.describe("ContentForge Phase 29.1 — Learning Foundation & Evidence-Backed
     expect(results.violations).toEqual([]);
   });
 });
+
+test.describe("ContentForge Phase 29.1 — Real Data Learning Loop (Unmocked E2E)", () => {
+  test("Journey E: Full end-to-end unmocked cycle from extraction to UI proposal acceptance", async ({
+    page,
+    request,
+  }) => {
+    // 1. Get authenticated user ID from session
+    const meRes = await request.get("/api/auth/me");
+    expect(meRes.ok()).toBeTruthy();
+    const me = await meRes.json();
+    const userId: number = me.id;
+    expect(userId).toBeGreaterThan(0);
+
+    const dbUrl =
+      process.env.DATABASE_URL || "postgresql://cfuser:cfpass@127.0.0.1:15433/cf_test";
+    const pool = new pg.Pool({ connectionString: dbUrl });
+
+    const runTag = `e2e_${Date.now()}`;
+    const createdPublicationIds: number[] = [];
+    const createdArtifactIds: number[] = [];
+    const createdScheduleIds: number[] = [];
+    let storyId: number | null = null;
+    let oppId: number | null = null;
+
+    try {
+      // 2. Seed real domain entities in PostgreSQL
+      // Story
+      const storyRes = await pool.query(
+        `INSERT INTO stories (user_id, title, insight_body, status)
+         VALUES ($1, $2, $3, 'ready') RETURNING id`,
+        [userId, `Story ${runTag}`, "Insight body for E2E learning test"]
+      );
+      storyId = storyRes.rows[0].id;
+
+      // Opportunity
+      const oppRes = await pool.query(
+        `INSERT INTO opportunities (user_id, story_id, concept, objective, channel, format, status)
+         VALUES ($1, $2, $3, $4, 'linkedin', 'carousel', 'selected') RETURNING id`,
+        [userId, storyId, `Opp ${runTag}`, "Drive engagement"]
+      );
+      oppId = oppRes.rows[0].id;
+
+      // Candidate: 3 carousel publications with likes = 50
+      for (let i = 1; i <= 3; i++) {
+        const artRes = await pool.query(
+          `INSERT INTO artifacts (user_id, opportunity_id, channel, format, payload, readiness)
+           VALUES ($1, $2, 'linkedin', 'carousel', $3, 'approved') RETURNING id`,
+          [userId, oppId, JSON.stringify({ text: `Carousel ${i} ${runTag}` })]
+        );
+        const artId = artRes.rows[0].id;
+        createdArtifactIds.push(artId);
+
+        const schedRes = await pool.query(
+          `INSERT INTO schedules (user_id, artifact_id, channel, start_at, status)
+           VALUES ($1, $2, 'linkedin', NOW(), 'active') RETURNING id`,
+          [userId, artId]
+        );
+        const schedId = schedRes.rows[0].id;
+        createdScheduleIds.push(schedId);
+
+        const occRes = await pool.query(
+          `INSERT INTO schedule_occurrences (schedule_id, occurrence_time, status)
+           VALUES ($1, NOW(), 'published') RETURNING id`,
+          [schedId]
+        );
+        const occId = occRes.rows[0].id;
+
+        const pubRes = await pool.query(
+          `INSERT INTO publications (user_id, schedule_id, occurrence_id, artifact_id, channel, state, idempotency_key, correlation_id)
+           VALUES ($1, $2, $3, $4, 'linkedin', 'published', $5, $6) RETURNING id`,
+          [userId, schedId, occId, artId, `pub:car:${artId}:${runTag}`, `corr-car-${artId}-${runTag}`]
+        );
+        const pubId = pubRes.rows[0].id;
+        createdPublicationIds.push(pubId);
+
+        await pool.query(
+          `INSERT INTO performance_signals (user_id, publication_id, artifact_id, channel, provider, external_id, metric, value, availability, observed_at, retrieved_at, measurement_window, normalization_version, provenance, identity_key)
+           VALUES ($1, $2, $3, 'linkedin', 'linkedin', $4, 'likes', 50, 'observed', NOW(), NOW(), 'all_time', 'performance.v1', '{}', $5)`,
+          [userId, pubId, artId, `ext-${pubId}`, `perf:${pubId}:likes:${runTag}`]
+        );
+      }
+
+      // Comparison: 3 post publications with likes = 20
+      for (let i = 1; i <= 3; i++) {
+        const artRes = await pool.query(
+          `INSERT INTO artifacts (user_id, opportunity_id, channel, format, payload, readiness)
+           VALUES ($1, $2, 'linkedin', 'post', $3, 'approved') RETURNING id`,
+          [userId, oppId, JSON.stringify({ text: `Post ${i} ${runTag}` })]
+        );
+        const artId = artRes.rows[0].id;
+        createdArtifactIds.push(artId);
+
+        const schedRes = await pool.query(
+          `INSERT INTO schedules (user_id, artifact_id, channel, start_at, status)
+           VALUES ($1, $2, 'linkedin', NOW(), 'active') RETURNING id`,
+          [userId, artId]
+        );
+        const schedId = schedRes.rows[0].id;
+        createdScheduleIds.push(schedId);
+
+        const occRes = await pool.query(
+          `INSERT INTO schedule_occurrences (schedule_id, occurrence_time, status)
+           VALUES ($1, NOW(), 'published') RETURNING id`,
+          [schedId]
+        );
+        const occId = occRes.rows[0].id;
+
+        const pubRes = await pool.query(
+          `INSERT INTO publications (user_id, schedule_id, occurrence_id, artifact_id, channel, state, idempotency_key, correlation_id)
+           VALUES ($1, $2, $3, $4, 'linkedin', 'published', $5, $6) RETURNING id`,
+          [userId, schedId, occId, artId, `pub:post:${artId}:${runTag}`, `corr-post-${artId}-${runTag}`]
+        );
+        const pubId = pubRes.rows[0].id;
+        createdPublicationIds.push(pubId);
+
+        await pool.query(
+          `INSERT INTO performance_signals (user_id, publication_id, artifact_id, channel, provider, external_id, metric, value, availability, observed_at, retrieved_at, measurement_window, normalization_version, provenance, identity_key)
+           VALUES ($1, $2, $3, 'linkedin', 'linkedin', $4, 'likes', 20, 'observed', NOW(), NOW(), 'all_time', 'performance.v1', '{}', $5)`,
+          [userId, pubId, artId, `ext-${pubId}`, `perf:${pubId}:likes:${runTag}`]
+        );
+      }
+
+      // 3. Trigger pattern extraction via real API endpoint
+      const headers = await csrfHeaders(request);
+      const extractRes = await request.post("/api/learning/extract", { headers });
+      if (!extractRes.ok()) {
+        console.error("Extract failed:", extractRes.status(), await extractRes.text());
+      }
+      expect(extractRes.ok()).toBeTruthy();
+      const extractResult = await extractRes.json();
+      expect(extractResult.stats.proposalsGenerated).toBeGreaterThanOrEqual(1);
+
+      // 4. Retrieve proposals via real API endpoint
+      const proposalsRes = await request.get("/api/learning/proposals");
+      expect(proposalsRes.ok()).toBeTruthy();
+      const proposals = await proposalsRes.json();
+      const targetProp = proposals.find(
+        (p: any) =>
+          p.proposalType === "format_distribution" &&
+          p.targetScope === "channel:linkedin;format:carousel" &&
+          p.status === "proposed"
+      );
+      expect(targetProp).toBeTruthy();
+      const propId = targetProp.id;
+
+      // 5. Navigate to UI learning surface without any route mocks
+      await page.goto("/insights?view=learning");
+      await expect(page.locator('[data-testid="container-learning-view"]')).toBeVisible();
+
+      // 6. Verify proposal card is rendered in the UI
+      const proposalCard = page.locator(`[data-testid="card-proposal-${propId}"]`);
+      await expect(proposalCard).toBeVisible();
+      await expect(proposalCard).toContainText("Consider increasing carousel content on linkedin");
+      await expect(proposalCard).toContainText("Observed");
+      await expect(proposalCard).toContainText("3–5 verified items");
+
+      // 7. Toggle evidence drawer and verify contents
+      const toggleBtn = page.locator(`[data-testid="button-toggle-evidence-${propId}"]`);
+      await toggleBtn.click();
+      const drawer = page.locator(`[data-testid="drawer-evidence-${propId}"]`);
+      await expect(drawer).toBeVisible();
+      await expect(drawer.locator('[data-testid="text-evidence-sample-count"]')).toContainText("3 publications");
+      await expect(drawer).toContainText("+150.0%");
+
+      // 8. Accept proposal via UI button
+      const acceptBtn = page.locator(`[data-testid="button-accept-proposal-${propId}"]`);
+      await acceptBtn.click();
+
+      // 9. Verify UI updates to show accepted status
+      await expect(page.locator(`[data-testid="badge-status-accepted-${propId}"]`)).toBeVisible();
+      await expect(page.locator(`[data-testid="badge-status-accepted-${propId}"]`)).toContainText(
+        "Accepted (Human Reviewed)"
+      );
+
+      // 10. Direct PostgreSQL verification
+      const dbPropRes = await pool.query(
+        "SELECT status, reviewed_by, reviewed_at FROM learning_proposals WHERE id = $1",
+        [propId]
+      );
+      expect(dbPropRes.rows[0].status).toBe("accepted");
+      expect(dbPropRes.rows[0].reviewed_by).toBe(userId);
+      expect(dbPropRes.rows[0].reviewed_at).not.toBeNull();
+
+      // Verify zero prompt or policy mutations occurred in the DB
+      const dbPolicyRes = await pool.query(
+        "SELECT id FROM generation_policies WHERE user_id = $1",
+        [userId]
+      );
+      expect(dbPolicyRes.rows.length).toBe(0);
+    } finally {
+      // Cleanup seeded data
+      if (pool) {
+        await pool.query("DELETE FROM learning_proposals WHERE user_id = $1", [userId]);
+        await pool.query("DELETE FROM learning_observations WHERE user_id = $1", [userId]);
+        await pool.query("DELETE FROM performance_signals WHERE user_id = $1", [userId]);
+        if (createdPublicationIds.length > 0) {
+          await pool.query("DELETE FROM results WHERE publication_id = ANY($1::int[])", [createdPublicationIds]);
+          await pool.query("DELETE FROM publications WHERE id = ANY($1::int[])", [createdPublicationIds]);
+        }
+        if (createdScheduleIds.length > 0) {
+          await pool.query("DELETE FROM schedule_occurrences WHERE schedule_id = ANY($1::int[])", [createdScheduleIds]);
+          await pool.query("DELETE FROM schedules WHERE id = ANY($1::int[])", [createdScheduleIds]);
+        }
+        if (createdArtifactIds.length > 0) {
+          await pool.query("DELETE FROM artifacts WHERE id = ANY($1::int[])", [createdArtifactIds]);
+        }
+        if (oppId) {
+          await pool.query("DELETE FROM opportunities WHERE id = $1", [oppId]);
+        }
+        if (storyId) {
+          await pool.query("DELETE FROM stories WHERE id = $1", [storyId]);
+        }
+        await pool.end();
+      }
+    }
+  });
+});
+

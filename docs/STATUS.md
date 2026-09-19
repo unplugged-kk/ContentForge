@@ -5,10 +5,10 @@ Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 
 ## Phase 29.1 — Learning Foundation & Evidence-Backed Optimization
 
-**Status:** IMPLEMENTED (Autonomous prompt mutation: DEFERRED to Phase 29.2).
+**Status:** IMPLEMENTED & HARDENING GATE VERIFIED (Autonomous prompt mutation: DEFERRED to Phase 29.2).
 
 First slice of Phase 29 learning architecture (*LEARN BEFORE YOU MUTATE*). Builds a durable, explainable, versioned learning foundation on PostgreSQL that answers: *"What happened, what evidence supports the observation, what changed, and what optimization candidate can be proposed?"*
-Adheres strictly to the paradigm: `Observe → Attribute → Learn → Propose`. Zero autonomous policy/prompt mutation in this phase. Full reference: `docs/phase-29-learning-architecture.md`.
+Adheres strictly to the paradigm: `Observe → Attribute → Learn → Propose`. Zero autonomous policy/prompt mutation in this phase. Full reference: `docs/phase-29-learning-architecture.md` and verification report: `docs/phase-29.1-verification.md`.
 
 ### Key Capabilities & Foundation Shipped
 - **Durable PostgreSQL Schema**:
@@ -18,6 +18,9 @@ Adheres strictly to the paradigm: `Observe → Attribute → Learn → Propose`.
   - Deterministic evaluation: `<3` samples = `insufficient_data` (ineligible for proposals), `3..5` = `observed`, `6..10` = `directional`, `11..20` = `repeatable`, `>20` = `confirmed`.
   - Zero fabricated zeroes: Missing or `not_available` metrics are never coerced to 0 or averaged into real numbers.
   - Honest correlation language: Proposals formulate hypotheses ("Content published with format X observed Y% higher engagement across N samples; consider testing X"), never causal certainty.
+  - Snapshot deduplication: Grouped by publication and metric, taking strictly latest snapshot by `observedAt` to eliminate multi-snapshot summation defects.
+  - Mutually exclusive baselines: Compares candidate against other formats on the channel (delta fixed at 0% when no alternative format exists).
+  - Delivery failure detection: Queries all completed dispatch attempts (`state IN ('published', 'failed')`) to calculate true workflow reliability.
 - **Deterministic Identity & Idempotency**:
   - `observationIdentityKey` and `proposalIdentityKey` derived via SHA-256 over owner, dimension/type, scope, and measurement window.
   - Multi-run extraction runs idempotently without duplicate observations or duplicate pending proposals.
@@ -41,16 +44,16 @@ Adheres strictly to the paradigm: `Observe → Attribute → Learn → Propose`.
 
 ### Tests & Verification
 - TypeScript: `npm run check` — **clean (0 errors)**.
-- Production build: `npm run build` — **clean (2.45s build time)**.
-- Unit tests: **658/658 pass** (including 12/12 in `server/content/learning/proposals.test.ts`).
-- Database tests:
-  - `server/content/learning/proposals.dbtest.ts`: **3/3 pass** (idempotency, review lifecycle, real content/result extraction).
+- Production build: `npm run build` — **clean (2.39s client, 93ms server)**.
+- Unit tests: **661/661 pass** (including 15/15 in `server/content/learning/proposals.test.ts`).
+- Database tests: **281/281 pass** (across 35 suites in `npm run test:db`):
+  - `server/content/learning/proposals.dbtest.ts`: **7/7 pass** (idempotency, review lifecycle, content/result extraction, tenant isolation, zero policy mutation, snapshot deduplication, workflow reliability delivery failures).
   - `server/content/learning.dbtest.ts`: **11/11 pass**.
   - `server/content/automation.dbtest.ts`: **14/14 pass**.
   - `server/social/youtube.oauth.dbtest.ts`: **3/3 pass**.
   - `server/research/migration.dbtest.ts`: **2/2 pass** (fresh bootstrap & historical upgrade paths on migration 0027).
 - Playwright E2E tests:
-  - `e2e/learning-proposals.e2e.spec.ts`: **5/5 pass** (renders 3 tiers, evidence drawer, human review accept, 0 Axe accessibility violations).
+  - `e2e/learning-proposals.e2e.spec.ts`: **6/6 pass** (renders 3 tiers, evidence drawer, human review accept, 0 Axe accessibility violations, plus Journey E unmocked live DB loop).
   - `e2e/insights.e2e.spec.ts`: **11/11 pass** (full regression).
   - `e2e/full-product-audit.e2e.spec.ts`: **70/70 pass** (full regression across all 7 canonical destinations).
 

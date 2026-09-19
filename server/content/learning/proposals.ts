@@ -126,7 +126,7 @@ export async function extractObservationsAndProposals(
     artifactMap.set(a.id, { channel: a.channel, format: a.format });
   }
 
-  // Fetch performance signals for these publications
+  // Fetch performance signals for these publications with owner and publication scoping
   const perfRows =
     pubIds.length === 0
       ? []
@@ -139,22 +139,39 @@ export async function extractObservationsAndProposals(
             metric: performanceSignals.metric,
             value: performanceSignals.value,
             availability: performanceSignals.availability,
+            observedAt: performanceSignals.observedAt,
           })
           .from(performanceSignals)
-          .where(eq(performanceSignals.userId, ownerId));
+          .where(and(eq(performanceSignals.userId, ownerId), inArray(performanceSignals.publicationId, pubIds)));
 
-  // Build per-publication metric totals
-  const pubMetricsMap = new Map<number, { engagements: number; impressions: number | null }>();
+  // Deduplicate performance snapshots: keep only the latest snapshot per (publicationId, metric)
+  const latestMetricMap = new Map<string, { metric: string; value: number; observedAt: Date }>();
   for (const row of perfRows) {
     if (row.availability !== "observed" || row.value === null) continue;
-    const cur = pubMetricsMap.get(row.publicationId) ?? { engagements: 0, impressions: null };
-    const numVal = Number(row.value) || 0;
-    if (row.metric === "impressions" || row.metric === "views") {
-      cur.impressions = (cur.impressions ?? 0) + numVal;
-    } else if (["likes", "shares", "comments", "clicks", "engagements"].includes(row.metric)) {
-      cur.engagements += numVal;
+    const key = `${row.publicationId}:${row.metric}`;
+    const existing = latestMetricMap.get(key);
+    const rowObsAt = row.observedAt instanceof Date ? row.observedAt : new Date(row.observedAt);
+    if (!existing || rowObsAt.getTime() > existing.observedAt.getTime()) {
+      latestMetricMap.set(key, {
+        metric: row.metric,
+        value: Number(row.value) || 0,
+        observedAt: rowObsAt,
+      });
     }
-    pubMetricsMap.set(row.publicationId, cur);
+  }
+
+  // Build per-publication metric totals from verified latest snapshots
+  const pubMetricsMap = new Map<number, { engagements: number; impressions: number | null; hasMetrics: boolean }>();
+  for (const [key, metricEntry] of Array.from(latestMetricMap.entries())) {
+    const pubId = Number(key.split(":")[0]);
+    const cur = pubMetricsMap.get(pubId) ?? { engagements: 0, impressions: null, hasMetrics: false };
+    cur.hasMetrics = true;
+    if (metricEntry.metric === "impressions" || metricEntry.metric === "views") {
+      cur.impressions = (cur.impressions ?? 0) + metricEntry.value;
+    } else if (["likes", "shares", "comments", "clicks", "engagements", "saves", "replies"].includes(metricEntry.metric)) {
+      cur.engagements += metricEntry.value;
+    }
+    pubMetricsMap.set(pubId, cur);
   }
 
   // Group publications by (channel, format)
@@ -188,7 +205,7 @@ export async function extractObservationsAndProposals(
     cur.artIds.push(p.artifactId);
 
     const m = pubMetricsMap.get(p.id);
-    if (m) {
+    if (m && m.hasMetrics) {
       cur.totalEngagements += m.engagements;
       if (m.impressions !== null) {
         cur.totalImpressions = (cur.totalImpressions ?? 0) + m.impressions;
@@ -199,7 +216,7 @@ export async function extractObservationsAndProposals(
 
     const chTotal = channelTotals.get(p.channel) ?? { totalEngagements: 0, totalPubs: 0, measuredPubs: 0 };
     chTotal.totalPubs += 1;
-    if (m) {
+    if (m && m.hasMetrics) {
       chTotal.totalEngagements += m.engagements;
       chTotal.measuredPubs += 1;
     }
@@ -209,16 +226,55 @@ export async function extractObservationsAndProposals(
   // --- DIMENSION 1: Content & Distribution Patterns ---
   for (const [key, group] of Array.from(channelFormatGroups.entries())) {
     const chTotal = channelTotals.get(group.channel);
-    if (!chTotal || chTotal.totalPubs < 3) continue;
+    if (!chTotal || chTotal.measuredPubs < MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL) continue;
 
-    const sampleCount = group.pubIds.length;
+    // The true unit of analysis for performance is MEASURED publications
+    const sampleCount = group.measuredCount;
+    if (sampleCount < MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL) continue;
+
     const quality = evaluateEvidenceQuality(sampleCount);
+    const candidateAvg = group.totalEngagements / sampleCount;
 
-    // Compute candidate engagement per post vs channel average
-    const candidateAvg = group.measuredCount > 0 ? group.totalEngagements / group.measuredCount : group.totalEngagements / sampleCount;
-    const baselineAvg = chTotal.measuredPubs > 0 ? chTotal.totalEngagements / chTotal.measuredPubs : chTotal.totalEngagements / chTotal.totalPubs;
+    // Baseline calculation: mutually exclusive comparison against other formats on the channel
+    const otherMeasured = chTotal.measuredPubs - group.measuredCount;
+    const otherEngagements = chTotal.totalEngagements - group.totalEngagements;
 
-    const diffPct = baselineAvg > 0 ? ((candidateAvg - baselineAvg) / baselineAvg) * 100 : 0;
+    let baselineAvg = 0;
+    let comparisonPopulation: Record<string, unknown> = {};
+
+    if (otherMeasured >= MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL) {
+      // Clean mutually exclusive baseline: other formats on this channel
+      baselineAvg = otherEngagements / otherMeasured;
+      comparisonPopulation = {
+        channel: group.channel,
+        baseline: "other_channel_formats",
+        sampleCount: otherMeasured,
+        measuredCount: otherMeasured,
+      };
+    } else if (chTotal.measuredPubs > group.measuredCount) {
+      // Fallback benchmark: overall channel baseline (excluding self-only comparison)
+      baselineAvg = chTotal.totalEngagements / chTotal.measuredPubs;
+      comparisonPopulation = {
+        channel: group.channel,
+        baseline: "all_channel_formats",
+        sampleCount: chTotal.totalPubs,
+        measuredCount: chTotal.measuredPubs,
+      };
+    } else {
+      // 100% of posts on this channel are this format: comparison baseline is channel average, diffPct = 0 (no proposal)
+      baselineAvg = candidateAvg;
+      comparisonPopulation = {
+        channel: group.channel,
+        baseline: "all_channel_formats",
+        sampleCount: chTotal.totalPubs,
+        measuredCount: chTotal.measuredPubs,
+      };
+    }
+
+    const diffPct =
+      otherMeasured >= MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL || chTotal.measuredPubs > group.measuredCount
+        ? (baselineAvg > 0 ? ((candidateAvg - baselineAvg) / baselineAvg) * 100 : (candidateAvg > 0 ? 100 : 0))
+        : 0;
 
     const obsIdentity = observationIdentityKey(
       ownerId,
@@ -239,20 +295,15 @@ export async function extractObservationsAndProposals(
         sampleCount,
         measuredCount: group.measuredCount,
       },
-      comparisonPopulation: {
-        channel: group.channel,
-        baseline: "all_channel_formats",
-        sampleCount: chTotal.totalPubs,
-        measuredCount: chTotal.measuredPubs,
-      },
+      comparisonPopulation,
       metricName: "engagements_per_post",
       candidateValue: candidateAvg.toFixed(4),
       comparisonValue: baselineAvg.toFixed(4),
       differencePercentage: diffPct.toFixed(2),
       evidenceQuality: quality,
       evidenceEntityIds: {
-        publicationIds: group.pubIds.slice(0, 20),
-        artifactIds: group.artIds.slice(0, 20),
+        publicationIds: Array.from(new Set(group.pubIds)).slice(0, 20),
+        artifactIds: Array.from(new Set(group.artIds)).slice(0, 20),
       },
       measurementWindow: "all_time",
       identityKey: obsIdentity,
@@ -284,8 +335,8 @@ export async function extractObservationsAndProposals(
           candidateValue: candidateAvg.toFixed(2),
           baselineValue: baselineAvg.toFixed(2),
           differencePercentage: diffPct.toFixed(1),
-          publicationIds: group.pubIds.slice(0, 10),
-          artifactIds: group.artIds.slice(0, 10),
+          publicationIds: Array.from(new Set(group.pubIds)).slice(0, 10),
+          artifactIds: Array.from(new Set(group.artIds)).slice(0, 10),
         },
         status: "proposed",
         identityKey: propIdentity,
@@ -356,7 +407,7 @@ export async function extractObservationsAndProposals(
       comparisonValue: (styleProfilesList.length > 0 ? (styleProfilesList.reduce((acc, p) => acc + (p.sampleCount ?? 0), 0) / styleProfilesList.length) : sampleCount).toFixed(4),
       differencePercentage: "0.00",
       evidenceQuality: quality,
-      evidenceEntityIds: {},
+      evidenceEntityIds: { styleProfileIds: [sp.id] },
       measurementWindow: "all_time",
       identityKey: obsIdentity,
     };
@@ -397,9 +448,25 @@ export async function extractObservationsAndProposals(
   }
 
   // --- DIMENSION 3: Workflow & Publication Reliability ---
-  if (pubIds.length >= MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL) {
+  // Query all attempted delivery dispatches (both published and failed)
+  const attemptedPubs = await db
+    .select({
+      id: publications.id,
+      channel: publications.channel,
+      state: publications.state,
+    })
+    .from(publications)
+    .where(
+      and(
+        eq(publications.userId, ownerId),
+        inArray(publications.state, ["published", "failed"]),
+      ),
+    );
+
+  if (attemptedPubs.length >= MINIMUM_SAMPLE_SIZE_FOR_PROPOSAL) {
+    const attemptedPubIds = attemptedPubs.map((p) => p.id);
     const pubChannelMap = new Map<number, string>();
-    for (const p of ownerPubs) {
+    for (const p of attemptedPubs) {
       pubChannelMap.set(p.id, p.channel);
     }
 
@@ -409,17 +476,26 @@ export async function extractObservationsAndProposals(
         outcome: results.outcome,
       })
       .from(results)
-      .where(inArray(results.publicationId, pubIds));
+      .where(inArray(results.publicationId, attemptedPubIds));
 
-    // Group results by channel
-    const channelResults = new Map<string, { total: number; successful: number; failed: number }>();
+    const resultMap = new Map<number, string>();
     for (const r of ownerResults) {
-      const channel = pubChannelMap.get(r.publicationId) ?? "unknown";
-      const cur = channelResults.get(channel) ?? { total: 0, successful: 0, failed: 0 };
+      resultMap.set(r.publicationId, r.outcome);
+    }
+
+    // Group dispatches by channel
+    const channelResults = new Map<string, { total: number; successful: number; failed: number; pubIds: number[] }>();
+    for (const p of attemptedPubs) {
+      const cur = channelResults.get(p.channel) ?? { total: 0, successful: 0, failed: 0, pubIds: [] };
       cur.total += 1;
-      if (r.outcome === "published") cur.successful += 1;
-      else if (r.outcome === "failed") cur.failed += 1;
-      channelResults.set(channel, cur);
+      cur.pubIds.push(p.id);
+      const outcome = resultMap.get(p.id) ?? p.state;
+      if (outcome === "published") {
+        cur.successful += 1;
+      } else if (outcome === "failed") {
+        cur.failed += 1;
+      }
+      channelResults.set(p.channel, cur);
     }
 
     for (const [channel, stats] of Array.from(channelResults.entries())) {
@@ -455,7 +531,9 @@ export async function extractObservationsAndProposals(
         comparisonValue: "0.0000",
         differencePercentage: failureRate.toFixed(2),
         evidenceQuality: quality,
-        evidenceEntityIds: {},
+        evidenceEntityIds: {
+          publicationIds: Array.from(new Set(stats.pubIds)).slice(0, 20),
+        },
         measurementWindow: "all_time",
         identityKey: obsIdentity,
       };
@@ -485,6 +563,7 @@ export async function extractObservationsAndProposals(
             totalDispatches: stats.total,
             failedDispatches: stats.failed,
             failureRate: `${failureRate.toFixed(1)}%`,
+            publicationIds: Array.from(new Set(stats.pubIds)).slice(0, 10),
           },
           status: "proposed",
           identityKey: propIdentity,
