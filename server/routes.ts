@@ -1908,10 +1908,16 @@ Each tweet under ${charLimit} characters.` },
       );
     } catch (err: any) {
       const message = typeof err?.message === "string" ? err.message : "exchange_failed";
+      const { redactYouTubeSecrets } = await import("./social/youtube");
+      console.error("[youtube-oauth] callback failed:", redactYouTubeSecrets(message));
       if (message.includes("BLOCKED — Google OAuth")) {
         return fail("client_unavailable");
       }
       if (/refresh token/i.test(message)) return fail("missing_refresh_token");
+      if (/no channel/i.test(message)) return fail("no_youtube_channel");
+      if (/code exchange failed/i.test(message)) return fail("code_exchange_failed");
+      if (/ENCRYPTION_KEY|SESSION_SECRET|encrypt/i.test(message)) return fail("credential_store_failed");
+      if (/channel discovery failed/i.test(message)) return fail("channel_discovery_failed");
       return fail("exchange_failed");
     }
   });

@@ -1108,10 +1108,14 @@ VideoTemplate revisions; editor; auto-publish.
 ## Phase 28.1 / 28.1B — YouTube publishing + OAuth
 
 **Status:** OAuth onboarding + adapter IMPLEMENTED. Live E2E **BLOCKED —
-`redirect_uri_mismatch`**: register
-`http://localhost:5050/api/social/youtube/callback` (and/or `:5000` variant)
-on the Google OAuth Web client. Real YouTube uploads this slice: **0**.
-Cert key reserved: `phase28.1-youtube-certification-v1`.
+`no_youtube_channel`**: Google consent + code exchange succeeded, but
+`channels.list?mine=true` returned no channel for the authorized account.
+Real YouTube uploads this slice: **0**. Cert key reserved:
+`phase28.1-youtube-certification-v1`.
+
+Unblock by creating a YouTube channel on that Google account (or connecting
+an account that already has one), then re-run Connect YouTube +
+`script/publish-certify-youtube.ts`.
 
 **Architecture.** Same `Artifact → Publication → ChannelAdapter → Result`.
 `createYouTubeChannelAdapter()` supports `video` only. Transport in
@@ -1131,8 +1135,8 @@ Status: `publicationReady` only when client + refresh + scopes + channel.
 did not. TikTok not started. No fal/ElevenLabs generation spend (cert may
 GET-rehydrate existing fal bytes only).
 
-**Deferred:** live cert after Console redirect URI; TikTok; Threads live cert;
-YouTube analytics.
+**Deferred:** live cert after YouTube channel exists on the OAuth account;
+TikTok; Threads live cert; YouTube analytics.
 
 ## Phase 27.3 — Pluggable Media Provider Platform (done)
 

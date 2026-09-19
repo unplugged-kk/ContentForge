@@ -5,22 +5,18 @@ Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 
 ## Phase 28.1 / 28.1B — YouTube ChannelAdapter + OAuth
 
-**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED — Google OAuth
-`redirect_uri_mismatch`.
+**Status:** PARTIALLY IMPLEMENTED / LIVE BLOCKED —
+`no_youtube_channel`.
 
-OAuth onboarding code is complete (offline scopes, CSRF state, encrypted
-refresh on `connected_accounts`, channel discovery, status readiness,
-Settings Connect YouTube, cert script). Live consent failed because the
-authorized redirect URI is not registered for the Google OAuth client:
+OAuth onboarding works end-to-end (redirect URI registered; Google consent
+granted for `youtube.upload` + `youtube.readonly`). Code exchange succeeded,
+but `channels.list?mine=true` returned **no channel** for the authorized
+Google account. ContentForge therefore did not persist credentials or mark
+`publicationReady`. **Real YouTube uploads: 0.**
 
-`http://localhost:5050/api/social/youtube/callback`
-
-(App cannot bind macOS-reserved `:5000`; use `:5050` or free `:5000` and
-register the matching URI.) Also register
-`http://localhost:5000/api/social/youtube/callback` if serving on 5000.
-
-Until that Console prerequisite is fixed, no refresh token and **zero** real
-YouTube uploads. Do not fake certification.
+Unblock: create a YouTube channel on the Google account used for Connect
+YouTube (or authorize an account that already has one), then reconnect and
+run `script/publish-certify-youtube.ts` once.
 
 Google OAuth client (`GOOGLE_CLIENT_ID` / `SECRET`) is configured. Phase 28.1B
 adds server-side offline OAuth (`access_type=offline`, CSRF `state`), encrypted
@@ -55,11 +51,24 @@ cert script (`script/publish-certify-youtube.ts`, key
 - Exactly one private upload; idempotent cert key
   `phase28.1-youtube-certification-v1`
 - Evidence: `.scratch/publish-cert-youtube-evidence.json`
-- **Real uploads performed this phase: 0** (blocked on redirect URI)
+- **Real uploads performed this phase: 0** (blocked: authorized Google account
+  has no YouTube channel)
+
+### Latest live attempt (verification)
+
+| Check | Result |
+| --- | --- |
+| `GOOGLE_CLIENT_ID` / `SECRET` | present |
+| Redirect URI | `http://localhost:5050/api/social/youtube/callback` accepted |
+| Google consent | Allow granted |
+| Refresh token persist | not reached (aborted after empty `channels.list`) |
+| `GET /api/social/youtube/status` | `publicationReady=false` |
+| VideoAsset 688 | present on e2e DB (`ready`, video/mp4) |
+| Cert script | not run (status not ready) |
 
 ### Not done / deferred
 
-- Live publish until Google Console redirect URI is registered.
+- Live publish until the OAuth Google account has a YouTube channel.
 - TikTok adapter.
 - Threads live re-certification.
 - YouTube analytics / playlists / Shorts-specific UX.

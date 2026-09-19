@@ -124,5 +124,10 @@ Without OAuth refresh credential:
 
 If Google returns `redirect_uri_mismatch`, register the exact
 `YOUTUBE_CALLBACK_URL` (or derived URI) on the OAuth Web client in Google
-Cloud Console before retrying Connect YouTube. Do not claim live certification
-from unit doubles alone.
+Cloud Console before retrying Connect YouTube.
+
+If callback redirects with `reason=no_youtube_channel`, the Google account has
+no YouTube channel yet — create one at YouTube (or authorize a different
+account that already has a channel), then reconnect.
+
+Do not claim live certification from unit doubles alone.
