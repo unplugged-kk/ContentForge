@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   Globe, FileText, User, Image, Loader2, ExternalLink, Bookmark, BookmarkCheck,
@@ -59,6 +60,7 @@ export default function IngestPage() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [showStyleSaveDialog, setShowStyleSaveDialog] = useState(false);
   const [styleName, setStyleName] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [, navigate] = useLocation();
 
@@ -140,6 +142,10 @@ export default function IngestPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/references"] });
       setSelectedRef(null);
       toast({ title: "Reference deleted" });
+      setPendingDeleteId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -363,10 +369,10 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
               )}
             </div>
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" onClick={() => bookmarkMutation.mutate(selectedRef.id)} data-testid="button-bookmark-active">
+              <Button variant="ghost" size="icon" onClick={() => bookmarkMutation.mutate(selectedRef.id)} aria-label={selectedRef.isBookmarked ? "Remove bookmark" : "Bookmark reference"} data-testid="button-bookmark-active">
                 {selectedRef.isBookmarked ? <BookmarkCheck className="h-4 w-4 text-primary" /> : <Bookmark className="h-4 w-4" />}
               </Button>
-              <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(selectedRef.id)} data-testid="button-delete-active">
+              <Button variant="ghost" size="icon" onClick={() => setPendingDeleteId(selectedRef.id)} data-testid="button-delete-active" aria-label="Delete reference">
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>
@@ -669,7 +675,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                     ))}
                     <div className="ml-auto flex items-center gap-1">
                       {ref.isBookmarked && <BookmarkCheck className="h-3 w-3 text-primary" />}
-                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(ref.id); }} data-testid={`button-delete-ref-${ref.id}`}>
+                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setPendingDeleteId(ref.id); }} data-testid={`button-delete-ref-${ref.id}`} aria-label="Delete reference">
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
@@ -705,6 +711,17 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete reference?"
+        description="This will permanently remove the reference."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS } from "@/lib/constants";
@@ -21,6 +22,7 @@ export default function IdeasPage() {
   const [newTitle, setNewTitle] = useState("");
   const [newNotes, setNewNotes] = useState("");
   const [newPillar, setNewPillar] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   const { data: ideas = [], isLoading } = useQuery<Idea[]>({
     queryKey: ["/api/ideas"],
@@ -54,7 +56,11 @@ export default function IdeasPage() {
     },
     onSuccess: () => {
       toast({ title: "Idea deleted" });
+      setPendingDeleteId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -126,7 +132,8 @@ export default function IdeasPage() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 shrink-0"
-                      onClick={() => deleteMutation.mutate(idea.id)}
+                      onClick={() => setPendingDeleteId(idea.id)}
+                      aria-label="Delete idea"
                       data-testid={`button-delete-idea-${idea.id}`}
                     >
                       <Trash2 className="h-3 w-3" />
@@ -214,6 +221,17 @@ export default function IdeasPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete idea?"
+        description="This will permanently remove the idea."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

@@ -8,11 +8,71 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles, Eye } from "lucide-react";
 import { SiX, SiThreads, SiLinkedin, SiYoutube } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
+
+type AgentRuntimeResponse = {
+  available: boolean;
+  backend: { id: string; configuredId: string; model: string; hasBaseUrl: boolean; hasAguiUrl: boolean };
+};
+
+/** Real backend-derived status only — never claims "Connected" without evidence. */
+function AiProviderStatusCard() {
+  const runtimeQuery = useQuery<AgentRuntimeResponse>({ queryKey: ["/api/agent/runtime"] });
+
+  let label = "Checking…";
+  let tone = "bg-muted text-muted-foreground";
+  let description = "Checking provider status…";
+  if (runtimeQuery.isError) {
+    label = "Unable to verify";
+    tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
+    description = "Provider status cannot be verified right now.";
+  } else if (runtimeQuery.data) {
+    const { backend } = runtimeQuery.data;
+    if (backend.configuredId === "fixture") {
+      label = "Configuration required";
+      tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
+      description = "No AI backend is configured yet — the agent runtime is running against a local fixture.";
+    } else if (backend.hasBaseUrl || backend.hasAguiUrl) {
+      label = "Configured";
+      tone = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+      description = "A backend is configured. Live reachability is confirmed at generation time.";
+    } else {
+      label = "Not connected";
+      tone = "bg-muted text-muted-foreground";
+      description = "No AI backend endpoint is configured.";
+    }
+  }
+
+  return (
+    <Card className="p-4 space-y-3" data-testid="card-ai-provider-status">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h3 className="text-sm font-medium">AI Provider</h3>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+        <Badge className={tone} data-testid="badge-ai-provider-status">{label}</Badge>
+      </div>
+      {runtimeQuery.data && (
+        <div className="bg-muted/50 rounded-md p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Backend</span>
+            <span className="text-xs font-medium">{runtimeQuery.data.backend.configuredId}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Model</span>
+            <span className="text-xs font-medium">{runtimeQuery.data.backend.model}</span>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 type YouTubeStatus = {
   ready?: boolean;
@@ -38,6 +98,7 @@ export default function SettingsPage() {
   const [messagingPillarSlots, setMessagingPillarSlots] = useState(["", "", "", "", ""]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPromptText, setPreviewPromptText] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   const { data: memoryProfile, isLoading: memoryLoading } = useQuery({
     queryKey: ["/api/profile/memory"],
@@ -104,7 +165,7 @@ export default function SettingsPage() {
     onError: (err: any) => toast({ title: "AI analysis failed", description: err.message, variant: "destructive" }),
   });
 
-  const { data: accounts = [], isLoading: accountsLoading } = useQuery<ConnectedAccount[]>({ queryKey: ["/api/accounts"] });
+  const { data: accounts = [], isLoading: accountsLoading, isError: accountsError, refetch: refetchAccounts } = useQuery<ConnectedAccount[]>({ queryKey: ["/api/accounts"] });
   const { data: youtubeStatus } = useQuery<YouTubeStatus>({ queryKey: ["/api/social/youtube/status"] });
 
   const xAccount = accounts.find((a) => a.platform === "x");
@@ -166,8 +227,10 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      setPendingDeleteId(null);
       toast({ title: "Account disconnected" });
     },
+    onError: (err: any) => toast({ title: "Disconnect failed", description: err.message, variant: "destructive" }),
   });
 
   const testMutation = useMutation({
@@ -275,8 +338,9 @@ export default function SettingsPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => disconnectMutation.mutate(account.id)}
+                onClick={() => setPendingDeleteId(account.id)}
                 disabled={disconnectMutation.isPending}
+                aria-label="Disconnect account"
                 data-testid={`button-disconnect-${platform}`}
               >
                 <Trash2 className="h-4 w-4" />
@@ -330,6 +394,12 @@ export default function SettingsPage() {
           <TabsContent value="accounts" className="mt-4 space-y-4">
             {accountsLoading ? (
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            ) : accountsError ? (
+              <ErrorState
+                title="Couldn't load connected accounts"
+                description="Something went wrong while loading your accounts."
+                onRetry={() => refetchAccounts()}
+              />
             ) : (
               <>
                 <AccountCard
@@ -396,7 +466,8 @@ export default function SettingsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => disconnectMutation.mutate(youtubeAccount.id)}
+                          onClick={() => setPendingDeleteId(youtubeAccount.id)}
+                          aria-label="Disconnect account"
                           data-testid="button-disconnect-youtube"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -439,32 +510,7 @@ export default function SettingsPage() {
           </TabsContent>
 
           <TabsContent value="ai" className="mt-4 space-y-4">
-            <Card className="p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div>
-                  <h3 className="text-sm font-medium">Active AI Provider</h3>
-                  <p className="text-xs text-muted-foreground">Powered by Replit AI Integrations (OpenAI-compatible)</p>
-                </div>
-                <Badge className="bg-green-500/10 text-green-500 border-green-500/20">Connected</Badge>
-              </div>
-              <div className="bg-muted/50 rounded-md p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Provider</span>
-                  <span className="text-xs font-medium">OpenAI (via Replit)</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Model</span>
-                  <span className="text-xs font-medium">gpt-4o-mini</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Status</span>
-                  <span className="text-xs font-medium text-green-500">Active</span>
-                </div>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                ContentForge uses Replit's built-in AI integration. No API key required. Usage is billed to your Replit credits.
-              </p>
-            </Card>
+            <AiProviderStatusCard />
           </TabsContent>
 
           <TabsContent value="pillars" className="mt-4 space-y-3">
@@ -656,6 +702,17 @@ export default function SettingsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Disconnect account?"
+        description="This will remove the connected account. You can reconnect it later from Settings."
+        confirmLabel="Disconnect"
+        destructive
+        loading={disconnectMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && disconnectMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

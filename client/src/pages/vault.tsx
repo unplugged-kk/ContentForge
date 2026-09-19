@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { Database, Plus, Trash2, Heart, Globe, Image, FileText, Loader2, Sparkles, X, Search, Upload } from "lucide-react";
 import type { ContextVaultItem } from "@shared/schema";
 
@@ -41,8 +43,9 @@ export default function VaultPage() {
   const [extractedUrl, setExtractedUrl] = useState<any>(null);
   const [extractedImage, setExtractedImage] = useState<any>(null);
   const [imageName, setImageName] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
-  const { data: items = [], isLoading } = useQuery<ContextVaultItem[]>({ queryKey: ["/api/vault"] });
+  const { data: items = [], isLoading, isError, refetch } = useQuery<ContextVaultItem[]>({ queryKey: ["/api/vault"] });
 
   const extractUrlMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -101,8 +104,10 @@ export default function VaultPage() {
     mutationFn: async (id: number) => { await apiRequest("DELETE", `/api/vault/${id}`); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/vault"] });
+      setPendingDeleteId(null);
       toast({ title: "Item deleted" });
     },
+    onError: (err: any) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,6 +173,12 @@ export default function VaultPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-lg" />)}
           </div>
+        ) : isError ? (
+          <ErrorState
+            title="Couldn't load vault items"
+            description="Something went wrong while loading your vault items."
+            onRetry={() => refetch()}
+          />
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
             <Database className="h-12 w-12 text-muted-foreground/30" />
@@ -189,7 +200,7 @@ export default function VaultPage() {
                     <button onClick={() => favoriteMutation.mutate(item.id)} className={`p-1 rounded hover:bg-muted ${item.isFavorite ? "text-red-400" : "text-muted-foreground"}`}>
                       <Heart className="h-3.5 w-3.5" fill={item.isFavorite ? "currentColor" : "none"} />
                     </button>
-                    <button onClick={() => deleteMutation.mutate(item.id)} className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-500" data-testid={`button-delete-vault-${item.id}`}>
+                    <button onClick={() => setPendingDeleteId(item.id)} className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-500" aria-label="Delete vault item" data-testid={`button-delete-vault-${item.id}`}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -277,6 +288,17 @@ export default function VaultPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete vault item?"
+        description="This will permanently remove the vault item."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

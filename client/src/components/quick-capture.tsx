@@ -54,6 +54,7 @@ export function QuickCapture() {
         size="icon"
         className="fixed bottom-6 right-6 z-50 rounded-full h-12 w-12 shadow-lg"
         onClick={() => setOpen(true)}
+        aria-label="Quick capture"
         data-testid="button-quick-capture"
       >
         <Plus className="h-5 w-5" />

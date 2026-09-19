@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { Image, Sparkles, Loader2, Heart, Trash2, Download, Wand2, Copy } from "lucide-react";
 import type { GeneratedImage } from "@shared/schema";
 
@@ -42,6 +43,7 @@ export default function ImageGenPage() {
   const [style, setStyle] = useState("professional");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [filter, setFilter] = useState<"all" | "favorites">("all");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   const { data: images = [], isLoading } = useQuery<GeneratedImage[]>({
     queryKey: ["/api/images"],
@@ -75,7 +77,11 @@ export default function ImageGenPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/images"] });
+      setPendingDeleteId(null);
       toast({ title: "Image deleted" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -253,8 +259,9 @@ export default function ImageGenPage() {
                           <Copy className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={() => deleteMutation.mutate(img.id)}
+                          onClick={() => setPendingDeleteId(img.id)}
                           className="p-2 rounded-full bg-white/20 hover:bg-red-500/60 transition-colors text-white"
+                          aria-label="Delete image"
                           data-testid={`button-delete-image-${img.id}`}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -280,6 +287,17 @@ export default function ImageGenPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete image?"
+        description="This will permanently remove the image."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

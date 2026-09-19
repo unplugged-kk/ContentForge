@@ -253,6 +253,16 @@
     z-index: 0;
   }
 
+  /* .fixed elements (e.g. Quick Capture) must stay fixed even when they also
+     carry hover-elevate; two-class selector beats the single-class rule above
+     regardless of source order. */
+  .fixed.hover-elevate,
+  .fixed.active-elevate,
+  .fixed.hover-elevate-2,
+  .fixed.active-elevate-2 {
+    position: fixed;
+  }
+
   .hover-elevate:not(.no-default-hover-elevate)::after,
   .active-elevate:not(.no-default-active-elevate)::after,
   .hover-elevate-2:not(.no-default-hover-elevate)::after,

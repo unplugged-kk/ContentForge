@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -59,8 +61,9 @@ export default function QueuePage() {
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [previewPost, setPreviewPost] = useState<PostWithTweets | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
-  const { data: queue = [], isLoading } = useQuery<PostWithTweets[]>({
+  const { data: queue = [], isLoading, isError, refetch } = useQuery<PostWithTweets[]>({
     queryKey: ["/api/posts/queue/today"],
   });
 
@@ -235,6 +238,7 @@ export default function QueuePage() {
       toast({ title: "Post deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/posts/queue/today"] });
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
+      setPendingDeleteId(null);
     } catch (err: any) {
       toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     } finally {
@@ -445,8 +449,9 @@ export default function QueuePage() {
               size="sm"
               variant="ghost"
               disabled={isDeleting}
-              onClick={() => deletePost(post.id)}
+              onClick={() => setPendingDeleteId(post.id)}
               data-testid={`button-delete-post-${post.id}`}
+              aria-label="Delete post"
             >
               {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
             </Button>
@@ -503,7 +508,15 @@ export default function QueuePage() {
       <div className="p-4 space-y-6 max-w-3xl">
         {isLoading && <><Skeleton className="h-32 w-full" /><Skeleton className="h-32 w-full" /></>}
 
-        {!isLoading && queue.length === 0 && (
+        {!isLoading && isError && (
+          <ErrorState
+            title="Couldn't load queued posts"
+            description="Something went wrong while loading your queued posts."
+            onRetry={() => refetch()}
+          />
+        )}
+
+        {!isLoading && !isError && queue.length === 0 && (
           <Card data-testid="card-queue-empty">
             <CardContent className="py-8 text-center text-sm text-muted-foreground">
               Nothing here yet. Go to <strong>Discover</strong> and click{" "}
@@ -612,6 +625,17 @@ export default function QueuePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete post?"
+        description="This will permanently remove the post."
+        confirmLabel="Delete"
+        destructive
+        loading={pendingDeleteId !== null && deletingIds.has(pendingDeleteId)}
+        onConfirm={() => pendingDeleteId !== null && deletePost(pendingDeleteId)}
+      />
     </div>
   );
 }

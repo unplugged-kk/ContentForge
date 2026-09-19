@@ -23,6 +23,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { Loader2, Youtube } from "lucide-react";
 import { SiThreads, SiX } from "react-icons/si";
 import { CONTENT_PILLARS, PLATFORMS, POST_TYPES, TONES, CHAR_LIMITS } from "@/lib/constants";
@@ -53,6 +54,7 @@ function YoutubeChannelsPanel() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [channelUrl, setChannelUrl] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const { data: channels = [], isLoading } = useQuery<YoutubeChannel[]>({
     queryKey: ["/api/youtube/channels"],
   });
@@ -80,8 +82,10 @@ function YoutubeChannelsPanel() {
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/youtube/channels/${id}`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/youtube/channels"] });
+      setPendingDeleteId(null);
       toast({ title: "Removed" });
     },
+    onError: (e: Error) => toast({ title: "Remove failed", description: e.message, variant: "destructive" }),
   });
 
   const patchMut = useMutation({
@@ -134,7 +138,7 @@ function YoutubeChannelsPanel() {
                   size="sm"
                   variant="ghost"
                   data-testid={`button-remove-channel-${ch.id}`}
-                  onClick={() => delMut.mutate(ch.id)}
+                  onClick={() => setPendingDeleteId(ch.id)}
                 >
                   Remove
                 </Button>
@@ -151,6 +155,17 @@ function YoutubeChannelsPanel() {
           </Card>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Disconnect YouTube channel?"
+        description="You'll need to reconnect to publish to this channel again."
+        confirmLabel="Disconnect"
+        destructive
+        loading={delMut.isPending}
+        onConfirm={() => pendingDeleteId !== null && delMut.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

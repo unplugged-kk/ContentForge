@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, MessageSquareText, Plus, Trash2, Copy, Sparkles, Star } from "lucide-react";
 import type { CannedResponse } from "@shared/schema";
@@ -15,6 +16,7 @@ export default function CannedResponsesPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [aiContext, setAiContext] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ["/api/canned-responses"],
@@ -54,8 +56,10 @@ export default function CannedResponsesPage() {
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/canned-responses/${id}`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/canned-responses"] });
+      setPendingDeleteId(null);
       toast({ title: "Deleted" });
     },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const favMut = useMutation({
@@ -125,6 +129,7 @@ export default function CannedResponsesPage() {
                     size="icon"
                     variant="ghost"
                     data-testid={`button-favorite-${row.id}`}
+                    aria-label={row.isFavorite ? "Remove from favorites" : "Add to favorites"}
                     onClick={() => favMut.mutate(row)}
                   >
                     <Star className={`h-4 w-4 ${row.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
@@ -133,6 +138,7 @@ export default function CannedResponsesPage() {
                     size="icon"
                     variant="ghost"
                     data-testid={`button-copy-${row.id}`}
+                    aria-label="Copy canned response"
                     onClick={() => void navigator.clipboard.writeText(row.content).then(() => toast({ title: "Copied" }))}
                   >
                     <Copy className="h-4 w-4" />
@@ -141,7 +147,8 @@ export default function CannedResponsesPage() {
                     size="icon"
                     variant="ghost"
                     data-testid={`button-delete-${row.id}`}
-                    onClick={() => deleteMut.mutate(row.id)}
+                    aria-label="Delete canned response"
+                    onClick={() => setPendingDeleteId(row.id)}
                   >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
@@ -153,6 +160,17 @@ export default function CannedResponsesPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete canned response?"
+        description="This will permanently remove the canned response."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMut.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMut.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

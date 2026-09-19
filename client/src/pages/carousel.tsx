@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { LayoutGrid, Plus, Sparkles, Loader2, Trash2, Edit2, Download, ChevronLeft, ChevronRight } from "lucide-react";
 import { CONTENT_PILLARS, CAROUSEL_BACKGROUNDS } from "@/lib/constants";
@@ -54,6 +55,7 @@ export default function CarouselPage() {
   const [bgStyle, setBgStyle] = useState("gradient-blue");
   const [selectedCarousel, setSelectedCarousel] = useState<Carousel | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const { data: carousels = [], isLoading } = useQuery<Carousel[]>({ queryKey: ["/api/carousels"] });
 
@@ -90,8 +92,10 @@ export default function CarouselPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/carousels"] });
       if (selectedCarousel) setSelectedCarousel(null);
+      setConfirmDeleteOpen(false);
       toast({ title: "Carousel deleted" });
     },
+    onError: (err: any) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   const currentBg = CAROUSEL_BACKGROUNDS.find(b => b.value === (selectedCarousel?.backgroundStyle || bgStyle)) || CAROUSEL_BACKGROUNDS[0];
@@ -158,7 +162,7 @@ export default function CarouselPage() {
                   <p className="text-xs text-muted-foreground">{slides.length} slides · {selectedCarousel.platform}</p>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => deleteMutation.mutate(selectedCarousel.id)} data-testid="button-delete-carousel">
+                  <Button variant="outline" size="sm" onClick={() => setConfirmDeleteOpen(true)} aria-label="Delete carousel" data-testid="button-delete-carousel">
                     <Trash2 className="h-3.5 w-3.5 mr-1.5" />Delete
                   </Button>
                 </div>
@@ -260,6 +264,17 @@ export default function CarouselPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={setConfirmDeleteOpen}
+        title="Delete carousel?"
+        description="This will permanently remove the carousel."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => selectedCarousel && deleteMutation.mutate(selectedCarousel.id)}
+      />
     </div>
   );
 }

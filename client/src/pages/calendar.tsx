@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS } from "@/lib/constants";
@@ -46,8 +48,9 @@ export default function CalendarPage() {
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [showBestTimes, setShowBestTimes] = useState(false);
   const [bestTimesPlatform, setBestTimesPlatform] = useState<"x" | "threads">("x");
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
-  const { data: posts = [], isLoading } = useQuery<PostWithTweets[]>({
+  const { data: posts = [], isLoading, isError, refetch } = useQuery<PostWithTweets[]>({
     queryKey: ["/api/posts"],
   });
 
@@ -94,6 +97,7 @@ export default function CalendarPage() {
       toast({ title: "Post deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
       setSelectedPost(null);
+      setConfirmDeleteOpen(false);
     },
     onError: (err: any) => {
       toast({ title: "Delete failed", description: err.message, variant: "destructive" });
@@ -161,13 +165,13 @@ export default function CalendarPage() {
             <TrendingUp className="h-3.5 w-3.5" />
             Best Times
           </Button>
-          <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} data-testid="button-prev-month">
+          <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} aria-label="Previous month" data-testid="button-prev-month">
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="text-sm font-medium min-w-[140px] text-center" data-testid="text-current-month">
             {format(currentMonth, "MMMM yyyy")}
           </span>
-          <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} data-testid="button-next-month">
+          <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} aria-label="Next month" data-testid="button-next-month">
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
@@ -241,6 +245,12 @@ export default function CalendarPage() {
               <Skeleton key={i} className="h-24" />
             ))}
           </div>
+        ) : isError ? (
+          <ErrorState
+            title="Couldn't load scheduled posts"
+            description="Something went wrong while loading your scheduled posts."
+            onRetry={() => refetch()}
+          />
         ) : (
           <>
             <div className="grid grid-cols-7 gap-1 mb-1">
@@ -373,8 +383,9 @@ export default function CalendarPage() {
                       </Button>
                       <Button
                         variant="destructive"
-                        onClick={() => deleteMutation.mutate(selectedPost.id)}
+                        onClick={() => setConfirmDeleteOpen(true)}
                         disabled={deleteMutation.isPending}
+                        aria-label="Delete post"
                         data-testid="button-delete-scheduled-post"
                       >
                         {deleteMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
@@ -388,6 +399,17 @@ export default function CalendarPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={(open) => setConfirmDeleteOpen(open)}
+        title="Delete post?"
+        description="This will permanently remove this scheduled post."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => selectedPost && deleteMutation.mutate(selectedPost.id)}
+      />
     </div>
   );
 }

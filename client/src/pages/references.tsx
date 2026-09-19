@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { useToast } from "@/hooks/use-toast";
 import { Search, Loader2, ExternalLink, Bookmark, BookmarkCheck, Trash2, Wand2, Globe, FileText, Eye, ShieldCheck } from "lucide-react";
 import type { Reference, Pillar } from "@shared/schema";
@@ -21,8 +23,9 @@ export default function ReferencesPage() {
   const [selectedRef, setSelectedRef] = useState<number | null>(null);
   const [genContentType, setGenContentType] = useState("thread");
   const [generatedContent, setGeneratedContent] = useState<any>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
-  const { data: references = [], isLoading } = useQuery<Reference[]>({ queryKey: ["/api/references"] });
+  const { data: references = [], isLoading, isError, refetch } = useQuery<Reference[]>({ queryKey: ["/api/references"] });
 
   const analyzeMutation = useMutation({
     mutationFn: async (data: { url?: string; text?: string }) => {
@@ -67,7 +70,11 @@ export default function ReferencesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/references"] });
       if (selectedRef) setSelectedRef(null);
+      setPendingDeleteId(null);
       toast({ title: "Reference deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -279,6 +286,12 @@ export default function ReferencesPage() {
         <h2 className="text-lg font-semibold mb-3" data-testid="text-references-library">References Library</h2>
         {isLoading ? (
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        ) : isError ? (
+          <ErrorState
+            title="Couldn't load references"
+            description="Something went wrong while loading your references."
+            onRetry={() => refetch()}
+          />
         ) : references.length === 0 ? (
           <Card className="py-8">
             <CardContent className="flex flex-col items-center gap-2">
@@ -306,10 +319,10 @@ export default function ReferencesPage() {
                       <Badge key={i} variant="outline" className="text-[10px]">{tag}</Badge>
                     ))}
                     <div className="ml-auto flex items-center gap-1">
-                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); bookmarkMutation.mutate(ref.id); }} data-testid={`button-bookmark-${ref.id}`}>
+                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); bookmarkMutation.mutate(ref.id); }} aria-label={ref.isBookmarked ? "Remove bookmark" : "Bookmark reference"} data-testid={`button-bookmark-${ref.id}`}>
                         {ref.isBookmarked ? <BookmarkCheck className="h-3 w-3 text-primary" /> : <Bookmark className="h-3 w-3" />}
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(ref.id); }} data-testid={`button-delete-ref-${ref.id}`}>
+                      <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setPendingDeleteId(ref.id); }} aria-label="Delete reference" data-testid={`button-delete-ref-${ref.id}`}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
@@ -320,6 +333,17 @@ export default function ReferencesPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete reference?"
+        description="This will permanently remove the reference."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

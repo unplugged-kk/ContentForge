@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { Plus, FileText, Loader2, Wand2, ArrowRight, BookOpen, Clock, Trash2, ChevronUp, MessageSquare, ListOrdered } from "lucide-react";
 import type { Article, Pillar } from "@shared/schema";
 
@@ -153,7 +154,7 @@ function ArticleEditor({ article, pillars, onBack }: { article: Article; pillars
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
               <CardTitle className="text-sm">Article Outline</CardTitle>
-              <Button variant="ghost" size="icon" onClick={() => setShowOutline(false)} data-testid="button-close-outline">
+              <Button variant="ghost" size="icon" onClick={() => setShowOutline(false)} aria-label="Close outline" data-testid="button-close-outline">
                 <ChevronUp className="h-4 w-4" />
               </Button>
             </CardHeader>
@@ -212,6 +213,7 @@ export default function ArticlesPage() {
   const [subtitle, setSubtitle] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [selectedPillar, setSelectedPillar] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   const { data: articles = [], isLoading } = useQuery<Article[]>({ queryKey: ["/api/articles"] });
   const { data: pillars = [] } = useQuery<Pillar[]>({ queryKey: ["/api/pillars"] });
@@ -240,7 +242,11 @@ export default function ArticlesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
       setEditingId(null);
+      setPendingDeleteId(null);
       toast({ title: "Article deleted" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -334,7 +340,7 @@ export default function ArticlesPage() {
                   {article.articleTemplate && <Badge variant="secondary" className="text-[10px]">{ARTICLE_TEMPLATES.find((t) => t.id === article.articleTemplate)?.name || article.articleTemplate}</Badge>}
                   <span className="text-[10px] text-muted-foreground flex items-center gap-1"><BookOpen className="h-3 w-3" /> {article.wordCount || 0} words</span>
                   <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> {article.estimatedReadMinutes || 0} min</span>
-                  <Button variant="ghost" size="icon" className="ml-auto" onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(article.id); }} data-testid={`button-delete-article-${article.id}`}>
+                  <Button variant="ghost" size="icon" className="ml-auto" onClick={(e) => { e.stopPropagation(); setPendingDeleteId(article.id); }} aria-label="Delete article" data-testid={`button-delete-article-${article.id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </CardContent>
@@ -343,6 +349,17 @@ export default function ArticlesPage() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete article?"
+        description="This will permanently remove the article."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }

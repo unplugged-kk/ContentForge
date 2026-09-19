@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { useToast } from "@/hooks/use-toast";
 import {
   Compass, Loader2, RefreshCw, ExternalLink, TrendingUp, Bookmark,
@@ -94,6 +96,7 @@ export default function DiscoverPage() {
 
   // Per-idea loading — tracks which idea IDs are currently generating
   const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
   // Dialog state
   const [dialogIdea, setDialogIdea] = useState<DiscoveredIdea | null>(null);
@@ -103,7 +106,7 @@ export default function DiscoverPage() {
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
 
-  const { data: ideas = [], isLoading: ideasLoading } = useQuery<DiscoveredIdea[]>({
+  const { data: ideas = [], isLoading: ideasLoading, isError: ideasError, refetch: refetchIdeas } = useQuery<DiscoveredIdea[]>({
     queryKey: ["/api/discover/ideas"],
   });
   const { data: rssSources = [] } = useQuery<RssSource[]>({ queryKey: ["/api/discover/rss-sources"] });
@@ -159,6 +162,7 @@ export default function DiscoverPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/discover/ideas"] });
       toast({ title: "Idea deleted" });
+      setPendingDeleteId(null);
     },
     onError: (err: any) => {
       toast({ title: "Delete failed", description: err.message, variant: "destructive" });
@@ -509,6 +513,12 @@ export default function DiscoverPage() {
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
+      ) : ideasError ? (
+        <ErrorState
+          title="Couldn't load ideas"
+          description="Something went wrong while loading your ideas."
+          onRetry={() => refetchIdeas()}
+        />
       ) : filteredIdeas.length === 0 ? (
         <Card className="py-12">
           <CardContent className="flex flex-col items-center gap-3">
@@ -605,10 +615,11 @@ export default function DiscoverPage() {
                       </Button>
                       <Button
                         variant="ghost" size="sm"
-                        onClick={() => deleteIdeaMutation.mutate(idea.id)}
+                        onClick={() => setPendingDeleteId(idea.id)}
                         disabled={deleteIdeaMutation.isPending}
                         data-testid={`button-delete-idea-${idea.id}`}
                         title="Delete idea"
+                        aria-label="Delete idea"
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -775,6 +786,17 @@ export default function DiscoverPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => !open && setPendingDeleteId(null)}
+        title="Delete idea?"
+        description="This will permanently remove the idea."
+        confirmLabel="Delete"
+        destructive
+        loading={deleteIdeaMutation.isPending}
+        onConfirm={() => pendingDeleteId !== null && deleteIdeaMutation.mutate(pendingDeleteId)}
+      />
     </div>
   );
 }
