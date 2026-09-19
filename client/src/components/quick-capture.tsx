@@ -44,6 +44,14 @@ export function QuickCapture() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
+  // Lets other surfaces (e.g. Today's Quick Actions) open this same dialog
+  // without lifting its state or duplicating the capture flow.
+  useEffect(() => {
+    const openCapture = () => setOpen(true);
+    window.addEventListener("contentforge:open-quick-capture", openCapture);
+    return () => window.removeEventListener("contentforge:open-quick-capture", openCapture);
+  }, []);
+
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 100);
   }, [open]);
