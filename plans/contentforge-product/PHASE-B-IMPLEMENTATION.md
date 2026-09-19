@@ -2836,5 +2836,19 @@ and technical diagnostics drawers (`drawer-technical-details`), durable URL stat
 and 100% test verification (9 Playwright Journeys A–H with 0 Axe violations, 13 unit tests,
 zero regressions across existing test suites).
 
+## Phase 28.2E — Sources / Research UX (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2E`) and
+`docs/sources-research-ux.md`. Summary: transformed `/sources` from a placeholder
+shell into a coherent research, investigation, and knowledge workspace:
+`Discover` → `Investigate` → `Save / capture` → `Understand evidence` → `Create Story / Idea` → `Create content`.
+Features a consolidated Knowledge Base (`Saved` tab combining Vault, Ideas, and References),
+humanized credibility ratings and conflicting evidence callouts (`client/src/lib/sources-research-state.ts`),
+canonical bridge to Story (`POST /api/stories` preserving researchJobId and evidence refs) and
+Create Studio (`/create?storyId=<id>`), honest degraded status ("Completed with limited sources")
+with zero leaked environment variables, responsive mobile layout (390×844 single vertical flow),
+and 100% test verification (11 Playwright Journeys A–J with 0 Axe violations, 13 unit tests,
+619 unit tests passing, zero regressions across 92 total E2E tests).
+
 
 

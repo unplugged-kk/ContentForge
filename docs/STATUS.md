@@ -3,6 +3,65 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2E — Sources / Research UX
+
+**Status:** IMPLEMENTED.
+
+Fifth slice of UX roadmap (`docs/ux-audit/UX_ROADMAP.md`). Transforms `/sources` from a placeholder canonical shell into a coherent, production-grade research and knowledge workspace:
+
+```text
+Discover
+   ↓
+Investigate
+   ↓
+Save / capture
+   ↓
+Understand evidence
+   ↓
+Create Story / Idea
+   ↓
+Create content
+```
+
+Full architectural reference: `docs/sources-research-ux.md`.
+
+### Core Implementations & Highlights
+
+1. **Plain-Language Domain Model & IA**:
+   - Structured around three primary views: `Discover` (topic and directed URL research), `Saved` (consolidated knowledge base), and `Research` (job history and rerun).
+   - Translates internal backend structures into user-friendly terminology (`ResearchJob` → Research, `NormalizedSource` → Source, `Evidence` → Evidence Claim, `ResearchAnalysis` → Finding/Angle, `Story` → Story, `Opportunity` → Opportunity).
+   - Preserves backward compatibility with legacy routes (`/discover`, `/ideas`, `/vault`, `/references`, `/ingest`) and legacy selectors (`text-ideas-title`, `text-vault-title`).
+
+2. **Consolidated Knowledge Base (`SavedTab`)**:
+   - Unifies saved excerpts from `/api/vault`, `/api/ideas`, and `/api/references` into a single, cohesive view with filter pills (`All`, `References`, `Ideas`, `Vault`).
+   - Supports single-click deletion with `ConfirmDialog` confirmation.
+   - Quick capture modal (`button-sources-quick-capture`) allows rapid text ingestion with URL and category classification.
+
+3. **Credibility, Quality & Conflicting Evidence (`client/src/lib/sources-research-state.ts`)**:
+   - Pure domain helpers calculate humanized credibility badges (`High Confidence`, `Established`, `Needs Verification`, `Conflicting`, `Unverified`).
+   - Surfaces Quality Score ("High Quality", "Moderate Quality", "Preliminary") and Novelty Score ("Fresh Angle", "Emerging Trend", "Standard Context").
+   - Explicit conflicting evidence warning banner highlights discrepancies between sources before publishing.
+   - 13 dedicated unit tests verify all state calculations and sanitization logic (`client/src/lib/sources-research-state.test.ts`).
+
+4. **Canonical Bridges to Story and Create**:
+   - **Research/Source → Create Story**: Bridge dialog creates a human or researched story via `POST /api/stories`, preserving `researchJobId` and linked evidence refs for full provenance.
+   - **Story/Source → Create Content**: Direct navigation to `/create?storyId=<id>` or `/create?sourceId=<id>`, carrying research context straight into the Create Studio.
+
+5. **Truthful Status & Degraded State Handling**:
+   - Degraded provider states surface honestly as `Completed with limited sources` with an amber badge (`badge-degraded-research`) and an explanatory alert.
+   - Zero raw environment variables (`LAST30DAYS_ENABLED`, `REDDIT_CLIENT_ID`, `YOUTUBE_API_KEY`) leaked to the UI; user-friendly descriptions explain current provider availability.
+
+6. **Responsive Layout & Accessibility**:
+   - Desktop (1440×900), Tablet (820×1180), and Mobile (390×844) fully responsive.
+   - Mobile single vertical scroll flow with no trapped inner scrollbars, no horizontal overflow, and touch targets ≥ 44px.
+   - 0 Axe accessibility violations across Desktop, Tablet, and Mobile viewports.
+
+7. **Verification Evidence**:
+   - 11 Playwright E2E tests passing in `e2e/sources-workflow.e2e.spec.ts` (Journeys A through J).
+   - 92 total Playwright E2E tests passing across all suites.
+   - 619/619 unit tests passing across 159 suites.
+   - 0 TypeScript errors (`npm run check`) and clean production build (`npm run build`).
+
 ## Phase 28.2D — Agent Workspace Full Responsive Redesign
 
 **Status:** IMPLEMENTED.
