@@ -3,6 +3,58 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2D — Agent Workspace Full Responsive Redesign
+
+**Status:** IMPLEMENTED.
+
+Fourth slice of UX roadmap (`docs/ux-audit/UX_ROADMAP.md`). Transforms `/agent` from a technically capable but information-dense agent surface into a coherent **orchestration workspace**:
+
+```text
+Understand task
+       ↓
+Research / create / transform
+       ↓
+Show progress (stepper timeline)
+       ↓
+Present result (artifacts & domain entities)
+       ↓
+Request human approval when required
+       ↓
+Hand off to Create / Review / Schedule / Publish
+```
+
+Full architectural reference: `docs/agent-workspace-ux.md`.
+
+### Core Implementations & Highlights
+
+1. **The Agent is an Orchestrator, Not a Product / Chatbot**:
+   - Eliminates conversational chat clutter in favor of structured visibility: what user asked, what agent is doing, what has completed, what failed, what was created, what needs approval, and what happens next.
+   - Preserves backend lifecycle (`Story → Opportunity → GenerationJob → Artifact → approval → Schedule → Occurrence → Publication`).
+
+2. **Canonical Handoffs**:
+   - `ArtifactReviewCard` features a primary **`[ Review in Studio ]`** CTA (`data-testid="button-artifact-review"`) linking directly to canonical `/create?artifact=<id>`.
+   - Once approved, hands off to canonical Schedule (`/schedule` with `SchedulePicker`) and Publish (`PublishPreview` dialog).
+   - No duplicate content management or publishing subsystems inside Agent.
+
+3. **Truthful Status & Outcome Derived Domain Logic (`client/src/lib/agent-workspace-state.ts`)**:
+   - Pure domain state helpers: `deriveRunDisplayStatus`, `deriveRunOutcomeSummary`, `humanizeToolName`, `formatRelativeTime`.
+   - Never falsely reports "Completed" when tool failures occurred; assigns `completed_with_errors` ("Completed with warnings") and surfaces warning badges.
+   - Tested by 13 dedicated unit tests (`client/src/lib/agent-workspace-state.test.ts`).
+
+4. **Responsive Layout & Mobile Single Vertical Scroll**:
+   - **Desktop (>= 1024px)**: 2-column layout pairing a clean orchestration stream with a compact run history and capabilities sidebar.
+   - **Mobile (390 × 844)**: Single vertical scroll flow without trapped inner scrollbars. Secondary diagnostics and technical subsystem panels (`ResearchPanel`, `VideoPanel`, `AudioPanel`, `StyleIntelligencePanel`) moved into an on-demand Sheet drawer (`drawer-technical-details`). Mobile run history accessible via Sheet (`button-open-mobile-history`).
+   - Active repurposing plans surface inline when running to preserve visibility.
+
+5. **Durable URL State**:
+   - Automatically synchronizes `?runId=<id>` with `window.history.replaceState`. Page reload immediately restores and rehydrates active run state, timeline, and artifacts.
+
+6. **Testing & Verification Evidence**:
+   - Playwright E2E (`e2e/agent-workspace.e2e.spec.ts`): 9 tests passing covering Journeys A–H (Task lifecycle, Review link, Approval resume, Publish handoff, Truthful tool failure status, Refresh durability, Mobile layout, Axe accessibility).
+   - Zero Axe violations across Desktop (1440×900), Tablet (820×1180), and Mobile (390×844).
+   - Full regression suite passing: `agent-publish`, `error-states`, `canonical-ia`, `routes`, `create-workflow`, `accessibility`.
+   - 606/606 unit tests passing across 151 suites.
+
 ## Phase 28.2C — Create + Review Workflow
 
 **Status:** IMPLEMENTED.

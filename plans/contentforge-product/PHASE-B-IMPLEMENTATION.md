@@ -2822,4 +2822,19 @@ channel vs account metadata, pre-publish compatibility checks, and reusable
 distribution handoffs (`SchedulePicker`, `PublishPreview`). 100% verified with
 real PostgreSQL db tests, unit tests, and Playwright E2E journeys (0 axe violations).
 
+## Phase 28.2D — Agent Workspace Full Responsive Redesign (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2D`) and
+`docs/agent-workspace-ux.md`. Summary: transformed `/agent` from a
+technically dense surface into a responsive orchestration workspace:
+`Understand task` → `Research / create / transform` → `Show progress` →
+`Present result` → `Request approval` → `Hand off to Create / Review / Schedule / Publish`.
+Features canonical review handoff (`[ Review in Studio ]` linking to `/create?artifact=<id>`),
+truthful status calculation without false completions (`client/src/lib/agent-workspace-state.ts`),
+responsive 2-column desktop / single vertical scroll mobile (`390 × 844`), mobile run history
+and technical diagnostics drawers (`drawer-technical-details`), durable URL state (`?runId=<id>`),
+and 100% test verification (9 Playwright Journeys A–H with 0 Axe violations, 13 unit tests,
+zero regressions across existing test suites).
+
+
 

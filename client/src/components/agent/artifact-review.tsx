@@ -10,6 +10,8 @@ import { PublishPreview } from "@/components/ui-shared/publish-preview";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { classifyAgentError } from "@shared/agent-ui";
+import { Link } from "wouter";
+import { getCanonicalReviewUrl } from "@/lib/agent-workspace-state";
 import { PublicationCard, VisualAssetCard } from "./workspace-cards";
 
 type Artifact = {
@@ -229,6 +231,11 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
           <p className="whitespace-pre-wrap break-words text-sm" data-testid="text-artifact-content">{text || "(empty)"}</p>
         )}
         <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="default" data-testid="button-artifact-review">
+            <Link href={getCanonicalReviewUrl(artifact.id)}>
+              Review
+            </Link>
+          </Button>
           {editing ? (
             <>
               <Button size="sm" onClick={() => revise.mutate()} disabled={revise.isPending} data-testid="button-artifact-save-edit">
