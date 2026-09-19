@@ -3,6 +3,58 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 28.2C — Create + Review Workflow
+
+**Status:** IMPLEMENTED.
+
+Third slice of UX roadmap (`docs/ux-audit/UX_ROADMAP.md`). Transforms `/create` from a disconnected collection of standalone generators into a complete, continuous content-production experience:
+
+```text
+Source / Story / Idea / Blank
+        ↓
+   Create Studio
+        ↓
+     Generate
+        ↓
+Artifact Review View
+        ↓
+     Approve
+        ↓
+Schedule / Publish
+```
+
+Full architectural reference: `docs/create-review-workflow.md`.
+
+### Core Implementations & Highlights
+
+1. **Domain Lifecycle Alignment**:
+   - Preserves core backend lifecycle: `Story → Opportunity → GenerationJob → Artifact → approval → Schedule → Occurrence → Publication`.
+   - `server/story/routes.ts`: Enabled human-authored stories (`provenance: "human"`) via `POST /api/stories` and created `GET /api/stories` listing endpoint.
+   - `server/content/routes.ts`: Added `POST /api/generation-jobs/:id/run` to execute single generation jobs synchronously on demand.
+
+2. **Unified Create Studio (`client/src/components/create/create-studio.tsx`)**:
+   - Content Type Selector derived from backend capabilities (`/api/repurposing/capabilities`): Post, Thread, Article, Carousel, Image, Video, Audio.
+   - 4 Contextual Entry Points: From Story (with story picker), From Idea (with ideas bank picker), From Source, or Blank canvas.
+   - Setup controls: Channel selector (`/api/channels`), Topic/Concept, Objective & Audience with preset pills, Brand Voice select (`/api/voices`), and Template select (`/api/templates`).
+   - Progressive disclosure: Collapsible Advanced options (Hook framing angle, Style constraints, AI Model override).
+   - Live Generation Summary card dynamically reflecting user selections.
+   - Honest generation state without fake percentages, with retryable `ErrorState` on failure.
+
+3. **Artifact Review View (`client/src/components/create/artifact-review-view.tsx`)**:
+   - Rich rendered preview for generated content with text counter and target metadata.
+   - Truthful metadata: Target Channel, Connected Account (`@username` from `/api/accounts`), Version badge (`v1`, `v2`, ...), Created From provenance, and `StatusBadge`.
+   - Immutable revisions: `[ Edit ]` creates a new revision with `supersedesId`, keeping original content untouched and setting new revision to draft.
+   - Sibling regeneration: `[ Regenerate ]` triggers a new `GenerationJob` with `regenerate: true`.
+   - Explicit approval gating: `[ Approve ]` transitions artifact from draft/review to approved with `approvedAt` timestamp.
+   - Shared distribution handoff: Approved content exposes `[ Schedule ]` (with `SchedulePicker`) and `[ Publish now ]` (with `PublishPreview`).
+   - Pre-publish compatibility warning banner (`banner-publish-incompatible`) if channel/format is unsupported.
+
+4. **Testing & Verification Evidence**:
+   - Database Integration (`server/content/createWorkflow.dbtest.ts`): 4 tests passed covering human story creation, artifact revision immutability, approval state transition, and sibling regeneration.
+   - Unit Tests (`client/src/lib/create-workflow.test.ts`): 6 tests passed (593/593 across whole suite).
+   - Playwright E2E (`e2e/create-workflow.e2e.spec.ts`): 11 tests passed covering all user journeys (A–J), responsive viewports (1440×900, 820×1180, 390×844), and 0 Axe accessibility violations.
+   - Zero regressions across existing Playwright test suites (`canonical-ia`, `accessibility`, `quick-capture`, `error-states`).
+
 ## Phase 28.2B — Canonical Information Architecture + Product Shell
 
 **Status:** IMPLEMENTED.

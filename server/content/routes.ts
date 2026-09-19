@@ -40,6 +40,7 @@ import {
 import {
   createGenerationJob,
   loadGenerationContext,
+  runGenerationJob,
   OpportunityKilledError,
   StoryMissingForOpportunityError,
   type GenerationDeps,
@@ -854,6 +855,17 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!job) return res.status(404).json({ message: "Generation job not found" });
       const artifact = await deps.content.getArtifactByGenerationJob(job.id);
       return res.json({ ...serializeGenerationJob(job), artifactId: artifact?.id ?? null });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post("/generation-jobs/:id/run", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid generation job id" });
+    try {
+      const result = await runGenerationJob(id, deps.generation);
+      return res.json(result);
     } catch (error) {
       return next(error);
     }

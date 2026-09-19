@@ -7,7 +7,7 @@
  * writes research content.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { stories, type Story } from "@shared/schema";
@@ -50,10 +50,19 @@ export interface StoryStoragePort {
   getStoryByAutomationRun(automationRunId: number): Promise<Story | undefined>;
   /** Lifecycle only: `draft → ready → used | archived` (Ticket 03 §2). */
   updateStoryStatus(id: number, status: StoryStatus): Promise<Story | undefined>;
+  listStories?(limit?: number): Promise<Story[]>;
 }
 
 export class DatabaseStoryStorage implements StoryStoragePort {
   constructor(private readonly database: StoryDatabase = defaultDb) {}
+
+  async listStories(limit = 50): Promise<Story[]> {
+    return this.database
+      .select()
+      .from(stories)
+      .orderBy(desc(stories.id))
+      .limit(limit);
+  }
 
   /**
    * Insert a Story. When `automationRunId` is set the insert is made idempotent

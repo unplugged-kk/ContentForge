@@ -2809,6 +2809,17 @@ product navigation (Today, Create, Sources, Agent, Schedule, Insights, Settings)
 route hierarchy, backward-compatible legacy route mapping, route-aware active
 navigation, standardized `PageHeader` and `EmptyState` primitives, and full
 responsive Playwright + axe accessibility coverage (0 violations).
-Next phase is 28.2C (Create + Review workflow).
+
+## Phase 28.2C — Create + Review Workflow (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 28.2C`) and
+`docs/create-review-workflow.md`. Summary: transformed `/create` from a
+disconnected set of independent generators into a coherent creation-to-distribution
+experience: `Source / Story / Idea / Blank` → `Create Studio` → `Generate` →
+`Artifact Review View` → `Approve` → `Schedule / Publish`. Supports capability-driven
+formats, immutable revisions (`supersedesId`), sibling regeneration, truthful
+channel vs account metadata, pre-publish compatibility checks, and reusable
+distribution handoffs (`SchedulePicker`, `PublishPreview`). 100% verified with
+real PostgreSQL db tests, unit tests, and Playwright E2E journeys (0 axe violations).
 
 

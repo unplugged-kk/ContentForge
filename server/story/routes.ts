@@ -19,7 +19,7 @@ import {
 } from "./service";
 
 export const createStoryBodySchema = z.object({
-  researchJobId: z.number().int().positive(),
+  researchJobId: z.number().int().positive().optional().nullable(),
   title: z.string().trim().min(1).max(500),
   insightBody: z.string().trim().min(1),
   angles: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
@@ -58,6 +58,15 @@ function httpStatusFor(error: unknown): { status: number; message: string } | nu
 export function createStoryRouter(deps: CreateStoryDeps): Router {
   const router = Router();
 
+  router.get("/", async (_req, res, next) => {
+    try {
+      const rows = deps.stories.listStories ? await deps.stories.listStories() : [];
+      return res.json(rows.map(serializeStory));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.post("/", async (req, res, next) => {
     const parsed = createStoryBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -69,6 +78,31 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
     }
 
     const { researchJobId, ...synthesis } = parsed.data;
+
+    // Human-authored story without a research job is valid per locked domain model
+    if (synthesis.provenance === "human" && !researchJobId) {
+      try {
+        const story = await deps.stories.insertStory({
+          userId: (req as any).session?.userId ?? 1,
+          researchJobId: null,
+          provenance: "human",
+          title: synthesis.title,
+          insightBody: synthesis.insightBody,
+          interpretationMarked: false,
+          angles: synthesis.angles ?? [],
+          evidenceRefs: synthesis.evidenceRefs ?? [],
+          status: synthesis.status ?? "ready",
+        });
+        return res.status(201).json(serializeStory(story));
+      } catch (error) {
+        return next(error);
+      }
+    }
+
+    if (!researchJobId) {
+      return res.status(400).json({ message: "researchJobId must be a positive integer" });
+    }
+
     try {
       const story = await createStoryFromResearch(researchJobId, synthesis, deps);
       return res.status(201).json(serializeStory(story));
