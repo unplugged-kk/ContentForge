@@ -9,7 +9,7 @@
  * Behind an interface so services are testable without a database.
  */
 
-import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -433,6 +433,11 @@ export interface ContentStoragePort {
     opportunityId: number,
     readiness: ArtifactReadiness,
   ): Promise<Artifact[]>;
+  /** Owner-wide artifact listing (Phase 28.2F Today/Attention) — no opportunity scoping. */
+  listArtifactsByOwner(
+    ownerId: number,
+    options?: { readiness?: ArtifactReadiness; limit?: number },
+  ): Promise<Artifact[]>;
 
   insertSchedule(row: InsertScheduleRow): Promise<Schedule>;
   claimSchedule(row: InsertScheduleRow): Promise<{ schedule: Schedule; created: boolean }>;
@@ -441,6 +446,13 @@ export interface ContentStoragePort {
   listSchedulesByArtifact(artifactId: number): Promise<Schedule[]>;
   listActiveSchedules(now: Date, limit: number): Promise<Schedule[]>;
   setScheduleStatus(id: number, status: string): Promise<void>;
+  /** Owner-scoped occurrences due within [from, to], joined with their Schedule + Artifact (Phase 28.2F Today's Schedule). */
+  listOccurrencesByOwnerRange(
+    ownerId: number,
+    from: Date,
+    to: Date,
+    limit?: number,
+  ): Promise<Array<{ occurrence: ScheduleOccurrence; schedule: Schedule; artifact: Artifact }>>;
 
   materializeOccurrence(scheduleId: number, at: Date): Promise<ScheduleOccurrence | undefined>;
   getOccurrence(id: number): Promise<ScheduleOccurrence | undefined>;
@@ -456,6 +468,11 @@ export interface ContentStoragePort {
   getPublication(id: number): Promise<Publication | undefined>;
   getPublicationForOwner(id: number, ownerId: number): Promise<Publication | undefined>;
   listPublicationsByArtifact(artifactId: number): Promise<Publication[]>;
+  /** Owner-scoped publications, optionally by state, LEFT JOINed with their Result (Phase 28.2F Attention/Publications tab). */
+  listPublicationsByOwner(
+    ownerId: number,
+    options?: { state?: PublicationState; limit?: number },
+  ): Promise<Array<{ publication: Publication; result: Result | null }>>;
   acquirePublicationLease(
     id: number,
     owner: string,
@@ -1316,6 +1333,21 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .orderBy(asc(artifacts.id));
   }
 
+  async listArtifactsByOwner(
+    ownerId: number,
+    options: { readiness?: ArtifactReadiness; limit?: number } = {},
+  ): Promise<Artifact[]> {
+    const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
+    const conditions = [or(isNull(artifacts.userId), eq(artifacts.userId, ownerId))!];
+    if (options.readiness) conditions.push(eq(artifacts.readiness, options.readiness));
+    return this.database
+      .select()
+      .from(artifacts)
+      .where(and(...conditions))
+      .orderBy(desc(artifacts.id))
+      .limit(take);
+  }
+
   async setArtifactReadiness(
     id: number,
     readiness: ArtifactReadiness,
@@ -1403,6 +1435,29 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .where(and(eq(schedules.status, "active"), lte(schedules.startAt, now)))
       .orderBy(asc(schedules.startAt))
       .limit(limit);
+  }
+
+  async listOccurrencesByOwnerRange(
+    ownerId: number,
+    from: Date,
+    to: Date,
+    limit = 50,
+  ): Promise<Array<{ occurrence: ScheduleOccurrence; schedule: Schedule; artifact: Artifact }>> {
+    const rows = await this.database
+      .select({ occurrence: scheduleOccurrences, schedule: schedules, artifact: artifacts })
+      .from(scheduleOccurrences)
+      .innerJoin(schedules, eq(schedules.id, scheduleOccurrences.scheduleId))
+      .innerJoin(artifacts, eq(artifacts.id, schedules.artifactId))
+      .where(
+        and(
+          or(isNull(schedules.userId), eq(schedules.userId, ownerId))!,
+          gte(scheduleOccurrences.occurrenceTime, from),
+          lte(scheduleOccurrences.occurrenceTime, to),
+        ),
+      )
+      .orderBy(asc(scheduleOccurrences.occurrenceTime))
+      .limit(Math.min(Math.max(limit, 1), 200));
+    return rows;
   }
 
   async setScheduleStatus(id: number, status: string): Promise<void> {
@@ -1552,6 +1607,23 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .from(publications)
       .where(eq(publications.artifactId, artifactId))
       .orderBy(asc(publications.id));
+  }
+
+  async listPublicationsByOwner(
+    ownerId: number,
+    options: { state?: PublicationState; limit?: number } = {},
+  ): Promise<Array<{ publication: Publication; result: Result | null }>> {
+    const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
+    const conditions = [or(isNull(publications.userId), eq(publications.userId, ownerId))!];
+    if (options.state) conditions.push(eq(publications.state, options.state));
+    const rows = await this.database
+      .select({ publication: publications, result: results })
+      .from(publications)
+      .leftJoin(results, eq(results.publicationId, publications.id))
+      .where(and(...conditions))
+      .orderBy(desc(publications.id))
+      .limit(take);
+    return rows.map((r) => ({ publication: r.publication, result: r.result ?? null }));
   }
 
   /**

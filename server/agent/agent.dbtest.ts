@@ -265,4 +265,29 @@ describeDb("agent runtime (db)", () => {
     const storyRows = await db.select().from(stories).where(eq(stories.researchJobId, job.id));
     assert.equal(storyRows.length, 1);
   });
+
+  it("listDeniedApprovalRunIds: flags only runs with a denied approve_artifact/publish_now call (Phase 28.2F)", async () => {
+    const { run: deniedRun } = await storage.claimRun({
+      userId: 1,
+      backendId: "fixture",
+      providerSnapshot: {},
+      objective: "needs approval",
+      idempotencyKey: `${RUN}-run-needs-appr`,
+      correlationId: `${RUN}-needs-appr`,
+    });
+    await runtime.executeTool(deniedRun, { name: "approve_artifact", arguments: { artifactId: 1 } }, new Set());
+
+    const { run: cleanRun } = await storage.claimRun({
+      userId: 1,
+      backendId: "fixture",
+      providerSnapshot: {},
+      objective: "no approval needed",
+      idempotencyKey: `${RUN}-run-clean`,
+      correlationId: `${RUN}-clean`,
+    });
+
+    const flagged = await storage.listDeniedApprovalRunIds([deniedRun.id, cleanRun.id]);
+    assert.ok(flagged.has(deniedRun.id));
+    assert.ok(!flagged.has(cleanRun.id));
+  });
 });

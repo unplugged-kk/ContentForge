@@ -173,7 +173,10 @@ export function createAgentRouter(deps: AgentRouteDeps): Router {
     const requested = Number(req.query.limit ?? 30);
     const limit = Number.isFinite(requested) ? requested : 30;
     const runs = await deps.storage.listRunsForOwner(ownerId(req), limit);
-    return res.json({ runs: runs.map(serializeRun) });
+    const needsApprovalIds = await deps.storage.listDeniedApprovalRunIds(runs.map((r) => r.id));
+    return res.json({
+      runs: runs.map((run) => ({ ...serializeRun(run), needsApproval: needsApprovalIds.has(run.id) })),
+    });
   });
 
   router.get("/runs/:id", async (req, res) => {

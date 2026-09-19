@@ -12,11 +12,13 @@ import { Router, raw as rawBody } from "express";
 import { z } from "zod";
 import type {
   Artifact,
+  ArtifactReadiness,
   ContentTemplate,
   GenerationJob,
   GenerationPolicy,
   Opportunity,
   Publication,
+  PublicationState,
   Schedule,
   VisualAsset,
   VisualGeneration,
@@ -872,6 +874,22 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   });
 
   // ── Artifacts + approval ────────────────────────────────────────────────────
+  /** Owner-wide artifact list (Phase 28.2F Today/Attention + Recent Activity) — no giant aggregate, one filtered resource list. */
+  router.get("/artifacts", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const readiness = typeof req.query.readiness === "string" ? req.query.readiness : undefined;
+      const limit = Number(req.query.limit ?? 20);
+      const rows = await deps.content.listArtifactsByOwner(ownerId, {
+        readiness: readiness as ArtifactReadiness | undefined,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      return res.json(rows.map(serializeArtifact));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.get("/artifacts/:id", async (req, res, next) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
@@ -1017,6 +1035,41 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  /** Owner-scoped occurrences due within [from, to] (Phase 28.2F Today's Schedule / Publications tab). */
+  router.get("/schedule-occurrences", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const now = new Date();
+      const from = typeof req.query.from === "string" ? new Date(req.query.from) : now;
+      const to =
+        typeof req.query.to === "string"
+          ? new Date(req.query.to)
+          : new Date(from.getTime() + 24 * 60 * 60 * 1000);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        return res.status(400).json({ message: "Invalid from/to date" });
+      }
+      const limit = Number(req.query.limit ?? 50);
+      const rows = await deps.content.listOccurrencesByOwnerRange(
+        ownerId,
+        from,
+        to,
+        Number.isFinite(limit) ? limit : 50,
+      );
+      return res.json(
+        rows.map(({ occurrence, schedule, artifact }) => ({
+          id: occurrence.id,
+          occurrenceTime: occurrence.occurrenceTime,
+          status: occurrence.status,
+          scheduleId: schedule.id,
+          channel: schedule.channel,
+          artifact: serializeArtifact(artifact),
+        })),
+      );
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.get("/schedules/:id", async (req, res, next) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid schedule id" });
@@ -1053,6 +1106,24 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         publications: result.publications.map(serializePublication),
         reconciled,
       });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  /** Owner-scoped publication list, optionally filtered by state (Phase 28.2F Attention/Publications tab). */
+  router.get("/publications", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+      const limit = Number(req.query.limit ?? 20);
+      const rows = await deps.content.listPublicationsByOwner(ownerId, {
+        state: state as PublicationState | undefined,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      return res.json(
+        rows.map(({ publication, result }) => ({ ...serializePublication(publication), result })),
+      );
     } catch (error) {
       return next(error);
     }

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { agentRuns, agentToolCalls, type AgentRun, type AgentToolCall } from "@shared/schema";
@@ -194,6 +194,26 @@ export class DatabaseAgentStorage {
       .from(agentToolCalls)
       .where(eq(agentToolCalls.agentRunId, agentRunId))
       .orderBy(agentToolCalls.id);
+  }
+
+  /**
+   * Run ids among `runIds` that currently have a denied approve_artifact/
+   * publish_now tool call — the cheap, list-safe signal for "needs approval"
+   * (no per-run event-stream fetch required). Phase 28.2F Today attention.
+   */
+  async listDeniedApprovalRunIds(runIds: number[]): Promise<Set<number>> {
+    if (runIds.length === 0) return new Set();
+    const rows = await this.database
+      .select({ agentRunId: agentToolCalls.agentRunId })
+      .from(agentToolCalls)
+      .where(
+        and(
+          inArray(agentToolCalls.agentRunId, runIds),
+          inArray(agentToolCalls.toolName, ["approve_artifact", "publish_now"]),
+          eq(agentToolCalls.status, "denied"),
+        ),
+      );
+    return new Set(rows.map((r) => r.agentRunId));
   }
 
   async listToolCallsById(id: number): Promise<AgentToolCall[]> {
