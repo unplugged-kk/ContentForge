@@ -2882,6 +2882,24 @@ Includes backend metric aggregations (`metricTotals` in `server/content/learning
 with 15 unit tests (`client/src/lib/insights-state.ts`), 11/11 DB tests in `server/content/learning.dbtest.ts`,
 11 Playwright Journeys A–J with 0 Axe accessibility violations (`e2e/insights.e2e.spec.ts`), and 100% regression passing.
 
+## Phase 29.4 — Bounded Autonomous Optimization (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 29.4`),
+`docs/phase-29.4-autonomous-optimization-architecture.md`, and
+`docs/phase-29.4-final-verification.md`. Summary: a deterministic
+`server/content/autonomy/` controller may activate/roll back an eligible
+`PolicyCandidate` without a human click, but only after kill switch, mode,
+scope/field allowlists, evidence floor, guardrails, budget, cooldown, and
+oscillation gates all pass, and only by calling the existing Phase 29.3
+activation service (never a second mutation path). Circuit breaker opens
+autonomously on repeated rollback, clears only by human action. Agent
+restriction and self-modification restriction both proven statically. Fixed
+two pre-flight issues first: made Policy Candidate activation state
+server-derived (was local React state) and fixed a real date-relative unit
+test flake. 710/710 unit, 320/320 DB, 34/34 targeted E2E. Autonomous
+experiment selection/creation and any scheduler are deferred, architecturally
+ready.
+
 ## Phase 29.3 — Human-Gated Policy Activation (pointer)
 
 Full detail lives in `docs/STATUS.md` (`## Phase 29.3`),

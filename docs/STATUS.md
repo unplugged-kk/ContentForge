@@ -3,6 +3,42 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 29.4 — Bounded Autonomous Optimization (AUTONOMY WITH GUARDRAILS)
+
+**Status:** IMPLEMENTED & VERIFIED for autonomous activation/rollback.
+Autonomous experiment selection/creation and any background scheduler are
+DEFERRED (architecturally ready, not wired). Commit `94ddeaf`.
+
+Adds a deterministic autonomy controller (`server/content/autonomy/`) that
+may activate or roll back an eligible `PolicyCandidate` without a human
+click, only after every gate passes: kill switch, mode, activation-automation
+flag, ownership, scope allowlist, policy-field allowlist, minimum evidence
+(hard floor `repeatable`), guardrails, daily/weekly activation budget,
+cooldown, policy-churn, and oscillation detection. All mutation still routes
+exclusively through the existing Phase 29.3 activation service, tagged with
+a new `policy_activations.actor` column (`human` | `autonomous_controller`).
+A repeated autonomous rollback for one scope opens a circuit breaker only a
+human can clear (`POST /api/autonomy/circuit-breaker/reset`). Every
+evaluation, allowed or denied, is durably logged to `autonomy_decisions`.
+
+Pre-flight fixes required before autonomy could be considered safe: the
+Policy Candidates activated/rolled-back badge in Insights > Learning is now
+server-derived (`GET /api/policy-candidates/activated-ids`) instead of local
+React state; fixed a real date-relative unit test flake in
+`today-schedule-state.ts` (date-fns' `isToday`/`isTomorrow` ignored the
+injected `now` override).
+
+**Agent restriction:** proven statically (no live credentials needed) --
+no agent tool name is autonomy-capable, and no agent-tier file references
+the autonomy controller or config module
+(`server/agent/autonomyDenial.test.ts`).
+
+**Verification:** `docs/phase-29.4-autonomous-optimization-architecture.md`,
+`docs/phase-29.4-final-verification.md`. Full regression: tsc/build clean,
+unit 710/710, DB 320/320 (38 suites), targeted E2E 34/34, full E2E 184
+passed + 10 contention failures under parallel workers (44/44 on serial
+re-run, confirming contention not regression).
+
 ## Phase 29.3 — Human-Gated Policy Activation (APPROVE -> ACTIVATE -> PRESERVE HISTORY)
 
 **Status:** IMPLEMENTED & VERIFIED (Agent Autonomous Activation: DEFERRED, no code path exists).
