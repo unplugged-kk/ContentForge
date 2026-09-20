@@ -141,6 +141,28 @@ async function recordDecision(
   });
 }
 
+/**
+ * §7/§19/§41: serializes every autonomous decision+action for one owner
+ * behind a Postgres row lock on that owner's `autonomy_configs` row.
+ *
+ * Without this, two concurrent `executeAutonomousActivation` calls for
+ * *different* scopes (or a concurrent activation + rollback) can each read
+ * the same pre-mutation budget/cooldown/churn counts and both pass their
+ * gates before either commits, exceeding `maxActivationsPerDay` or
+ * double-tripping the rollback-oscillation breaker. The per-scope
+ * single-active-revision invariant is already DB-enforced (Phase 29.3's
+ * partial unique index), but that says nothing about a per-owner budget
+ * spanning multiple scopes. `SELECT ... FOR UPDATE` on the owner's config
+ * row makes read-then-decide-then-write atomic per owner: a concurrent
+ * caller blocks until the first transaction commits, then re-reads
+ * genuinely post-commit counts. A never-configured owner has no row to
+ * lock, but `baseGate` denies with UNCONFIGURED regardless, so no race is
+ * possible for that case either.
+ */
+async function lockAutonomyConfigRow(tx: ContentDatabase, userId: number): Promise<void> {
+  await tx.execute(rawSql`select id from autonomy_configs where user_id = ${userId} for update`);
+}
+
 function denied(code: string, reason: string, context: Record<string, unknown> = {}): GateResult {
   return { allowed: false, code, reason, context };
 }
@@ -421,29 +443,34 @@ export async function executeAutonomousActivation(
   userId: number,
   candidateId: number,
 ): Promise<AutonomousActionResult> {
-  const eligibility = await evaluateActivationEligibility(db, userId, candidateId);
-  if (!eligibility.gate.allowed) return { gate: eligibility.gate };
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as ContentDatabase;
+    await lockAutonomyConfigRow(txDb, userId);
 
-  try {
-    const activation = await activatePolicyCandidate(
-      db,
-      candidateId,
-      userId,
-      "Autonomously activated by the bounded autonomy controller under passing deterministic gates.",
-      "autonomous_controller",
-    );
-    return { gate: eligibility.gate, activation };
-  } catch (error) {
-    if (error instanceof PolicyActivationError) {
-      const gate = denied(error.code, error.message);
-      await recordDecision(db, userId, "activation", gate, {
+    const eligibility = await evaluateActivationEligibility(txDb, userId, candidateId);
+    if (!eligibility.gate.allowed) return { gate: eligibility.gate };
+
+    try {
+      const activation = await activatePolicyCandidate(
+        txDb,
         candidateId,
-        identityKey: activationDecisionIdentityKey(userId, candidateId, `EXEC_${error.code}`),
-      });
-      return { gate };
+        userId,
+        "Autonomously activated by the bounded autonomy controller under passing deterministic gates.",
+        "autonomous_controller",
+      );
+      return { gate: eligibility.gate, activation };
+    } catch (error) {
+      if (error instanceof PolicyActivationError) {
+        const gate = denied(error.code, error.message);
+        await recordDecision(txDb, userId, "activation", gate, {
+          candidateId,
+          identityKey: activationDecisionIdentityKey(userId, candidateId, `EXEC_${error.code}`),
+        });
+        return { gate };
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 export interface RollbackTrigger {
@@ -461,6 +488,19 @@ export interface RollbackTrigger {
  * breaker (§28) rather than rolling back indefinitely.
  */
 export async function executeAutonomousRollback(
+  db: ContentDatabase,
+  userId: number,
+  candidateId: number,
+  trigger: RollbackTrigger,
+): Promise<AutonomousActionResult> {
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as ContentDatabase;
+    await lockAutonomyConfigRow(txDb, userId);
+    return executeAutonomousRollbackLocked(txDb, userId, candidateId, trigger);
+  });
+}
+
+async function executeAutonomousRollbackLocked(
   db: ContentDatabase,
   userId: number,
   candidateId: number,

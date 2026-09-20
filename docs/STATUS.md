@@ -7,7 +7,10 @@ Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 
 **Status:** IMPLEMENTED & VERIFIED for autonomous activation/rollback.
 Autonomous experiment selection/creation and any background scheduler are
-DEFERRED (architecturally ready, not wired). Commit `94ddeaf`.
+DEFERRED (architecturally ready, not wired). Commit `94ddeaf`, hardened by a
+deep adversarial audit (commit below) that found and fixed one real
+concurrency defect (cross-scope daily/weekly activation budget was not
+lock-serialized per owner). See `docs/phase-29.4-deep-audit-report.md`.
 
 Adds a deterministic autonomy controller (`server/content/autonomy/`) that
 may activate or roll back an eligible `PolicyCandidate` without a human

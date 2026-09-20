@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { and as andOp, eq, gte, lt } from "drizzle-orm";
+import { and as andOp, eq, gte, lt, sql as rawSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -394,6 +394,27 @@ describeDb("bounded autonomous optimization (Phase 29.4 db)", () => {
 
     const config = await getOrCreateAutonomyConfig(db, owner);
     assert.equal(config.circuitBreakerState, "open");
+  });
+
+  it("budget race: two concurrent activations for DIFFERENT scopes under the SAME owner never both succeed past a budget of 1 (Phase 29.4 deep audit §8/§19)", async () => {
+    const owner = OWNER_A + 4900;
+    await fullyEnable(owner, { maxActivationsPerDay: 1, maxActivationsPerWeek: 10, cooldownMinutes: 0, maxConsecutiveActivations: 10 });
+    const c1 = await seedEligibleCandidate(owner, { channel: "race1", format: `${RUN}-race1` });
+    const c2 = await seedEligibleCandidate(owner, { channel: "race2", format: `${RUN}-race2` });
+
+    const [r1, r2] = await Promise.all([
+      executeAutonomousActivation(db, owner, c1.candidate.id),
+      executeAutonomousActivation(db, owner, c2.candidate.id),
+    ]);
+
+    const allowedCount = [r1, r2].filter((r) => r.gate.allowed).length;
+    assert.equal(allowedCount, 1, "exactly one of the two concurrent cross-scope activations may pass a daily budget of 1");
+
+    const activatedRows = await db
+      .select({ count: rawSql<number>`count(*)::int` })
+      .from(policyActivations)
+      .where(andOp(eq(policyActivations.userId, owner), eq(policyActivations.actor, "autonomous_controller"), eq(policyActivations.action, "activate")));
+    assert.equal(activatedRows[0].count, 1, "the database must show exactly one autonomous activation, not two");
   });
 
   it("every evaluation, allowed or denied, is durably logged with a machine-readable code and reason", async () => {
