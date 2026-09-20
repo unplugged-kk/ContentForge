@@ -1994,3 +1994,244 @@ export type AgentRun = typeof agentRuns.$inferSelect;
 export type InsertAgentRun = z.infer<typeof insertAgentRunSchema>;
 export type AgentToolCall = typeof agentToolCalls.$inferSelect;
 export type InsertAgentToolCall = z.infer<typeof insertAgentToolCallSchema>;
+
+// ── CONTROLLED OPTIMIZATION & EXPERIMENTATION (Phase 29.2) ───────────────────
+// Hypothesis → Experiment → Measure → Decide
+// Provides durable experimentation infrastructure.
+// Strictly non-mutating: Experiments test whether a learned hypothesis produces
+// a measurable improvement. Winning variants produce PolicyCandidate records
+// for human review; live production policies and active prompts remain untouched.
+
+export const experiments = pgTable(
+  "experiments",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    sourceProposalId: integer("source_proposal_id").references(() => learningProposals.id),
+    name: varchar("name", { length: 255 }).notNull(),
+    hypothesis: text("hypothesis").notNull(),
+    objective: text("objective").notNull(),
+    targetScope: varchar("target_scope", { length: 100 }).notNull(),
+    experimentType: varchar("experiment_type", { length: 50 }).notNull(),
+    primaryMetric: varchar("primary_metric", { length: 60 }).notNull(),
+    guardrailMetrics: jsonb("guardrail_metrics").$type<string[]>().notNull().default([]),
+    eligibilityRules: jsonb("eligibility_rules").$type<Record<string, unknown>>().notNull().default({}),
+    allocationMethod: varchar("allocation_method", { length: 50 }).notNull().default("deterministic_hash"),
+    /** draft | ready | running | paused | completed | cancelled | invalidated */
+    status: varchar("status", { length: 30 }).notNull().default("draft"),
+    /** pending | inconclusive | control_preferred | variant_promising | variant_preferred | guardrail_failed | invalidated */
+    decision: varchar("decision", { length: 30 }).notNull().default("pending"),
+    decisionNotes: text("decision_notes"),
+    decidedAt: timestamp("decided_at"),
+    decidedBy: integer("decided_by"),
+    minSampleSize: integer("min_sample_size").notNull().default(3),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("experiments_identity_uq").on(table.identityKey),
+    index("experiments_user_idx").on(table.userId),
+    index("experiments_status_idx").on(table.status),
+    index("experiments_type_idx").on(table.experimentType),
+    index("experiments_proposal_idx").on(table.sourceProposalId),
+  ],
+);
+
+export const experimentVariants = pgTable(
+  "experiment_variants",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    experimentId: integer("experiment_id")
+      .notNull()
+      .references(() => experiments.id, { onDelete: "cascade" }),
+    variantKey: varchar("variant_key", { length: 50 }).notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    isControl: boolean("is_control").notNull().default(false),
+    /** Immutable configuration snapshot for this variant */
+    policySnapshot: jsonb("policy_snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    generationPolicyId: integer("generation_policy_id").references(() => generationPolicies.id),
+    trafficWeight: integer("traffic_weight").notNull().default(50),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("experiment_variants_exp_key_uq").on(table.experimentId, table.variantKey),
+    index("experiment_variants_user_idx").on(table.userId),
+    index("experiment_variants_exp_idx").on(table.experimentId),
+  ],
+);
+
+export const experimentAssignments = pgTable(
+  "experiment_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    experimentId: integer("experiment_id")
+      .notNull()
+      .references(() => experiments.id, { onDelete: "cascade" }),
+    variantId: integer("variant_id")
+      .notNull()
+      .references(() => experimentVariants.id, { onDelete: "cascade" }),
+    opportunityId: integer("opportunity_id")
+      .notNull()
+      .references(() => opportunities.id),
+    artifactId: integer("artifact_id").references(() => artifacts.id),
+    publicationId: integer("publication_id").references(() => publications.id),
+    assignedAt: timestamp("assigned_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 300 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("experiment_assignments_idempotency_uq").on(table.idempotencyKey),
+    uniqueIndex("experiment_assignments_opp_uq").on(table.opportunityId),
+    index("experiment_assignments_exp_idx").on(table.experimentId),
+    index("experiment_assignments_variant_idx").on(table.variantId),
+    index("experiment_assignments_user_idx").on(table.userId),
+    index("experiment_assignments_artifact_idx").on(table.artifactId),
+    index("experiment_assignments_pub_idx").on(table.publicationId),
+  ],
+);
+
+export const experimentEvaluations = pgTable(
+  "experiment_evaluations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    experimentId: integer("experiment_id")
+      .notNull()
+      .references(() => experiments.id, { onDelete: "cascade" }),
+    evaluationWindow: varchar("evaluation_window", { length: 50 }).notNull().default("interim"),
+    primaryMetric: varchar("primary_metric", { length: 60 }).notNull(),
+    controlMetrics: jsonb("control_metrics").$type<{
+      sampleCount: number;
+      measuredCount: number;
+      mean: string | null;
+      availability: string;
+    }>().notNull().default({ sampleCount: 0, measuredCount: 0, mean: null, availability: "insufficient_data" }),
+    variantMetrics: jsonb("variant_metrics").$type<Array<{
+      variantId: number;
+      variantKey: string;
+      sampleCount: number;
+      measuredCount: number;
+      mean: string | null;
+      difference: string | null;
+      differencePercentage: string | null;
+      availability: string;
+    }>>().notNull().default([]),
+    guardrailResults: jsonb("guardrail_results").$type<Array<{
+      metric: string;
+      controlValue: string | null;
+      variantValue: string | null;
+      differencePercentage: string | null;
+      status: "passed" | "regressed" | "not_available";
+    }>>().notNull().default([]),
+    /** insufficient_data | observed | directional | repeatable | confirmed */
+    evidenceQuality: varchar("evidence_quality", { length: 30 }).notNull(),
+    /** inconclusive | control_preferred | variant_promising | variant_preferred | guardrail_failed */
+    recommendedDecision: varchar("recommended_decision", { length: 30 }).notNull(),
+    summary: text("summary").notNull(),
+    evaluatedAt: timestamp("evaluated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("experiment_evaluations_identity_uq").on(table.identityKey),
+    index("experiment_evaluations_exp_idx").on(table.experimentId),
+    index("experiment_evaluations_user_idx").on(table.userId),
+  ],
+);
+
+export const policyCandidates = pgTable(
+  "policy_candidates",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    experimentId: integer("experiment_id")
+      .notNull()
+      .references(() => experiments.id),
+    variantId: integer("variant_id")
+      .notNull()
+      .references(() => experimentVariants.id),
+    evaluationId: integer("evaluation_id").references(() => experimentEvaluations.id),
+    title: varchar("title", { length: 255 }).notNull(),
+    rationale: text("rationale").notNull(),
+    targetScope: varchar("target_scope", { length: 100 }).notNull(),
+    proposedConfiguration: jsonb("proposed_configuration").$type<Record<string, unknown>>().notNull().default({}),
+    /** candidate | under_review | approved_for_future | rejected | archived */
+    status: varchar("status", { length: 30 }).notNull().default("candidate"),
+    reviewedBy: integer("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNotes: text("review_notes"),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("policy_candidates_identity_uq").on(table.identityKey),
+    index("policy_candidates_user_idx").on(table.userId),
+    index("policy_candidates_exp_idx").on(table.experimentId),
+    index("policy_candidates_status_idx").on(table.status),
+  ],
+);
+
+export const insertExperimentSchema = createInsertSchema(experiments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertExperimentVariantSchema = createInsertSchema(experimentVariants).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertExperimentAssignmentSchema = createInsertSchema(experimentAssignments).omit({
+  id: true,
+  assignedAt: true,
+});
+export const insertExperimentEvaluationSchema = createInsertSchema(experimentEvaluations).omit({
+  id: true,
+  evaluatedAt: true,
+});
+export const insertPolicyCandidateSchema = createInsertSchema(policyCandidates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type Experiment = typeof experiments.$inferSelect;
+export type InsertExperiment = z.infer<typeof insertExperimentSchema>;
+export type ExperimentVariant = typeof experimentVariants.$inferSelect;
+export type InsertExperimentVariant = z.infer<typeof insertExperimentVariantSchema>;
+export type ExperimentAssignment = typeof experimentAssignments.$inferSelect;
+export type InsertExperimentAssignment = z.infer<typeof insertExperimentAssignmentSchema>;
+export type ExperimentEvaluation = typeof experimentEvaluations.$inferSelect;
+export type InsertExperimentEvaluation = z.infer<typeof insertExperimentEvaluationSchema>;
+export type PolicyCandidate = typeof policyCandidates.$inferSelect;
+export type InsertPolicyCandidate = z.infer<typeof insertPolicyCandidateSchema>;
+
+export type ExperimentStatus =
+  | "draft"
+  | "ready"
+  | "running"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "invalidated";
+
+export type ExperimentDecision =
+  | "pending"
+  | "inconclusive"
+  | "control_preferred"
+  | "variant_promising"
+  | "variant_preferred"
+  | "guardrail_failed"
+  | "invalidated";
+
+export type PolicyCandidateStatus =
+  | "candidate"
+  | "under_review"
+  | "approved_for_future"
+  | "rejected"
+  | "archived";
+

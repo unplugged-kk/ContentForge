@@ -3,6 +3,49 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 29.2 — Controlled Optimization & Experimentation (FREEZE THE EXPERIMENT SYSTEM)
+
+**Status:** IMPLEMENTED & FINALIZATION GATE VERIFIED (Autonomous Policy Mutation: DEFERRED, no code path exists).
+
+Second slice of Phase 29 (*Hypothesize → Experiment → Measure → Decide*).
+Builds durable controlled-experimentation infrastructure on top of the Phase
+29.1 learning foundation: an `Experiment` with immutable `ExperimentVariant`
+arms (exactly one control), deterministic hash-based `ExperimentAssignment`
+(no `Math.random()`, contamination-proof via a unique DB constraint), honest
+`ExperimentEvaluation` against real `performance_signals`/`results` (never
+coercing missing data to 0, never fabricating a winner under insufficient
+sample size), a durable human decision gate, and a `PolicyCandidate`
+governance artifact that is **never** auto-applied to production
+`GenerationPolicy` — proven by static grep (zero write paths exist), a DB
+test that snapshots the production policy count before/after the full flow,
+and a live E2E test that re-verifies the same invariant end to end. Full
+architecture: `docs/phase-29.2-experimentation-architecture.md`; finalization
+report: `docs/phase-29.2-final-verification.md`.
+
+### Schema (migration `0028`)
+
+5 new tables, all owner-scoped and indexed: `experiments`,
+`experiment_variants`, `experiment_assignments`, `experiment_evaluations`,
+`policy_candidates`. Assignment execution reuses the existing canonical
+pipeline (`GenerationJob → Artifact → Schedule → Publication → Result`) —
+no parallel lifecycle was introduced.
+
+### API
+
+`/api/experiments` (list/create/get/start/pause/complete/variants/assignments/
+assign/evaluate/evaluation/decide/policy-candidate/policy-candidates) and
+`/api/policy-candidates` (list/get/review) — 17 endpoints total, all
+owner-scoped in SQL, Zod-validated, idempotent on create paths.
+
+### Verification
+
+Typecheck 0 errors; build clean; unit 679/681 (2 pre-existing date-relative
+flakes, unrelated); DB 287/287 including all 6 Phase 29.2 dbtests; E2E
+23/23 on `experiments.e2e.spec.ts` + `accessibility.e2e.spec.ts`; full
+chromium E2E suite 178 passed + 15 parallel-worker-contention flakes that
+re-ran 39/39 green serially (confirmed non-regression, not a real failure).
+Zero new paid external provider calls introduced.
+
 ## Phase 29.1 — Learning Foundation & Evidence-Backed Optimization
 
 **Status:** IMPLEMENTED & HARDENING GATE VERIFIED (Autonomous prompt mutation: DEFERRED to Phase 29.2).

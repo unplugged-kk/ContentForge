@@ -2882,6 +2882,18 @@ Includes backend metric aggregations (`metricTotals` in `server/content/learning
 with 15 unit tests (`client/src/lib/insights-state.ts`), 11/11 DB tests in `server/content/learning.dbtest.ts`,
 11 Playwright Journeys A–J with 0 Axe accessibility violations (`e2e/insights.e2e.spec.ts`), and 100% regression passing.
 
+## Phase 29.2 — Controlled Optimization & Experimentation (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 29.2`),
+`docs/phase-29.2-experimentation-architecture.md`, and
+`docs/phase-29.2-final-verification.md`. Summary: durable
+Hypothesize → Experiment → Measure → Decide infrastructure (5 new tables,
+deterministic contamination-proof assignment, honest evaluation with no
+fabricated zeroes/winners, human decision gate, `PolicyCandidate` governance
+artifact). Programmatically proven to never mutate production
+`GenerationPolicy` rows (static grep + DB test + live E2E). 679/681 unit,
+287/287 DB, 23/23 targeted E2E, 0 axe violations.
+
 ## Phase 28.2H — Full Product UX Re-Audit + Responsive Polish (pointer)
 
 Full detail lives in `docs/STATUS.md` (`## Phase 28.2H`) and

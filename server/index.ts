@@ -208,6 +208,11 @@ app.use((req, res, next) => {
   const { createDefaultLearningRouter } = await import("./content/learning/http");
   app.use("/api/learning", await createDefaultLearningRouter());
 
+  const { createDefaultExperimentRouter, createDefaultPolicyCandidateRouter } =
+    await import("./content/experimentation/http");
+  app.use("/api/experiments", await createDefaultExperimentRouter());
+  app.use("/api/policy-candidates", await createDefaultPolicyCandidateRouter());
+
   const { createDefaultAgentRouter } = await import("./agent/routes");
   app.use("/api/agent", await createDefaultAgentRouter());
 

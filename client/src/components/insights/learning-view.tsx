@@ -39,6 +39,12 @@ import {
   ShieldCheck,
   Eye,
   BookOpen,
+  FlaskConical,
+  TrendingUp,
+  Sliders,
+  Play,
+  Pause,
+  FileText,
 } from "lucide-react";
 
 interface StyleProfileItem {
@@ -108,6 +114,86 @@ interface LearningObservationItem {
   createdAt: string;
 }
 
+interface ExperimentVariantItem {
+  id: number;
+  experimentId: number;
+  variantKey: string;
+  name: string;
+  description: string | null;
+  isControl: boolean;
+  trafficWeight: number;
+  policySnapshot: Record<string, any>;
+}
+
+interface ExperimentEvaluationItem {
+  id: number;
+  experimentId: number;
+  primaryMetric: string;
+  controlMetrics: { sampleCount: number; mean: string };
+  variantMetrics: Array<{
+    variantId: number;
+    variantKey: string;
+    sampleCount: number;
+    mean: string;
+    difference: string | null;
+    differencePercentage: string | null;
+  }>;
+  guardrailResults: Array<{
+    metric: string;
+    status: "passed" | "regressed" | "inconclusive";
+    controlValue: string;
+    variantValue: string;
+    message: string;
+  }>;
+  evidenceQuality: string;
+  recommendedDecision: string;
+  summary: string;
+  evaluatedAt: string;
+}
+
+interface ExperimentItem {
+  id: number;
+  userId: number;
+  name: string;
+  hypothesis: string;
+  objective: string;
+  targetScope: string;
+  experimentType: string;
+  primaryMetric: string;
+  guardrailMetrics: string[];
+  status: "draft" | "ready" | "running" | "paused" | "completed" | "cancelled";
+  minSampleSize: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  winningVariantId: number | null;
+  decision: string | null;
+  decisionNotes: string | null;
+  decidedAt: string | null;
+  sourceProposalId: number | null;
+  createdAt: string;
+  variants?: ExperimentVariantItem[];
+  assignmentsCount?: number;
+  latestEvaluation?: ExperimentEvaluationItem | null;
+}
+
+interface PolicyCandidateItem {
+  id: number;
+  userId: number;
+  experimentId: number;
+  variantId: number;
+  evaluationId: number | null;
+  title: string;
+  targetScope: string;
+  proposedConfiguration: Record<string, any>;
+  rationale: string;
+  status: "candidate" | "under_review" | "approved_for_future" | "rejected" | "archived";
+  reviewedAt: string | null;
+  reviewNotes: string | null;
+  identityKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function formatProposalType(type: string): string {
   switch (type) {
     case "format_distribution":
@@ -120,6 +206,24 @@ function formatProposalType(type: string): string {
       return "Production Efficiency";
     default:
       return type.replace(/_/g, " ");
+  }
+}
+
+function formatDecisionBadge(decision: string | null): { label: string; variant: "default" | "secondary" | "outline" | "destructive" } {
+  switch (decision) {
+    case "variant_preferred":
+      return { label: "Variant Preferred", variant: "default" };
+    case "variant_promising":
+      return { label: "Variant Promising", variant: "default" };
+    case "control_preferred":
+      return { label: "Control Preferred", variant: "outline" };
+    case "guardrail_failed":
+      return { label: "Guardrail Regressed", variant: "destructive" };
+    case "inconclusive":
+      return { label: "Inconclusive", variant: "secondary" };
+    case "pending":
+    default:
+      return { label: "Evaluation Pending", variant: "outline" };
   }
 }
 
@@ -238,9 +342,208 @@ export function LearningView() {
     setExpandedEvidence((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const [expandedExperiment, setExpandedExperiment] = useState<Record<number, boolean>>({});
+  const toggleExperiment = (id: number) => {
+    setExpandedExperiment((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Query 5: Controlled Experiments (Phase 29.2)
+  const {
+    data: experimentsData,
+    isLoading: isExperimentsLoading,
+    error: experimentsError,
+    refetch: refetchExperiments,
+  } = useQuery<ExperimentItem[]>({
+    queryKey: ["/api/experiments"],
+  });
+
+  // Query 6: Policy Candidates (Phase 29.2)
+  const {
+    data: policyCandidatesData,
+    isLoading: isCandidatesLoading,
+    error: candidatesError,
+    refetch: refetchCandidates,
+  } = useQuery<PolicyCandidateItem[]>({
+    queryKey: ["/api/policy-candidates"],
+  });
+
+  // Mutation: Create experiment from proposal
+  const createExperimentFromProposalMutation = useMutation({
+    mutationFn: async (prop: LearningProposalItem) => {
+      const isReliability = prop.proposalType === "workflow_reliability";
+      const res = await apiRequest("POST", "/api/experiments", {
+        name: `Test: ${prop.title}`,
+        hypothesis: prop.expectedImpactHypothesis || prop.rationale,
+        objective: prop.title,
+        targetScope: prop.targetScope,
+        experimentType: prop.proposalType,
+        primaryMetric: isReliability ? "publication_delivery_rate" : "likes",
+        guardrailMetrics: ["publication_failure_rate"],
+        sourceProposalId: prop.id,
+        status: "running",
+        minSampleSize: 3,
+        variants: [
+          {
+            variantKey: "control",
+            name: "Current Baseline",
+            isControl: true,
+            trafficWeight: 50,
+            policySnapshot: { baseline: true, scope: prop.targetScope },
+          },
+          {
+            variantKey: "variant_a",
+            name: `Optimized (${prop.title.slice(0, 30)})`,
+            isControl: false,
+            trafficWeight: 50,
+            policySnapshot: {
+              proposalId: prop.id,
+              scope: prop.targetScope,
+              hypothesis: prop.expectedImpactHypothesis,
+            },
+          },
+        ],
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiments"] });
+      toast({
+        title: "Controlled Experiment Launched",
+        description: `Running experiment "${data.name}" with 50/50 deterministic allocation.`,
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to create experiment",
+        description: err?.message || "Could not initialize experiment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: Evaluate experiment
+  const evaluateExperimentMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/experiments/${id}/evaluate`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiments"] });
+      toast({
+        title: "Evaluation updated",
+        description: "Primary metrics and guardrails recalculated against latest signals.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Evaluation failed",
+        description: err?.message || "Could not evaluate experiment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: Record experiment decision
+  const decideExperimentMutation = useMutation({
+    mutationFn: async ({ id, decision, notes }: { id: number; decision: string; notes?: string }) => {
+      const res = await apiRequest("POST", `/api/experiments/${id}/decide`, { decision, notes });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiments"] });
+      toast({
+        title: "Decision recorded",
+        description: "Experiment decision saved. Staged for policy candidate creation.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to record decision",
+        description: err?.message || "Could not save decision.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: Complete experiment
+  const completeExperimentMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/experiments/${id}/complete`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiments"] });
+      toast({
+        title: "Experiment completed",
+        description: "Experiment completed and closed to new assignments.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to complete experiment",
+        description: err?.message || "Could not complete experiment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: Promote variant to policy candidate
+  const promoteCandidateMutation = useMutation({
+    mutationFn: async ({ experimentId, variantId, title }: { experimentId: number; variantId: number; title?: string }) => {
+      const res = await apiRequest("POST", `/api/experiments/${experimentId}/policy-candidate`, {
+        variantId,
+        title,
+        reviewNotes: "Promoted from validated experiment decision.",
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      toast({
+        title: "Policy Candidate Generated",
+        description: "Pre-production candidate staged for human review. Zero production mutation.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to promote candidate",
+        description: err?.message || "Could not generate policy candidate.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: Review policy candidate (Approve or Reject)
+  const reviewCandidateMutation = useMutation({
+    mutationFn: async ({ candidateId, status, notes }: { candidateId: number; status: "approved_for_future" | "rejected"; notes?: string }) => {
+      const res = await apiRequest("POST", `/api/policy-candidates/${candidateId}/review`, {
+        status,
+        notes: notes || `Marked ${status} by human reviewer`,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      toast({
+        title: "Policy Candidate Reviewed",
+        description: "Governance decision saved. Live production policies remain unmutated.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Review failed",
+        description: err?.message || "Could not update policy candidate.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const profiles = styleData?.profiles || [];
   const proposals = proposalsData || [];
   const observations = observationsData || [];
+  const experiments = experimentsData || [];
+  const policyCandidates = policyCandidatesData || [];
 
   const isStyleUnconfigured =
     styleError &&
@@ -350,7 +653,7 @@ export function LearningView() {
                       </div>
 
                       {/* Status / Review Actions */}
-                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto pt-1 sm:pt-0">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-auto pt-1 sm:pt-0">
                         {prop.status === "proposed" ? (
                           <>
                             <Button
@@ -386,6 +689,17 @@ export function LearningView() {
                             Dismissed
                           </Badge>
                         )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1 border-primary/30 text-foreground hover:bg-primary/10"
+                          onClick={() => createExperimentFromProposalMutation.mutate(prop)}
+                          disabled={createExperimentFromProposalMutation.isPending}
+                          data-testid={`button-create-experiment-${prop.id}`}
+                        >
+                          <FlaskConical className={`h-3 w-3 ${createExperimentFromProposalMutation.isPending ? "animate-spin" : ""}`} />
+                          Test in Experiment
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>
@@ -456,6 +770,418 @@ export function LearningView() {
                             </span>
                           )}
                         </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── TIER 1.5: CONTROLLED EXPERIMENTS (HYPOTHESIZE → EXPERIMENT → MEASURE → DECIDE) ── */}
+      <div className="space-y-4" data-testid="section-controlled-experiments">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <FlaskConical className="h-5 w-5 text-blue-500" />
+              <h2 className="text-lg font-semibold text-foreground">Controlled Experiments</h2>
+              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                Optimization Engine
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Hypothesize → Experiment → Measure → Decide. Controlled 50/50 variant testing with guardrails. Zero automated production mutation.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs h-8 gap-1.5 shrink-0 self-start sm:self-auto"
+            onClick={() => refetchExperiments()}
+            disabled={isExperimentsLoading}
+            data-testid="button-refresh-experiments"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isExperimentsLoading ? "animate-spin" : ""}`} />
+            Refresh Experiments
+          </Button>
+        </div>
+
+        {isExperimentsLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-28 w-full" />
+            <Skeleton className="h-28 w-full" />
+          </div>
+        ) : experimentsError ? (
+          <ErrorState
+            title="Couldn't load controlled experiments"
+            description="Failed to fetch experiments."
+            onRetry={() => refetchExperiments()}
+          />
+        ) : experiments.length === 0 ? (
+          <Card className="border-dashed bg-muted/20" data-testid="empty-controlled-experiments">
+            <CardContent className="py-8 text-center space-y-3">
+              <FlaskConical className="h-8 w-8 text-muted-foreground mx-auto" />
+              <div className="space-y-1 max-w-md mx-auto">
+                <p className="text-sm font-semibold text-foreground">No Controlled Experiments Active</p>
+                <p className="text-xs text-muted-foreground">
+                  Launch a controlled experiment from any optimization proposal above or configure a variant test. ContentForge allocates incoming opportunities deterministically to measure empirical delta against control.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-4" data-testid="list-controlled-experiments">
+            {experiments.map((exp) => {
+              const isExpanded = !!expandedExperiment[exp.id];
+              const evalData = exp.latestEvaluation;
+              const decBadge = formatDecisionBadge(exp.decision);
+              const isRunning = exp.status === "running";
+              const isCompleted = exp.status === "completed";
+
+              return (
+                <Card
+                  key={exp.id}
+                  className="border transition-colors hover:border-border/80"
+                  data-testid={`card-experiment-${exp.id}`}
+                >
+                  <CardHeader className="pb-3 pt-4 px-4 sm:px-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className="text-sm font-semibold text-foreground"
+                            data-testid={`text-experiment-name-${exp.id}`}
+                          >
+                            {exp.name}
+                          </span>
+                          <Badge variant="outline" className="text-[10px] uppercase font-medium">
+                            {formatProposalType(exp.experimentType)}
+                          </Badge>
+                          <Badge
+                            variant={isRunning ? "default" : isCompleted ? "secondary" : "outline"}
+                            className={`text-[10px] capitalize ${
+                              isRunning ? "bg-blue-600 text-white" : isCompleted ? "bg-emerald-600 text-white" : ""
+                            }`}
+                            data-testid={`badge-experiment-status-${exp.id}`}
+                          >
+                            {exp.status}
+                          </Badge>
+                          {exp.decision && exp.decision !== "pending" && (
+                            <Badge variant={decBadge.variant} className="text-[10px]" data-testid={`badge-experiment-decision-${exp.id}`}>
+                              {decBadge.label}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-foreground/90 font-medium leading-relaxed">
+                          <strong>Hypothesis:</strong> {exp.hypothesis}
+                        </p>
+                      </div>
+
+                      {/* Top Action Buttons */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-auto pt-1 sm:pt-0">
+                        {isRunning && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                            onClick={() => completeExperimentMutation.mutate(exp.id)}
+                            disabled={completeExperimentMutation.isPending}
+                            data-testid={`button-complete-experiment-${exp.id}`}
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                            Complete
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1 border-primary/30 text-foreground hover:bg-primary/10"
+                          onClick={() => evaluateExperimentMutation.mutate(exp.id)}
+                          disabled={evaluateExperimentMutation.isPending}
+                          data-testid={`button-evaluate-experiment-${exp.id}`}
+                        >
+                          <TrendingUp className={`h-3 w-3 ${evaluateExperimentMutation.isPending ? "animate-spin" : ""}`} />
+                          Evaluate Signals
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
+                    {/* Metadata strip */}
+                    <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                        <span><strong>Scope:</strong> <code>{exp.targetScope}</code></span>
+                        <span><strong>Primary Metric:</strong> <span className="capitalize">{exp.primaryMetric}</span></span>
+                        <span><strong>Guardrails:</strong> {exp.guardrailMetrics && exp.guardrailMetrics.length > 0 ? exp.guardrailMetrics.join(", ") : "None"}</span>
+                        <span><strong>Assignments:</strong> {exp.assignmentsCount ?? 0}</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground self-start sm:self-auto gap-1"
+                        onClick={() => toggleExperiment(exp.id)}
+                        data-testid={`button-toggle-experiment-details-${exp.id}`}
+                      >
+                        <ShieldCheck className="h-3 w-3 text-primary" />
+                        {isExpanded ? "Hide Evaluation & Variants" : "Inspect Results & Variants"}
+                        {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      </Button>
+                    </div>
+
+                    {/* Variants preview bar */}
+                    {exp.variants && exp.variants.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                        <span className="text-muted-foreground">Variants:</span>
+                        {exp.variants.map((v) => (
+                          <span
+                            key={v.id}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 border text-[11px]"
+                          >
+                            <span className="font-semibold text-foreground">{v.name}</span>
+                            {v.isControl ? (
+                              <Badge variant="outline" className="text-[9px] py-0 px-1">Control</Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[9px] py-0 px-1">Variant</Badge>
+                            )}
+                            <span className="text-muted-foreground text-[10px]">({v.trafficWeight}%)</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Expandable Evaluation & Decision Drawer */}
+                    {isExpanded && (
+                      <div
+                        className="p-3.5 rounded-md bg-muted/40 border text-[11px] space-y-3 mt-2"
+                        data-testid={`drawer-experiment-details-${exp.id}`}
+                      >
+                        {evalData ? (
+                          <div className="space-y-3" data-testid={`drawer-experiment-eval-${exp.id}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-foreground text-xs">Empirical Evaluation</span>
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px]"
+                                  data-testid="badge-experiment-evidence-quality"
+                                >
+                                  {evalData.evidenceQuality.replace(/_/g, " ")} evidence
+                                </Badge>
+                                <Badge
+                                  variant={
+                                    evalData.recommendedDecision.includes("variant")
+                                      ? "default"
+                                      : evalData.recommendedDecision === "guardrail_failed"
+                                      ? "destructive"
+                                      : "outline"
+                                  }
+                                  className="text-[10px]"
+                                  data-testid="badge-recommended-decision"
+                                >
+                                  Recommendation: {evalData.recommendedDecision.replace(/_/g, " ")}
+                                </Badge>
+                              </div>
+                              <span className="text-muted-foreground text-[10px]">
+                                Evaluated {new Date(evalData.evaluatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                            </div>
+
+                            {/* Non-causal narrative */}
+                            <p className="text-foreground/90 bg-background/60 p-2.5 rounded border text-xs leading-relaxed italic">
+                              {evalData.summary}
+                            </p>
+
+                            {/* Metric comparisons */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              <div className="p-2 rounded bg-background/60 border">
+                                <span className="text-muted-foreground block text-[10px]">Control Mean</span>
+                                <span className="font-semibold text-foreground text-xs">
+                                  {evalData.controlMetrics.mean}
+                                </span>
+                                <span className="text-muted-foreground block text-[9px]">
+                                  {evalData.controlMetrics.sampleCount} samples
+                                </span>
+                              </div>
+                              {evalData.variantMetrics.map((vm) => (
+                                <div key={vm.variantId} className="p-2 rounded bg-background/60 border col-span-1 sm:col-span-3">
+                                  <span className="text-muted-foreground block text-[10px]">
+                                    Variant ({vm.variantKey}) Mean & Delta
+                                  </span>
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="font-semibold text-foreground text-xs">{vm.mean}</span>
+                                    {vm.differencePercentage && (
+                                      <span
+                                        className={`font-semibold text-xs ${
+                                          Number(vm.differencePercentage) > 0
+                                            ? "text-emerald-600 dark:text-emerald-400"
+                                            : Number(vm.differencePercentage) < 0
+                                            ? "text-rose-600"
+                                            : "text-muted-foreground"
+                                        }`}
+                                      >
+                                        {Number(vm.differencePercentage) > 0 ? "+" : ""}
+                                        {vm.differencePercentage}%
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-muted-foreground block text-[9px]">
+                                    {vm.sampleCount} samples (diff: {vm.difference ?? "0.00"})
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Guardrails table */}
+                            {evalData.guardrailResults && evalData.guardrailResults.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="font-semibold text-foreground text-[11px]">Guardrail Safety Checks</span>
+                                <div className="rounded border bg-background/60 overflow-hidden">
+                                  <table className="w-full text-[10px] text-left">
+                                    <thead className="border-b bg-muted/30 text-muted-foreground">
+                                      <tr>
+                                        <th className="p-1.5 font-medium">Metric</th>
+                                        <th className="p-1.5 font-medium">Control</th>
+                                        <th className="p-1.5 font-medium">Variant</th>
+                                        <th className="p-1.5 font-medium">Status</th>
+                                        <th className="p-1.5 font-medium">Message</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {evalData.guardrailResults.map((g) => (
+                                        <tr key={g.metric} className="border-b border-border/40 last:border-0">
+                                          <td className="p-1.5 font-mono text-foreground">{g.metric}</td>
+                                          <td className="p-1.5 tabular-nums">{g.controlValue}</td>
+                                          <td className="p-1.5 tabular-nums">{g.variantValue}</td>
+                                          <td className="p-1.5">
+                                            <Badge
+                                              variant={g.status === "passed" ? "default" : g.status === "regressed" ? "destructive" : "secondary"}
+                                              className="text-[9px] py-0 px-1"
+                                            >
+                                              {g.status}
+                                            </Badge>
+                                          </td>
+                                          <td className="p-1.5 text-muted-foreground">{g.message}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Human Decision Gate & Candidate Promotion */}
+                            <div className="pt-2 border-t border-border/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                              <div className="space-y-0.5">
+                                <span className="font-semibold text-foreground text-xs block">Human Decision Gate</span>
+                                <span className="text-muted-foreground text-[10px]">
+                                  Decide based on observed evidence. Acceptance promotes the variant to a policy candidate without touching production.
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                {exp.decision === "pending" ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="default"
+                                      className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                      onClick={() =>
+                                        decideExperimentMutation.mutate({
+                                          id: exp.id,
+                                          decision: "variant_promising",
+                                          notes: "Observed positive primary metric delta with stable guardrails",
+                                        })
+                                      }
+                                      disabled={decideExperimentMutation.isPending}
+                                      data-testid={`button-decide-promising-${exp.id}`}
+                                    >
+                                      <Check className="h-3 w-3" />
+                                      Accept Variant
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                                      onClick={() =>
+                                        decideExperimentMutation.mutate({
+                                          id: exp.id,
+                                          decision: "control_preferred",
+                                          notes: "Control retained",
+                                        })
+                                      }
+                                      disabled={decideExperimentMutation.isPending}
+                                      data-testid={`button-decide-control-${exp.id}`}
+                                    >
+                                      Prefer Control
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 text-xs text-muted-foreground"
+                                      onClick={() =>
+                                        decideExperimentMutation.mutate({
+                                          id: exp.id,
+                                          decision: "inconclusive",
+                                          notes: "Inconclusive results",
+                                        })
+                                      }
+                                      disabled={decideExperimentMutation.isPending}
+                                      data-testid={`button-decide-inconclusive-${exp.id}`}
+                                    >
+                                      Inconclusive
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Badge variant="default" className="text-xs bg-primary/20 text-foreground border-primary/30">
+                                      Decision: {exp.decision ? exp.decision.replace(/_/g, " ") : "Recorded"}
+                                    </Badge>
+                                    {(exp.decision === "variant_promising" || exp.decision === "variant_preferred") && (
+                                      <Button
+                                        size="sm"
+                                        variant="default"
+                                        className="h-7 text-xs gap-1 bg-blue-600 hover:bg-blue-700 text-white"
+                                        onClick={() => {
+                                          const nonControl = exp.variants?.find((v) => !v.isControl);
+                                          if (nonControl) {
+                                            promoteCandidateMutation.mutate({
+                                              experimentId: exp.id,
+                                              variantId: nonControl.id,
+                                              title: `Candidate from ${exp.name}`,
+                                            });
+                                          }
+                                        }}
+                                        disabled={promoteCandidateMutation.isPending}
+                                        data-testid={`button-promote-candidate-${exp.id}`}
+                                      >
+                                        <ShieldCheck className="h-3 w-3" />
+                                        Promote to Policy Candidate
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-4 text-center space-y-2">
+                            <p className="text-muted-foreground">
+                              No evaluation run yet for this experiment. Click "Evaluate Signals" above to analyze published assignments.
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              onClick={() => evaluateExperimentMutation.mutate(exp.id)}
+                              disabled={evaluateExperimentMutation.isPending}
+                            >
+                              Run Initial Evaluation
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </CardContent>
@@ -809,6 +1535,183 @@ export function LearningView() {
             </CardContent>
           </Card>
         </div>
+      </div>
+
+      {/* ── TIER 4: POLICY CANDIDATES (HUMAN GOVERNANCE REQUIRED) ── */}
+      <div className="space-y-4" data-testid="section-policy-candidates">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-emerald-600" />
+              <h2 className="text-lg font-semibold text-foreground">Policy Candidates</h2>
+                  <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+                Human Review Required
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Candidate generation and distribution policies promoted from validated experiments. Explicit human review is required before any future production rollout. Live production policies remain completely unmutated.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs h-8 gap-1.5 shrink-0 self-start sm:self-auto"
+            onClick={() => refetchCandidates()}
+            disabled={isCandidatesLoading}
+            data-testid="button-refresh-candidates"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isCandidatesLoading ? "animate-spin" : ""}`} />
+            Refresh Candidates
+          </Button>
+        </div>
+
+        {isCandidatesLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : candidatesError ? (
+          <ErrorState
+            title="Couldn't load policy candidates"
+            description="Failed to fetch candidate policies."
+            onRetry={() => refetchCandidates()}
+          />
+        ) : policyCandidates.length === 0 ? (
+          <Card className="border-dashed bg-muted/20" data-testid="empty-policy-candidates">
+            <CardContent className="py-8 text-center space-y-3">
+              <ShieldCheck className="h-8 w-8 text-muted-foreground mx-auto" />
+              <div className="space-y-1 max-w-md mx-auto">
+                <p className="text-sm font-semibold text-foreground">No Policy Candidates Staged</p>
+                <p className="text-xs text-muted-foreground">
+                  When a controlled experiment proves a statistically promising variant without guardrail regressions, you can promote it into a Policy Candidate for formal governance review.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-4" data-testid="list-policy-candidates">
+            {policyCandidates.map((candidate) => {
+              const isUnderReview = candidate.status === "candidate" || candidate.status === "under_review";
+              const isApproved = candidate.status === "approved_for_future";
+              const isRejected = candidate.status === "rejected";
+
+              return (
+                <Card
+                  key={candidate.id}
+                  className="border transition-colors hover:border-border/80"
+                  data-testid={`card-policy-candidate-${candidate.id}`}
+                >
+                  <CardHeader className="pb-3 pt-4 px-4 sm:px-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-foreground">{candidate.title}</span>
+                          <Badge variant="outline" className="text-[10px] uppercase font-medium">
+                            {candidate.targetScope}
+                          </Badge>
+                          <Badge
+                            variant={isApproved ? "default" : isRejected ? "destructive" : "secondary"}
+                            className={`text-[10px] ${
+                              isApproved
+                                ? "bg-emerald-600 text-white"
+                                : isUnderReview
+                                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                                : ""
+                            }`}
+                            data-testid={`badge-candidate-status-${candidate.id}`}
+                          >
+                            {isApproved
+                              ? "Approved for Future Rollout"
+                              : isRejected
+                              ? "Rejected"
+                              : "Review Pending"}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-foreground/90 font-medium leading-relaxed">
+                          {candidate.rationale}
+                        </p>
+                      </div>
+
+                      {/* Review Actions */}
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto pt-1 sm:pt-0">
+                        {isUnderReview ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                              onClick={() =>
+                                reviewCandidateMutation.mutate({
+                                  candidateId: candidate.id,
+                                  status: "approved_for_future",
+                                  notes: "Approved by human editor for future rollout consideration",
+                                })
+                              }
+                              disabled={reviewCandidateMutation.isPending}
+                              data-testid={`button-approve-candidate-${candidate.id}`}
+                            >
+                              <Check className="h-3 w-3" />
+                              Approve for Future
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                              onClick={() =>
+                                reviewCandidateMutation.mutate({
+                                  candidateId: candidate.id,
+                                  status: "rejected",
+                                  notes: "Rejected during governance review",
+                                })
+                              }
+                              disabled={reviewCandidateMutation.isPending}
+                              data-testid={`button-reject-candidate-${candidate.id}`}
+                            >
+                              <X className="h-3 w-3" />
+                              Reject
+                            </Button>
+                          </>
+                        ) : isApproved ? (
+                          <Badge variant="default" className="text-xs bg-emerald-600 gap-1 py-1">
+                            <Check className="h-3 w-3" />
+                            Approved by Human Reviewer
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs gap-1 py-1">
+                            Rejected by Reviewer
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
+                    <div className="pt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                      <span><strong>Scope:</strong> <code>{candidate.targetScope}</code></span>
+                      {candidate.experimentId && (
+                        <span><strong>Source Experiment:</strong> #{candidate.experimentId}</span>
+                      )}
+                      <span><strong>Created:</strong> {new Date(candidate.createdAt).toLocaleDateString()}</span>
+                      {candidate.reviewedAt && (
+                        <span><strong>Reviewed:</strong> {new Date(candidate.reviewedAt).toLocaleDateString()}</span>
+                      )}
+                    </div>
+
+                    {candidate.proposedConfiguration && Object.keys(candidate.proposedConfiguration).length > 0 && (
+                      <div className="pt-1">
+                        <span className="text-[10px] text-muted-foreground font-semibold block mb-1">
+                          Candidate Policy Snapshot (Pre-Production):
+                        </span>
+                        <pre className="text-[10px] bg-muted/40 p-2 rounded font-mono overflow-x-auto border border-border/40 max-h-32">
+                          {JSON.stringify(candidate.proposedConfiguration, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Canonical Bridges & Action Handoffs */}
