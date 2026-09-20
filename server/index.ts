@@ -218,6 +218,9 @@ app.use((req, res, next) => {
   app.use("/api/policy-candidates", await createDefaultPolicyActivationRouter());
   app.use("/api/policies", await createDefaultPolicyHistoryRouter());
 
+  const { createDefaultAutonomyRouter } = await import("./content/autonomy/http");
+  app.use("/api/autonomy", await createDefaultAutonomyRouter());
+
   const { createDefaultAgentRouter } = await import("./agent/routes");
   app.use("/api/agent", await createDefaultAgentRouter());
 

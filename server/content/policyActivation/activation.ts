@@ -132,6 +132,7 @@ export async function activatePolicyCandidate(
   candidateId: number,
   userId: number,
   reason?: string,
+  actor: "human" | "autonomous_controller" = "human",
 ): Promise<ActivationResult> {
   const [candidate] = await db.select().from(policyCandidates).where(eq(policyCandidates.id, candidateId));
   if (!candidate) {
@@ -264,6 +265,7 @@ export async function activatePolicyCandidate(
           previousPolicyId: priorActive && priorActive.id !== activated.id ? priorActive.id : null,
           policyKey,
           reason: reason ?? null,
+          actor,
           identityKey: idKey,
         })
         .onConflictDoNothing({ target: policyActivations.identityKey })
@@ -302,6 +304,7 @@ export async function rollbackPolicyForCandidate(
   candidateId: number,
   userId: number,
   reason?: string,
+  actor: "human" | "autonomous_controller" = "human",
 ): Promise<ActivationResult> {
   const [candidate] = await db.select().from(policyCandidates).where(eq(policyCandidates.id, candidateId));
   if (!candidate) {
@@ -377,6 +380,7 @@ export async function rollbackPolicyForCandidate(
           previousPolicyId: currentActive ? currentActive.id : null,
           policyKey,
           reason: reason ?? null,
+          actor,
           identityKey: idKey,
         })
         .returning();
@@ -451,4 +455,37 @@ export async function listPolicyHistoryForOwner(
     if (policy) entries.push({ policy, activation });
   }
   return entries;
+}
+
+/**
+ * Returns the set of PolicyCandidate IDs whose latest activation event is
+ * `action = 'activate'` (i.e. not subsequently rolled back). Server-derived
+ * truth for UI rendering — replaces ephemeral client-side `useState`.
+ */
+export async function getActivatedCandidateIds(
+  db: ContentDatabase,
+  userId: number,
+): Promise<number[]> {
+  // Group by policyCandidateId, take the latest event per candidate.
+  // A candidate is "activated" if its most recent event is action='activate'.
+  const events = await db
+    .select()
+    .from(policyActivations)
+    .where(eq(policyActivations.userId, userId))
+    .orderBy(desc(policyActivations.createdAt));
+
+  const latestByCandidateId = new Map<number, string>();
+  for (const event of events) {
+    if (event.policyCandidateId != null && !latestByCandidateId.has(event.policyCandidateId)) {
+      latestByCandidateId.set(event.policyCandidateId, event.action);
+    }
+  }
+
+  const activatedIds: number[] = [];
+  for (const [candidateId, action] of Array.from(latestByCandidateId.entries())) {
+    if (action === "activate") {
+      activatedIds.push(candidateId);
+    }
+  }
+  return activatedIds;
 }

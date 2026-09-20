@@ -388,9 +388,36 @@ test.describe("ContentForge Phase 29.3 — Human-Gated Policy Activation (Mocked
       return route.continue();
     });
 
+    let activatedIds: number[] = [];
+    await page.route("**/api/policy-candidates/activated-ids", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ activatedCandidateIds: activatedIds }) }),
+    );
+    await page.route("**/api/autonomy/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          enabled: false,
+          mode: "disabled",
+          experimentAutomationEnabled: false,
+          activationAutomationEnabled: false,
+          rollbackEnabled: false,
+          circuitBreakerState: "closed",
+          circuitBreakerReason: null,
+          maxActivationsPerDay: 1,
+          maxActivationsPerWeek: 2,
+          cooldownMinutes: 1440,
+        }),
+      }),
+    );
+    await page.route("**/api/autonomy/decisions", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+    );
+
     let activateCalls = 0;
     await page.route("**/api/policy-candidates/901/activate", (route) => {
       activateCalls += 1;
+      activatedIds = [901];
       return route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -405,6 +432,7 @@ test.describe("ContentForge Phase 29.3 — Human-Gated Policy Activation (Mocked
     let rollbackCalls = 0;
     await page.route("**/api/policy-candidates/901/rollback", (route) => {
       rollbackCalls += 1;
+      activatedIds = [];
       return route.fulfill({
         status: 200,
         contentType: "application/json",

@@ -16,6 +16,7 @@ import {
   rollbackPolicyForCandidate,
   getActivePolicyForKey,
   listPolicyHistoryForOwner,
+  getActivatedCandidateIds,
   policyKeyForScope,
   PolicyActivationError,
 } from "./activation";
@@ -48,6 +49,20 @@ function errorStatus(code: string): number {
 
 export function createPolicyActivationRouter(deps: PolicyActivationApiDeps): Router {
   const router = Router();
+
+  // GET /api/policy-candidates/activated-ids
+  // Server-derived truth: returns candidate IDs whose latest activation event
+  // is 'activate' (not subsequently rolled back). Replaces ephemeral client-
+  // side useState so that browser reload / second tab sees correct state.
+  router.get("/activated-ids", async (req, res, next) => {
+    try {
+      const ownerId = getUserId(req) ?? 1;
+      const ids = await getActivatedCandidateIds(deps.database, ownerId);
+      return res.json({ activatedCandidateIds: ids });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   // POST /api/policy-candidates/:id/activate
   router.post("/:id/activate", async (req, res, next) => {

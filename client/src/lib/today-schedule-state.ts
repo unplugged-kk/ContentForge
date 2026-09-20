@@ -9,7 +9,7 @@
  * 4. Canonical action-routing (reuses agent-workspace-state's URL builders)
  */
 
-import { isToday, isTomorrow, format } from "date-fns";
+import { isSameDay, addDays, format } from "date-fns";
 import { getCanonicalReviewUrl } from "./agent-workspace-state";
 
 export type AttentionSeverity = "action_required" | "warning" | "informational";
@@ -153,8 +153,8 @@ export function deriveAttentionItems(input: {
 /** Plain-language date bucket for schedule rows: Today / Tomorrow / Sep 21. */
 export function formatDateBucket(dateInput: string | Date, now: Date = new Date()): string {
   const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
-  if (isToday(date)) return "Today";
-  if (isTomorrow(date)) return "Tomorrow";
+  if (isSameDay(date, now)) return "Today";
+  if (isSameDay(date, addDays(now, 1))) return "Tomorrow";
   return format(date, "MMM d");
 }
 

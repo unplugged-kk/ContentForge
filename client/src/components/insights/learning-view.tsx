@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { EmptyState } from "@/components/ui-shared/empty-state";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { AutomatedOptimizationPanel } from "./automated-optimization-panel";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -545,7 +546,17 @@ export function LearningView() {
   // gated behind its own explicit confirmation dialog.
   const [activateCandidateId, setActivateCandidateId] = useState<number | null>(null);
   const [rollbackCandidateId, setRollbackCandidateId] = useState<number | null>(null);
-  const [activatedCandidateIds, setActivatedCandidateIds] = useState<Set<number>>(new Set());
+
+  // Server-derived activation state: which candidate IDs have been activated
+  // and not subsequently rolled back. Survives browser reload, second tab,
+  // and app restart -- authoritative truth comes from policyActivations table.
+  const { data: activatedIdsData } = useQuery<{ activatedCandidateIds: number[] }>({
+    queryKey: ["/api/policy-candidates/activated-ids"],
+  });
+  const activatedCandidateIds = useMemo(
+    () => new Set(activatedIdsData?.activatedCandidateIds ?? []),
+    [activatedIdsData],
+  );
 
   const activateMutation = useMutation({
     mutationFn: async (candidateId: number) => {
@@ -554,10 +565,10 @@ export function LearningView() {
       });
       return res.json();
     },
-    onSuccess: (_data, candidateId) => {
-      setActivatedCandidateIds((prev) => new Set(prev).add(candidateId));
+    onSuccess: () => {
       setActivateCandidateId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates/activated-ids"] });
       toast({
         title: "Policy Activated for Future Generations",
         description: "A new immutable revision is now the active production policy for this scope. Existing content is unchanged.",
@@ -579,14 +590,10 @@ export function LearningView() {
       });
       return res.json();
     },
-    onSuccess: (_data, candidateId) => {
-      setActivatedCandidateIds((prev) => {
-        const next = new Set(prev);
-        next.delete(candidateId);
-        return next;
-      });
+    onSuccess: () => {
       setRollbackCandidateId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates/activated-ids"] });
       toast({
         title: "Policy Rolled Back",
         description: "Future generations resolve the prior revision again. Existing generated content is unchanged.",
@@ -1849,6 +1856,8 @@ export function LearningView() {
           </Button>
         </Card>
       </div>
+
+      <AutomatedOptimizationPanel />
 
       <ConfirmDialog
         open={activateCandidateId !== null}

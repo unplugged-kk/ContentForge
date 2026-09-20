@@ -2263,6 +2263,8 @@ export const policyActivations = pgTable(
     previousPolicyId: integer("previous_policy_id").references(() => generationPolicies.id),
     policyKey: varchar("policy_key", { length: 200 }).notNull(),
     reason: text("reason"),
+    /** human | autonomous_controller -- who actually took this action (Phase 29.4 §35). Never impersonated. */
+    actor: varchar("actor", { length: 30 }).notNull().default("human"),
     identityKey: varchar("identity_key", { length: 300 }).notNull(),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   },
@@ -2271,6 +2273,7 @@ export const policyActivations = pgTable(
     index("policy_activations_user_idx").on(table.userId),
     index("policy_activations_policy_key_idx").on(table.policyKey),
     index("policy_activations_candidate_idx").on(table.policyCandidateId),
+    index("policy_activations_actor_idx").on(table.actor),
   ],
 );
 
@@ -2282,4 +2285,102 @@ export const insertPolicyActivationSchema = createInsertSchema(policyActivations
 export type PolicyActivation = typeof policyActivations.$inferSelect;
 export type InsertPolicyActivation = z.infer<typeof insertPolicyActivationSchema>;
 export type PolicyActivationAction = "activate" | "rollback";
+export type PolicyActivationActor = "human" | "autonomous_controller";
+
+// ── BOUNDED AUTONOMOUS OPTIMIZATION (Phase 29.4) ──────────────────────────────
+// Observe → Learn → Experiment → Evaluate → Deterministic Eligibility →
+// Bounded Autonomous Action → Monitor → Rollback / Continue / Stop.
+// The autonomy controller is deterministic and server-authoritative; it never
+// bypasses Phase 29.1 evidence rules, Phase 29.2 experimentation, or Phase
+// 29.3 immutable human-gated activation -- it only decides WHEN those existing
+// mechanisms may be invoked without a human in the loop, under strict,
+// human-configured, human-clearable bounds.
+
+export const autonomyConfigs = pgTable(
+  "autonomy_configs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    /** Master kill switch. Defaults false -- no deployment silently enables autonomy. */
+    enabled: boolean("enabled").notNull().default(false),
+    /** disabled | observe_only | recommend | experiment_only | bounded_activation */
+    mode: varchar("mode", { length: 30 }).notNull().default("disabled"),
+    experimentAutomationEnabled: boolean("experiment_automation_enabled").notNull().default(false),
+    activationAutomationEnabled: boolean("activation_automation_enabled").notNull().default(false),
+    rollbackEnabled: boolean("rollback_enabled").notNull().default(false),
+    /** insufficient_data | observed | directional | repeatable | confirmed. Autonomy never activates below this. */
+    minimumEvidenceQuality: varchar("minimum_evidence_quality", { length: 30 }).notNull().default("confirmed"),
+    maxActiveExperiments: integer("max_active_experiments").notNull().default(1),
+    maxExperimentsPerDay: integer("max_experiments_per_day").notNull().default(1),
+    maxActivationsPerDay: integer("max_activations_per_day").notNull().default(1),
+    maxActivationsPerWeek: integer("max_activations_per_week").notNull().default(2),
+    maxConsecutiveActivations: integer("max_consecutive_activations").notNull().default(2),
+    cooldownMinutes: integer("cooldown_minutes").notNull().default(1440),
+    /** Empty/null = no restriction beyond ownership. Non-empty = allowlist of targetScope values. */
+    allowedScopes: jsonb("allowed_scopes").$type<string[]>(),
+    /** open | closed. Only a human (via resetCircuitBreaker) may close it once opened. */
+    circuitBreakerState: varchar("circuit_breaker_state", { length: 20 }).notNull().default("closed"),
+    circuitBreakerReason: text("circuit_breaker_reason"),
+    circuitBreakerOpenedAt: timestamp("circuit_breaker_opened_at"),
+    pausedAt: timestamp("paused_at"),
+    updatedBy: integer("updated_by"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [uniqueIndex("autonomy_configs_user_uq").on(table.userId)],
+);
+
+export const insertAutonomyConfigSchema = createInsertSchema(autonomyConfigs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type AutonomyConfig = typeof autonomyConfigs.$inferSelect;
+export type InsertAutonomyConfig = z.infer<typeof insertAutonomyConfigSchema>;
+export type AutonomyMode = "disabled" | "observe_only" | "recommend" | "experiment_only" | "bounded_activation";
+
+/**
+ * Durable decision journal. Every autonomous evaluation -- allowed OR denied
+ * -- is recorded here, so "why did it act" and "why didn't it act" are both
+ * always answerable from the database, never only from logs.
+ */
+export const autonomyDecisions = pgTable(
+  "autonomy_decisions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    /** experiment_selection | activation | rollback */
+    decisionType: varchar("decision_type", { length: 30 }).notNull(),
+    targetScope: varchar("target_scope", { length: 100 }),
+    proposalId: integer("proposal_id").references(() => learningProposals.id),
+    experimentId: integer("experiment_id").references(() => experiments.id),
+    evaluationId: integer("evaluation_id").references(() => experimentEvaluations.id),
+    candidateId: integer("candidate_id").references(() => policyCandidates.id),
+    previousPolicyId: integer("previous_policy_id").references(() => generationPolicies.id),
+    newPolicyId: integer("new_policy_id").references(() => generationPolicies.id),
+    evidenceQuality: varchar("evidence_quality", { length: 30 }),
+    /** Snapshot of the gate state actually evaluated -- budget counts, cooldown remaining, guardrails, etc. */
+    context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),
+    /** allowed | denied */
+    outcome: varchar("outcome", { length: 10 }).notNull(),
+    /** Machine-readable gate code, e.g. KILL_SWITCH, CIRCUIT_OPEN, BUDGET_EXHAUSTED, ELIGIBLE. */
+    code: varchar("code", { length: 40 }).notNull(),
+    reason: text("reason").notNull(),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("autonomy_decisions_identity_uq").on(table.identityKey),
+    index("autonomy_decisions_user_idx").on(table.userId),
+    index("autonomy_decisions_scope_idx").on(table.targetScope),
+    index("autonomy_decisions_outcome_idx").on(table.outcome),
+  ],
+);
+
+export const insertAutonomyDecisionSchema = createInsertSchema(autonomyDecisions).omit({
+  id: true,
+  createdAt: true,
+});
+export type AutonomyDecision = typeof autonomyDecisions.$inferSelect;
+export type InsertAutonomyDecision = z.infer<typeof insertAutonomyDecisionSchema>;
 
