@@ -1015,6 +1015,11 @@ export class DatabaseContentStorage implements ContentStoragePort {
         modelPreferences: row.modelPreferences,
         specHash: row.specHash,
         contextSnapshot: row.contextSnapshot ?? {},
+        // Phase 29.3: `active` is reserved for the single, human-activated
+        // production revision per policyKey (enforced by a partial unique
+        // index). An ad-hoc revision resolved here (e.g. a per-request
+        // context hash change) is never automatically promoted to that role.
+        status: "draft",
       })
       .onConflictDoNothing({ target: generationPolicies.specHash })
       .returning();

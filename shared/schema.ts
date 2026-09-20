@@ -1012,6 +1012,10 @@ export const generationPolicies = pgTable(
     uniqueIndex("generation_policies_key_version_uq").on(table.policyKey, table.version),
     uniqueIndex("generation_policies_spec_hash_uq").on(table.specHash),
     index("generation_policies_format_channel_idx").on(table.format, table.channel),
+    // Phase 29.3: exactly one active revision per policyKey, enforced in SQL.
+    uniqueIndex("generation_policies_one_active_per_key_uq")
+      .on(table.policyKey)
+      .where(sql`${table.status} = 'active'`),
   ],
 );
 
@@ -2234,4 +2238,48 @@ export type PolicyCandidateStatus =
   | "approved_for_future"
   | "rejected"
   | "archived";
+
+// ── HUMAN-GATED POLICY ACTIVATION (Phase 29.3) ────────────────────────────────
+// Approve -> Activate -> Preserve History.
+// Records every production-policy activation/rollback as an immutable audit
+// event. A GenerationPolicy row is never mutated after creation (Phase 1
+// invariant, reused as-is here); activation only flips which revision is
+// `status = 'active'` for a given policyKey, enforced by a single partial
+// unique index so exactly one revision is ever active per scope.
+
+export const policyActivations = pgTable(
+  "policy_activations",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    /** activate | rollback */
+    action: varchar("action", { length: 20 }).notNull(),
+    policyCandidateId: integer("policy_candidate_id").references(() => policyCandidates.id),
+    experimentId: integer("experiment_id").references(() => experiments.id),
+    evaluationId: integer("evaluation_id").references(() => experimentEvaluations.id),
+    activatedPolicyId: integer("activated_policy_id")
+      .notNull()
+      .references(() => generationPolicies.id),
+    previousPolicyId: integer("previous_policy_id").references(() => generationPolicies.id),
+    policyKey: varchar("policy_key", { length: 200 }).notNull(),
+    reason: text("reason"),
+    identityKey: varchar("identity_key", { length: 300 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("policy_activations_identity_uq").on(table.identityKey),
+    index("policy_activations_user_idx").on(table.userId),
+    index("policy_activations_policy_key_idx").on(table.policyKey),
+    index("policy_activations_candidate_idx").on(table.policyCandidateId),
+  ],
+);
+
+export const insertPolicyActivationSchema = createInsertSchema(policyActivations).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type PolicyActivation = typeof policyActivations.$inferSelect;
+export type InsertPolicyActivation = z.infer<typeof insertPolicyActivationSchema>;
+export type PolicyActivationAction = "activate" | "rollback";
 

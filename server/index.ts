@@ -213,6 +213,11 @@ app.use((req, res, next) => {
   app.use("/api/experiments", await createDefaultExperimentRouter());
   app.use("/api/policy-candidates", await createDefaultPolicyCandidateRouter());
 
+  const { createDefaultPolicyActivationRouter, createDefaultPolicyHistoryRouter } =
+    await import("./content/policyActivation/http");
+  app.use("/api/policy-candidates", await createDefaultPolicyActivationRouter());
+  app.use("/api/policies", await createDefaultPolicyHistoryRouter());
+
   const { createDefaultAgentRouter } = await import("./agent/routes");
   app.use("/api/agent", await createDefaultAgentRouter());
 

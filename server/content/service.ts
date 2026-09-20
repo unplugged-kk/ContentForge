@@ -22,6 +22,7 @@ import { DatabaseLearningStorage } from "./learning/store";
 import { createLearningRecorder } from "./learning/record";
 import { refreshPublicationMetrics } from "./learning/refresh";
 import { hourWindow } from "./learning/identity";
+import { resolvePolicyForGeneration } from "./policyActivation/activation";
 import {
   advanceAutomationRun,
   automationRunStepKey,
@@ -142,6 +143,7 @@ export const generationDeps: GenerationDeps = {
   model: createGatewayGenerationModel(),
   defaultModel: MODELS.TEXT,
   contextReader: createDatabaseContextReader(db),
+  activePolicyReader: (format, channel) => resolvePolicyForGeneration(db, format, channel),
 };
 
 export const publicationDeps: PublicationDeps = {

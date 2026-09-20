@@ -3,6 +3,44 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 29.3 — Human-Gated Policy Activation (APPROVE -> ACTIVATE -> PRESERVE HISTORY)
+
+**Status:** IMPLEMENTED & VERIFIED (Agent Autonomous Activation: DEFERRED, no code path exists).
+
+Closes the controlled-learning loop: `Observe -> Learn -> Propose -> Experiment ->
+Measure -> Decide -> Candidate -> Human Activate -> Future Generation -> Measure
+Again`. A Phase 29.2 `PolicyCandidate` never becomes production on its own —
+only an explicit, authenticated `POST /api/policy-candidates/:id/activate`
+call can. Reuses the existing immutable, content-addressed `GenerationPolicy`
+table (no new policy system); adds a `policy_activations` audit table and a
+partial unique index enforcing exactly one active revision per
+`policyKey` scope, enforced transactionally with clean `409` conflict
+handling under concurrent activation. Rollback re-activates the prior
+revision as a new immutable event — history is append-only, never rewritten.
+Full architecture: `docs/phase-29.3-policy-activation-architecture.md`;
+finalization report: `docs/phase-29.3-final-verification.md`.
+
+### Production-mutation test (mandatory, proven three ways)
+
+Verified end-to-end: activating revision A then generating content binds the
+GenerationJob to A's configuration; activating revision B then generating
+again binds to B's configuration; re-inspecting the FIRST job afterward shows
+it still references its own original A-configured revision — never
+retroactively relabeled. Agent restriction proven by pure static source
+analysis (no tool declaration or import anywhere under `server/agent/`
+references activation).
+
+### Verification
+
+Typecheck 0 errors; build clean; unit 684/686 (2 pre-existing date-relative
+flakes, unrelated); DB 301/301 including all 14 new
+`policyActivation.dbtest.ts` tests; E2E 34/34 targeted (chromium, serial);
+full chromium E2E suite 186 passed + 8 parallel-worker-contention flakes that
+re-ran 39/39 green serially. Along the way, discovered and fixed a
+pre-existing WCAG AA contrast defect (`bg-emerald-600` + white text,
+3.56–3.76:1) in the Policy Candidates panel — corrected to
+`emerald-700`/`emerald-800`. Zero new paid external provider calls.
+
 ## Phase 29.2 — Controlled Optimization & Experimentation (FREEZE THE EXPERIMENT SYSTEM)
 
 **Status:** IMPLEMENTED & FINALIZATION GATE VERIFIED (Autonomous Policy Mutation: DEFERRED, no code path exists).

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { EmptyState } from "@/components/ui-shared/empty-state";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -539,6 +540,67 @@ export function LearningView() {
     },
   });
 
+  // Phase 29.3 -- human-gated policy activation. A candidate never becomes
+  // active on its own; these two mutations are the only path, and each is
+  // gated behind its own explicit confirmation dialog.
+  const [activateCandidateId, setActivateCandidateId] = useState<number | null>(null);
+  const [rollbackCandidateId, setRollbackCandidateId] = useState<number | null>(null);
+  const [activatedCandidateIds, setActivatedCandidateIds] = useState<Set<number>>(new Set());
+
+  const activateMutation = useMutation({
+    mutationFn: async (candidateId: number) => {
+      const res = await apiRequest("POST", `/api/policy-candidates/${candidateId}/activate`, {
+        reason: "Activated by human editor from Insights > Learning governance review.",
+      });
+      return res.json();
+    },
+    onSuccess: (_data, candidateId) => {
+      setActivatedCandidateIds((prev) => new Set(prev).add(candidateId));
+      setActivateCandidateId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      toast({
+        title: "Policy Activated for Future Generations",
+        description: "A new immutable revision is now the active production policy for this scope. Existing content is unchanged.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Activation failed",
+        description: err?.message || "Could not activate this policy candidate.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const rollbackMutation = useMutation({
+    mutationFn: async (candidateId: number) => {
+      const res = await apiRequest("POST", `/api/policy-candidates/${candidateId}/rollback`, {
+        reason: "Rolled back by human editor from Insights > Learning governance review.",
+      });
+      return res.json();
+    },
+    onSuccess: (_data, candidateId) => {
+      setActivatedCandidateIds((prev) => {
+        const next = new Set(prev);
+        next.delete(candidateId);
+        return next;
+      });
+      setRollbackCandidateId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-candidates"] });
+      toast({
+        title: "Policy Rolled Back",
+        description: "Future generations resolve the prior revision again. Existing generated content is unchanged.",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Rollback failed",
+        description: err?.message || "Could not roll back this policy activation.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const profiles = styleData?.profiles || [];
   const proposals = proposalsData || [];
   const observations = observationsData || [];
@@ -659,7 +721,7 @@ export function LearningView() {
                             <Button
                               size="sm"
                               variant="default"
-                              className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                              className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
                               onClick={() => acceptMutation.mutate(prop.id)}
                               disabled={acceptMutation.isPending || rejectMutation.isPending}
                               data-testid={`button-accept-proposal-${prop.id}`}
@@ -680,7 +742,7 @@ export function LearningView() {
                             </Button>
                           </>
                         ) : prop.status === "accepted" ? (
-                          <Badge variant="default" className="text-xs bg-emerald-600 gap-1 py-1" data-testid={`badge-status-accepted-${prop.id}`}>
+                          <Badge variant="default" className="text-xs bg-emerald-700 gap-1 py-1" data-testid={`badge-status-accepted-${prop.id}`}>
                             <Check className="h-3 w-3" />
                             Accepted (Human Reviewed)
                           </Badge>
@@ -862,7 +924,7 @@ export function LearningView() {
                           <Badge
                             variant={isRunning ? "default" : isCompleted ? "secondary" : "outline"}
                             className={`text-[10px] capitalize ${
-                              isRunning ? "bg-blue-600 text-white" : isCompleted ? "bg-emerald-600 text-white" : ""
+                              isRunning ? "bg-blue-600 text-white" : isCompleted ? "bg-emerald-700 text-white" : ""
                             }`}
                             data-testid={`badge-experiment-status-${exp.id}`}
                           >
@@ -1087,7 +1149,7 @@ export function LearningView() {
                                     <Button
                                       size="sm"
                                       variant="default"
-                                      className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                      className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
                                       onClick={() =>
                                         decideExperimentMutation.mutate({
                                           id: exp.id,
@@ -1260,7 +1322,7 @@ export function LearningView() {
                           <span className="font-semibold text-foreground text-sm">{p.name}</span>
                           <div className="flex items-center gap-1.5">
                             {p.isActive && (
-                              <Badge variant="default" className="text-[10px] bg-emerald-600">
+                              <Badge variant="default" className="text-[10px] bg-emerald-700">
                                 Active
                               </Badge>
                             )}
@@ -1612,7 +1674,7 @@ export function LearningView() {
                             variant={isApproved ? "default" : isRejected ? "destructive" : "secondary"}
                             className={`text-[10px] ${
                               isApproved
-                                ? "bg-emerald-600 text-white"
+                                ? "bg-emerald-700 text-white"
                                 : isUnderReview
                                 ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
                                 : ""
@@ -1638,7 +1700,7 @@ export function LearningView() {
                             <Button
                               size="sm"
                               variant="default"
-                              className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                              className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
                               onClick={() =>
                                 reviewCandidateMutation.mutate({
                                   candidateId: candidate.id,
@@ -1671,10 +1733,34 @@ export function LearningView() {
                             </Button>
                           </>
                         ) : isApproved ? (
-                          <Badge variant="default" className="text-xs bg-emerald-600 gap-1 py-1">
-                            <Check className="h-3 w-3" />
-                            Approved by Human Reviewer
-                          </Badge>
+                          <div className="flex flex-col items-end gap-1.5">
+                            <Badge variant="default" className="text-xs bg-emerald-700 gap-1 py-1">
+                              <Check className="h-3 w-3" />
+                              Approved by Human Reviewer
+                            </Badge>
+                            {activatedCandidateIds.has(candidate.id) ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs gap-1"
+                                onClick={() => setRollbackCandidateId(candidate.id)}
+                                data-testid={`button-rollback-candidate-${candidate.id}`}
+                              >
+                                Roll Back
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-7 text-xs gap-1 bg-blue-600 hover:bg-blue-700 text-white"
+                                onClick={() => setActivateCandidateId(candidate.id)}
+                                data-testid={`button-activate-candidate-${candidate.id}`}
+                              >
+                                <ShieldCheck className="h-3 w-3" />
+                                Activate for Future Generations
+                              </Button>
+                            )}
+                          </div>
                         ) : (
                           <Badge variant="secondary" className="text-xs gap-1 py-1">
                             Rejected by Reviewer
@@ -1763,6 +1849,35 @@ export function LearningView() {
           </Button>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={activateCandidateId !== null}
+        onOpenChange={(open) => !open && setActivateCandidateId(null)}
+        title="Activate for Future Generations?"
+        description={(() => {
+          const c = policyCandidates.find((x) => x.id === activateCandidateId);
+          if (!c) return "";
+          return `You're about to change future generation behavior. Scope: ${c.targetScope}. Reason: ${c.rationale} This creates a new immutable policy revision and makes it the active production policy for this scope -- existing generated content is never altered, and this can be rolled back at any time.`;
+        })()}
+        confirmLabel="Activate for Future Generations"
+        loading={activateMutation.isPending}
+        onConfirm={() => activateCandidateId !== null && activateMutation.mutate(activateCandidateId)}
+      />
+
+      <ConfirmDialog
+        open={rollbackCandidateId !== null}
+        onOpenChange={(open) => !open && setRollbackCandidateId(null)}
+        title="Roll Back This Activation?"
+        description={(() => {
+          const c = policyCandidates.find((x) => x.id === rollbackCandidateId);
+          if (!c) return "";
+          return `Scope: ${c.targetScope}. This reactivates the revision that was active immediately before this candidate. Existing generated content will not change -- only future generations are affected.`;
+        })()}
+        confirmLabel="Roll Back"
+        destructive
+        loading={rollbackMutation.isPending}
+        onConfirm={() => rollbackCandidateId !== null && rollbackMutation.mutate(rollbackCandidateId)}
+      />
     </div>
   );
 }

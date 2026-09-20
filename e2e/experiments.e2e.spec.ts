@@ -333,6 +333,126 @@ test.describe("ContentForge Phase 29.2 — Controlled Optimization & Experimenta
   });
 });
 
+test.describe("ContentForge Phase 29.3 — Human-Gated Policy Activation (Mocked UI Journeys)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/style/profiles", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ profiles: [] }) }),
+    );
+    await page.route("**/api/learning/summary", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          publishedCount: 0,
+          successRate: null,
+          approvalRate: null,
+          byChannel: [],
+          byFormat: [],
+          byStory: [],
+          signalCounts: {},
+          metricTotals: [],
+        }),
+      }),
+    );
+    await page.route("**/api/learning/proposals", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+    );
+    await page.route("**/api/learning/observations", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+    );
+    await page.route("**/api/experiments", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+    );
+  });
+
+  test("activation requires explicit confirmation and rollback requires a separate explicit confirmation", async ({ page }) => {
+    const candidate = {
+      id: 901,
+      userId: 1,
+      experimentId: 601,
+      evaluationId: 701,
+      title: "Candidate: Carousel default for LinkedIn",
+      targetScope: "channel:linkedin;format:carousel",
+      proposedConfiguration: { format: "carousel", tone: "energetic" },
+      rationale: "Observed +32% engagement under controlled assignment.",
+      status: "approved_for_future",
+      reviewedAt: new Date().toISOString(),
+      reviewNotes: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    await page.route("**/api/policy-candidates", (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([candidate]) });
+      }
+      return route.continue();
+    });
+
+    let activateCalls = 0;
+    await page.route("**/api/policy-candidates/901/activate", (route) => {
+      activateCalls += 1;
+      return route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          activation: { id: 1, action: "activate", policyCandidateId: 901 },
+          policy: { id: 5001, status: "active", policyKey: "pol:carousel:linkedin" },
+          previousPolicy: null,
+          alreadyActivated: false,
+        }),
+      });
+    });
+    let rollbackCalls = 0;
+    await page.route("**/api/policy-candidates/901/rollback", (route) => {
+      rollbackCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          activation: { id: 2, action: "rollback", policyCandidateId: 901 },
+          policy: { id: 4999, status: "active", policyKey: "pol:carousel:linkedin" },
+          previousPolicy: { id: 5001 },
+          alreadyActivated: false,
+        }),
+      });
+    });
+
+    await page.goto("/insights?view=learning");
+
+    const activateBtn = page.locator('[data-testid="button-activate-candidate-901"]');
+    await expect(activateBtn).toBeVisible();
+    await activateBtn.click();
+
+    // Clicking the trigger must NOT activate immediately -- an explicit confirm dialog gates it.
+    expect(activateCalls).toBe(0);
+    const confirmDialog = page.locator('[data-testid="dialog-confirm"]');
+    await expect(confirmDialog).toBeVisible();
+    await expect(confirmDialog).toContainText("change future generation behavior");
+    await expect(confirmDialog).toContainText("channel:linkedin;format:carousel");
+
+    await page.locator('[data-testid="button-confirm-action"]').click();
+    await expect(confirmDialog).toBeHidden();
+    expect(activateCalls).toBe(1);
+
+    // After activation, the UI flips to offering Roll Back, not a second Activate.
+    const rollbackBtn = page.locator('[data-testid="button-rollback-candidate-901"]');
+    await expect(rollbackBtn).toBeVisible();
+    await expect(activateBtn).toBeHidden();
+
+    await rollbackBtn.click();
+    expect(rollbackCalls).toBe(0);
+    await expect(confirmDialog).toBeVisible();
+    await expect(confirmDialog).toContainText("Existing generated content will not change");
+    await page.locator('[data-testid="button-confirm-action"]').click();
+    expect(rollbackCalls).toBe(1);
+
+    const accessibilityScanResults = await new AxeBuilder({ page })
+      .include('[data-testid="section-policy-candidates"]')
+      .analyze();
+    expect(accessibilityScanResults.violations).toEqual([]);
+  });
+});
+
 test.describe("ContentForge Phase 29.2 — Controlled Optimization Full Unmocked Live DB Journey", () => {
   test("Full loop: Proposal -> Experiment -> Allocation -> Signals -> Evaluation -> Human Decision -> Policy Candidate -> Verify Zero Production Mutation", async ({
     page,

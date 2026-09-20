@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { GenerationJob, Opportunity, Story } from "@shared/schema";
+import type { GenerationJob, GenerationPolicy, Opportunity, Story } from "@shared/schema";
 import { JobFailure, describeError } from "../jobs/failures";
 import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
 import { createArtifact, attributionSchema } from "./artifact";
@@ -93,6 +93,14 @@ export interface GenerationDeps {
    * (an empty assembly — no context block, no change to policy identity).
    */
   contextReader?: ContextStorageReader;
+  /**
+   * Phase 29.3: resolves the currently human-activated GenerationPolicy for a
+   * format x channel scope, if any. Optional so existing callers/tests that
+   * supply none behave exactly as before this phase. Only fills fields the
+   * caller left unset -- an explicit voiceId/templateId/objective/audience/
+   * constraints/model always wins over the activated policy's defaults.
+   */
+  activePolicyReader?: (format: string, channel: string) => Promise<GenerationPolicy | undefined>;
 }
 
 export interface CreateGenerationJobInput {
@@ -228,16 +236,31 @@ export async function createGenerationJob(
         ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
         : EMPTY_CONTEXT_ASSEMBLY;
 
+  // Phase 29.3: an explicit caller-supplied value always wins. Only when the
+  // caller leaves a field unset do we fall back to the human-activated policy
+  // for this scope, so future generation resolves the active revision without
+  // ever overriding an explicit request.
+  const activePolicy =
+    input.voiceId == null &&
+    input.templateId == null &&
+    input.objective == null &&
+    input.audience == null &&
+    !input.constraints &&
+    input.model == null &&
+    deps.activePolicyReader
+      ? await deps.activePolicyReader(opportunity.format, opportunity.channel)
+      : undefined;
+
   const resolved = await resolveGenerationPolicy(
     composeGenerationPolicyInput(
       opportunity,
       {
-        voiceId: input.voiceId ?? null,
-        templateId: input.templateId ?? null,
-        objective: input.objective ?? null,
-        audience: input.audience ?? null,
-        constraints: input.constraints ?? {},
-        model: input.model ?? null,
+        voiceId: input.voiceId ?? activePolicy?.voiceId ?? null,
+        templateId: input.templateId ?? activePolicy?.templateId ?? null,
+        objective: input.objective ?? activePolicy?.objective ?? null,
+        audience: input.audience ?? activePolicy?.audience ?? null,
+        constraints: input.constraints ?? (activePolicy?.constraints as Record<string, unknown> | undefined) ?? {},
+        model: input.model ?? (activePolicy?.modelPreferences?.model as string | undefined) ?? null,
         context: contextAssembly,
       },
       deps.defaultModel,

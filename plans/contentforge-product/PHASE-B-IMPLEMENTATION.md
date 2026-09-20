@@ -2882,6 +2882,20 @@ Includes backend metric aggregations (`metricTotals` in `server/content/learning
 with 15 unit tests (`client/src/lib/insights-state.ts`), 11/11 DB tests in `server/content/learning.dbtest.ts`,
 11 Playwright Journeys A–J with 0 Axe accessibility violations (`e2e/insights.e2e.spec.ts`), and 100% regression passing.
 
+## Phase 29.3 — Human-Gated Policy Activation (pointer)
+
+Full detail lives in `docs/STATUS.md` (`## Phase 29.3`),
+`docs/phase-29.3-policy-activation-architecture.md`, and
+`docs/phase-29.3-final-verification.md`. Summary: a Phase 29.2
+`PolicyCandidate` becomes production only through an explicit human
+`POST /api/policy-candidates/:id/activate` call, creating an immutable
+`GenerationPolicy` revision (reusing the existing versioned table) and
+flipping a DB-enforced single-active-per-scope pointer inside one
+transaction, with a durable `policy_activations` audit trail and reversible
+rollback. Agent activation is provably impossible (closed tool allowlist,
+zero references). 684/686 unit, 301/301 DB, 34/34 targeted E2E, 0 axe
+violations after fixing a pre-existing contrast defect found along the way.
+
 ## Phase 29.2 — Controlled Optimization & Experimentation (pointer)
 
 Full detail lives in `docs/STATUS.md` (`## Phase 29.2`),
