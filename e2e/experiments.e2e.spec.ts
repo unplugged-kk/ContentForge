@@ -390,7 +390,14 @@ test.describe("ContentForge Phase 29.3 — Human-Gated Policy Activation (Mocked
 
     let activatedIds: number[] = [];
     await page.route("**/api/policy-candidates/activated-ids", (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ activatedCandidateIds: activatedIds }) }),
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          activatedCandidateIds: activatedIds,
+          activatedCandidateActors: Object.fromEntries(activatedIds.map((id) => [id, "human"])),
+        }),
+      }),
     );
     await page.route("**/api/autonomy/status", (route) =>
       route.fulfill({
@@ -456,16 +463,18 @@ test.describe("ContentForge Phase 29.3 — Human-Gated Policy Activation (Mocked
     const confirmDialog = page.locator('[data-testid="dialog-confirm"]');
     await expect(confirmDialog).toBeVisible();
     await expect(confirmDialog).toContainText("change future generation behavior");
-    await expect(confirmDialog).toContainText("channel:linkedin;format:carousel");
+    await expect(confirmDialog).toContainText("LinkedIn · Carousel");
 
     await page.locator('[data-testid="button-confirm-action"]').click();
     await expect(confirmDialog).toBeHidden();
     expect(activateCalls).toBe(1);
 
-    // After activation, the UI flips to offering Roll Back, not a second Activate.
+    // After activation, the UI flips to offering Roll Back, not a second Activate,
+    // and distinguishes this as a human activation (Phase 29.5 UX audit §7).
     const rollbackBtn = page.locator('[data-testid="button-rollback-candidate-901"]');
     await expect(rollbackBtn).toBeVisible();
     await expect(activateBtn).toBeHidden();
+    await expect(page.locator('[data-testid="badge-activated-by-901"]')).toHaveText("Activated by You");
 
     await rollbackBtn.click();
     expect(rollbackCalls).toBe(0);

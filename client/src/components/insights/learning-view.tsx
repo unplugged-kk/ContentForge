@@ -20,6 +20,7 @@ import {
   formatChannelName,
   formatContentType,
   getAskAgentUrl,
+  humanizeScope,
   type MetricTotal,
 } from "@/lib/insights-state";
 import {
@@ -550,13 +551,17 @@ export function LearningView() {
   // Server-derived activation state: which candidate IDs have been activated
   // and not subsequently rolled back. Survives browser reload, second tab,
   // and app restart -- authoritative truth comes from policyActivations table.
-  const { data: activatedIdsData } = useQuery<{ activatedCandidateIds: number[] }>({
+  const { data: activatedIdsData } = useQuery<{
+    activatedCandidateIds: number[];
+    activatedCandidateActors: Record<number, "human" | "autonomous_controller">;
+  }>({
     queryKey: ["/api/policy-candidates/activated-ids"],
   });
   const activatedCandidateIds = useMemo(
     () => new Set(activatedIdsData?.activatedCandidateIds ?? []),
     [activatedIdsData],
   );
+  const activatedCandidateActors = activatedIdsData?.activatedCandidateActors ?? {};
 
   const activateMutation = useMutation({
     mutationFn: async (candidateId: number) => {
@@ -827,7 +832,7 @@ export function LearningView() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground pt-1">
-                          <span><strong>Scope:</strong> {prop.targetScope}</span>
+                          <span><strong>Scope:</strong> {humanizeScope(prop.targetScope)}</span>
                           {prop.evidenceSummary?.publicationIds && (
                             <span>
                               <strong>Source Publications:</strong> {prop.evidenceSummary.publicationIds.join(", ")}
@@ -982,7 +987,7 @@ export function LearningView() {
                     {/* Metadata strip */}
                     <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-                        <span><strong>Scope:</strong> <code>{exp.targetScope}</code></span>
+                        <span><strong>Scope:</strong> {humanizeScope(exp.targetScope)}</span>
                         <span><strong>Primary Metric:</strong> <span className="capitalize">{exp.primaryMetric}</span></span>
                         <span><strong>Guardrails:</strong> {exp.guardrailMetrics && exp.guardrailMetrics.length > 0 ? exp.guardrailMetrics.join(", ") : "None"}</span>
                         <span><strong>Assignments:</strong> {exp.assignmentsCount ?? 0}</span>
@@ -1129,7 +1134,7 @@ export function LearningView() {
                                               variant={g.status === "passed" ? "default" : g.status === "regressed" ? "destructive" : "secondary"}
                                               className="text-[9px] py-0 px-1"
                                             >
-                                              {g.status}
+                                              {g.status === "passed" ? "Passed" : g.status === "regressed" ? "Regressed" : "Not Available"}
                                             </Badge>
                                           </td>
                                           <td className="p-1.5 text-muted-foreground">{g.message}</td>
@@ -1405,7 +1410,7 @@ export function LearningView() {
                           </Badge>
                         </div>
                         <p className="text-muted-foreground text-[11px]">
-                          Scope: <code>{obs.targetScope}</code>
+                          Scope: {humanizeScope(obs.targetScope)}
                         </p>
                         <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-border/40">
                           <span>
@@ -1675,7 +1680,7 @@ export function LearningView() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-foreground">{candidate.title}</span>
                           <Badge variant="outline" className="text-[10px] uppercase font-medium">
-                            {candidate.targetScope}
+                            {humanizeScope(candidate.targetScope)}
                           </Badge>
                           <Badge
                             variant={isApproved ? "default" : isRejected ? "destructive" : "secondary"}
@@ -1746,15 +1751,26 @@ export function LearningView() {
                               Approved by Human Reviewer
                             </Badge>
                             {activatedCandidateIds.has(candidate.id) ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs gap-1"
-                                onClick={() => setRollbackCandidateId(candidate.id)}
-                                data-testid={`button-rollback-candidate-${candidate.id}`}
-                              >
-                                Roll Back
-                              </Button>
+                              <>
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] py-0.5"
+                                  data-testid={`badge-activated-by-${candidate.id}`}
+                                >
+                                  {activatedCandidateActors[candidate.id] === "autonomous_controller"
+                                    ? "Activated Automatically"
+                                    : "Activated by You"}
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs gap-1"
+                                  onClick={() => setRollbackCandidateId(candidate.id)}
+                                  data-testid={`button-rollback-candidate-${candidate.id}`}
+                                >
+                                  Roll Back
+                                </Button>
+                              </>
                             ) : (
                               <Button
                                 size="sm"
@@ -1779,7 +1795,7 @@ export function LearningView() {
 
                   <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
                     <div className="pt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-                      <span><strong>Scope:</strong> <code>{candidate.targetScope}</code></span>
+                      <span><strong>Scope:</strong> {humanizeScope(candidate.targetScope)}</span>
                       {candidate.experimentId && (
                         <span><strong>Source Experiment:</strong> #{candidate.experimentId}</span>
                       )}
@@ -1866,7 +1882,7 @@ export function LearningView() {
         description={(() => {
           const c = policyCandidates.find((x) => x.id === activateCandidateId);
           if (!c) return "";
-          return `You're about to change future generation behavior. Scope: ${c.targetScope}. Reason: ${c.rationale} This creates a new immutable policy revision and makes it the active production policy for this scope -- existing generated content is never altered, and this can be rolled back at any time.`;
+          return `You're about to change future generation behavior. Scope: ${humanizeScope(c.targetScope)}. Reason: ${c.rationale} This creates a new immutable policy revision and makes it the active production policy for this scope -- existing generated content is never altered, and this can be rolled back at any time.`;
         })()}
         confirmLabel="Activate for Future Generations"
         loading={activateMutation.isPending}
@@ -1880,7 +1896,7 @@ export function LearningView() {
         description={(() => {
           const c = policyCandidates.find((x) => x.id === rollbackCandidateId);
           if (!c) return "";
-          return `Scope: ${c.targetScope}. This reactivates the revision that was active immediately before this candidate. Existing generated content will not change -- only future generations are affected.`;
+          return `Scope: ${humanizeScope(c.targetScope)}. This reactivates the revision that was active immediately before this candidate. Existing generated content will not change -- only future generations are affected.`;
         })()}
         confirmLabel="Roll Back"
         destructive

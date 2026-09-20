@@ -35,6 +35,7 @@ import {
   rollbackPolicyForCandidate,
   getActivePolicyForKey,
   listPolicyHistoryForOwner,
+  getActivatedCandidateActors,
   policyKeyForScope,
   PolicyActivationError,
 } from "./activation";
@@ -483,5 +484,17 @@ describeDb("human-gated policy activation (Phase 29.3 db)", () => {
     );
 
     assert.notEqual(job.effective.policyId, activated.policy.id, "an explicit override always produces its own revision");
+  });
+
+  it("getActivatedCandidateActors distinguishes human from autonomous activation (Phase 29.5 UX audit §7)", async () => {
+    const humanSide = await seedEligibleCandidate(OWNER_A, { channel: "actor-h", format: `${RUN}-actor-h` });
+    const autoSide = await seedEligibleCandidate(OWNER_A, { channel: "actor-a", format: `${RUN}-actor-a` });
+
+    await activatePolicyCandidate(db, humanSide.candidate.id, OWNER_A, "human activation", "human");
+    await activatePolicyCandidate(db, autoSide.candidate.id, OWNER_A, "autonomous activation", "autonomous_controller");
+
+    const actors = await getActivatedCandidateActors(db, OWNER_A);
+    assert.equal(actors[humanSide.candidate.id], "human");
+    assert.equal(actors[autoSide.candidate.id], "autonomous_controller");
   });
 });

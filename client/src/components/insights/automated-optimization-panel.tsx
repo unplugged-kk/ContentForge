@@ -17,6 +17,20 @@ import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Bot, ShieldAlert } from "lucide-react";
+import { humanizeScope } from "@/lib/insights-state";
+
+function decisionTypeLabel(decisionType: string): string {
+  switch (decisionType) {
+    case "activation":
+      return "Activation";
+    case "rollback":
+      return "Rollback";
+    case "experiment_selection":
+      return "Experiment Selection";
+    default:
+      return decisionType;
+  }
+}
 
 interface AutonomyStatus {
   enabled: boolean;
@@ -210,7 +224,7 @@ export function AutomatedOptimizationPanel() {
                       {d.outcome === "allowed" ? "Allowed" : "Denied"}
                     </span>{" "}
                     <span className="text-muted-foreground">
-                      {d.decisionType} ({d.code}){d.targetScope ? ` -- ${d.targetScope}` : ""}
+                      {decisionTypeLabel(d.decisionType)} ({d.code}){d.targetScope ? ` -- ${humanizeScope(d.targetScope)}` : ""}
                     </span>
                     <p className="text-muted-foreground mt-0.5">{d.reason}</p>
                   </div>

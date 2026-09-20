@@ -489,3 +489,36 @@ export async function getActivatedCandidateIds(
   }
   return activatedIds;
 }
+
+/**
+ * Phase 29.5 UX audit (§7): returns, for every currently-activated
+ * candidate, whether that activation was performed by a human or the
+ * autonomous controller -- so the UI can visually distinguish the two
+ * rather than presenting them identically. Additive: does not change
+ * `getActivatedCandidateIds`'s existing contract or callers.
+ */
+export async function getActivatedCandidateActors(
+  db: ContentDatabase,
+  userId: number,
+): Promise<Record<number, "human" | "autonomous_controller">> {
+  const events = await db
+    .select()
+    .from(policyActivations)
+    .where(eq(policyActivations.userId, userId))
+    .orderBy(desc(policyActivations.createdAt));
+
+  const latestByCandidateId = new Map<number, { action: string; actor: "human" | "autonomous_controller" }>();
+  for (const event of events) {
+    if (event.policyCandidateId != null && !latestByCandidateId.has(event.policyCandidateId)) {
+      latestByCandidateId.set(event.policyCandidateId, { action: event.action, actor: event.actor as "human" | "autonomous_controller" });
+    }
+  }
+
+  const actors: Record<number, "human" | "autonomous_controller"> = {};
+  for (const [candidateId, { action, actor }] of Array.from(latestByCandidateId.entries())) {
+    if (action === "activate") {
+      actors[candidateId] = actor;
+    }
+  }
+  return actors;
+}

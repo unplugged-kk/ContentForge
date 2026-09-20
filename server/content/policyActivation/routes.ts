@@ -17,6 +17,7 @@ import {
   getActivePolicyForKey,
   listPolicyHistoryForOwner,
   getActivatedCandidateIds,
+  getActivatedCandidateActors,
   policyKeyForScope,
   PolicyActivationError,
 } from "./activation";
@@ -58,7 +59,8 @@ export function createPolicyActivationRouter(deps: PolicyActivationApiDeps): Rou
     try {
       const ownerId = getUserId(req) ?? 1;
       const ids = await getActivatedCandidateIds(deps.database, ownerId);
-      return res.json({ activatedCandidateIds: ids });
+      const actors = await getActivatedCandidateActors(deps.database, ownerId);
+      return res.json({ activatedCandidateIds: ids, activatedCandidateActors: actors });
     } catch (error) {
       return next(error);
     }

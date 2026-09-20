@@ -3,6 +3,26 @@
 Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
 `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
+## Phase 29.5 — Final Product UX Re-Audit + Polish
+
+**Status:** READY FOR PRODUCTION READINESS GATE. Full report:
+`docs/phase-29.5-final-ux-audit-report.md`.
+
+Re-audited all 36 findings from Phase 28.2H's `docs/full-product-ux-audit.md`
+(all still IMPLEMENTED, untouched by Phase 29.x) and audited the new Phase
+29.1-29.4 Insights > Learning surfaces for the first time. Found and fixed
+two real defects: (1) internal `targetScope` encoding
+(`channel:linkedin;format:carousel`) was leaking verbatim to users across
+observations/proposals/experiments/policy candidates/confirmation
+dialogs/the autonomy decision log, several inside `<code>` tags -- fixed
+with a new `humanizeScope()` helper ("LinkedIn · Carousel" everywhere); (2)
+human and autonomous policy activation were visually identical once a
+policy was active -- fixed by exposing the existing `actor` column
+(`human` | `autonomous_controller`) on the already-existing
+`/api/policy-candidates/activated-ids` endpoint and adding an "Activated by
+You" / "Activated Automatically" badge. Both fixes covered by new DB and
+E2E regression tests; 0 P0/P1 items remain open.
+
 ## Phase 29.4 — Bounded Autonomous Optimization (AUTONOMY WITH GUARDRAILS)
 
 **Status:** IMPLEMENTED & VERIFIED for autonomous activation/rollback.

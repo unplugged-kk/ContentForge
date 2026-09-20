@@ -188,7 +188,7 @@ test.describe("ContentForge Phase 29.1 — Learning Foundation (Mocked UI Journe
     await expect(drawer).toContainText("52.00");
     await expect(drawer).toContainText("35.10");
     await expect(drawer).toContainText("+48.2%");
-    await expect(drawer).toContainText("channel:linkedin;format:carousel");
+    await expect(drawer).toContainText("LinkedIn · Carousel");
   });
 
   test("Journey C: Human review action - Accept proposal updates status to accepted", async ({ page }) => {

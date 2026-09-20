@@ -156,6 +156,26 @@ export function formatContentType(format: string): string {
 }
 
 /**
+ * Humanizes a raw learning/experimentation scope string (e.g.
+ * `"channel:linkedin;format:carousel"`) into plain language
+ * (`"LinkedIn · Carousel"`). Phase 29.5 UX audit: this internal scope
+ * encoding was leaking verbatim -- often inside a monospace `<code>` tag --
+ * into observations, proposals, experiments, and policy candidate UI. Falls
+ * back to the raw string, unknown-segment-by-unknown-segment, if a segment
+ * doesn't parse, so no real scope value is ever hidden -- only ever
+ * relabeled into words a non-technical reader recognizes.
+ */
+export function humanizeScope(scope: string): string {
+  const parts: string[] = [];
+  const channelMatch = scope.match(/channel:([a-zA-Z0-9_-]+)/);
+  const formatMatch = scope.match(/format:([a-zA-Z0-9_-]+)/);
+  if (channelMatch) parts.push(formatChannelName(channelMatch[1]));
+  if (formatMatch) parts.push(formatContentType(formatMatch[1]));
+  if (parts.length === 0) return scope;
+  return parts.join(" · ");
+}
+
+/**
  * Canonical handoff URL to Review an artifact in Studio.
  */
 export function getCanonicalReviewUrl(artifactId: number): string {
