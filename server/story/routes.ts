@@ -82,8 +82,12 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
     // Human-authored story without a research job is valid per locked domain model
     if (synthesis.provenance === "human" && !researchJobId) {
       try {
+        // Phase 30.1: the /api authGate guarantees an authenticated session;
+        // never default to owner 1.
+        const sessionUserId = (req as any).session?.userId;
+        if (!sessionUserId) throw new Error("story creation requires an authenticated session");
         const story = await deps.stories.insertStory({
-          userId: (req as any).session?.userId ?? 1,
+          userId: sessionUserId,
           researchJobId: null,
           provenance: "human",
           title: synthesis.title,

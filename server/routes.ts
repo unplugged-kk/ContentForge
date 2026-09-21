@@ -54,7 +54,12 @@ const uploadsDir = process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads"
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 function sessionUserId(req: { session?: { userId?: number } }): number {
-  return req.session?.userId ?? 1;
+  // Phase 30.1: fail closed. The /api authGate guarantees an authenticated
+  // session before any handler runs; reaching here without one is an
+  // invariant violation, never grounds for defaulting to owner 1.
+  const id = req.session?.userId;
+  if (!id) throw new Error("sessionUserId requires an authenticated session");
+  return id;
 }
 
 const CONTENT_PILLARS_DATA = [
@@ -1429,9 +1434,25 @@ Return JSON:
     }
   });
 
+  /**
+   * Phase 30.1: deputized same-process sub-request. The /api authGate also
+   * guards /api/ingest, so a bare self-fetch (no cookies) would 401 even for
+   * an authenticated caller. Forward the caller's own session cookie and
+   * CSRF token so the sub-request carries the same server-side identity —
+   * never a synthesized one.
+   */
+  function deputizedFetchHeaders(req: { headers: { cookie?: string; "x-csrf-token"?: unknown } }): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (req.headers.cookie) headers.Cookie = req.headers.cookie;
+    const csrf = req.headers["x-csrf-token"];
+    if (typeof csrf === "string" && csrf.length > 0) headers["X-CSRF-Token"] = csrf;
+    else if (Array.isArray(csrf) && typeof csrf[0] === "string") headers["X-CSRF-Token"] = csrf[0];
+    return headers;
+  }
+
   app.post("/api/references/analyze", async (req, res) => {
     try {
-      const ingestRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req.body) });
+      const ingestRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ingest`, { method: "POST", headers: deputizedFetchHeaders(req), body: JSON.stringify(req.body) });
       const data = await ingestRes.json();
       res.status(ingestRes.status).json(data);
     } catch (err: any) {
@@ -1454,7 +1475,7 @@ Return JSON:
       const port = process.env.PORT || 5000;
       for (const src of sources) {
         try {
-          const ingestRes = await fetch(`http://localhost:${port}/api/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(src) });
+          const ingestRes = await fetch(`http://localhost:${port}/api/ingest`, { method: "POST", headers: deputizedFetchHeaders(req), body: JSON.stringify(src) });
           const data = await ingestRes.json();
           if (ingestRes.ok && data.id) {
             results.push(data);
@@ -2520,7 +2541,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
   // ── PROFILE / MEMORY / BRANDING ──────────────────────────────────────────────
   app.get("/api/profile/memory", async (req, res) => {
     try {
-      const userId = req.session?.userId || 1;
+      const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       res.json(profile || {});
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -2528,7 +2549,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.put("/api/profile/memory", async (req, res) => {
     try {
-      const userId = req.session?.userId || 1;
+      const userId = sessionUserId(req);
       const { brandVoice, writingStyleNotes, audienceDescription, contentGoals, niche, messagingPillars, targetPlatforms, postingFrequency, memoryJson } = req.body;
       const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       let result;
@@ -2559,7 +2580,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.get("/api/profile/memory/preview-prompt", async (req, res) => {
     try {
-      const uid = req.session?.userId ?? 1;
+      const uid = sessionUserId(req);
       const prompt = await getBrandSystemPrompt(uid, "x");
       res.json({ prompt });
     } catch (err: any) {
@@ -2569,7 +2590,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.get("/api/profile/branding", async (req, res) => {
     try {
-      const userId = req.session?.userId || 1;
+      const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       res.json((profile?.brandingJson as any) || {});
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -2577,7 +2598,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.put("/api/profile/branding", async (req, res) => {
     try {
-      const userId = req.session?.userId || 1;
+      const userId = sessionUserId(req);
       const [existing] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       let result;
       if (existing) {
@@ -2596,7 +2617,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.post("/api/profile/memory/ai-learn", async (req, res) => {
     try {
-      const userId = req.session?.userId || 1;
+      const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       const posts = await storage.getPosts();
       const recentContent = posts.slice(0, 10).flatMap(p => p.tweets.map(t => t.content)).join("\n");

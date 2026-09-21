@@ -68,9 +68,20 @@ export function requireUserId(req: Request, res: Response): number | null {
 }
 
 /**
- * Non-throwing accessor. Returns undefined if no user is signed in.
- * Useful for routes that handle both anon and authenticated flows.
+ * Express-middleware form of the same guard. Sends 401 unless a server-side
+ * session identity exists, otherwise passes through. This is the single
+ * enforcement primitive mounted globally on /api by the Phase 30.1 authGate
+ * (server/middleware/authGate.ts). Defined here (not in server/auth.ts) so
+ * importing it never pulls in the database layer; server/auth.ts's legacy
+ * copy was removed (it had zero call sites).
  */
+export function requireAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+  if (!req.session?.userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  next();
+}
+
 export function getUserId(req: Request): number | undefined {
   return req.userId ?? req.session?.userId;
 }

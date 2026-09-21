@@ -48,7 +48,11 @@ const executeToolBody = z.object({
 });
 
 function ownerId(req: { userId?: number }): number {
-  return getUserId(req as never) ?? 1;
+  // Phase 30.1: fail closed. The /api authGate guarantees an authenticated
+  // session before any handler runs; defaulting to owner 1 is forbidden.
+  const id = getUserId(req as never);
+  if (!id) throw new Error("agent ownerId requires an authenticated session");
+  return id;
 }
 
 function beginSse(res: { status: (code: number) => unknown; setHeader: (k: string, v: string) => unknown; flushHeaders?: () => void }): void {

@@ -15,6 +15,7 @@ import { auditLog } from "./middleware/audit";
 import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
 import { sessionUser } from "./middleware/userContext";
+import { authGate } from "./middleware/authGate";
 import {
   livenessPayload,
   readinessPayload,
@@ -188,6 +189,13 @@ app.use((req, res, next) => {
   // registered, so all routes in registerRoutes inherit the protection.
   app.use(auditLog);
   app.use(sessionUser);
+  // Phase 30.1 (B1): authentication gate for the whole /api surface. Mounted
+  // AFTER express-session (it reads req.session) and BEFORE every router, so
+  // no owner-scoped handler is reachable unauthenticated. Only the explicit
+  // public allowlist (auth flows, csrf-token, health/ready) passes through.
+  // Mounted globally (not on "/api"): Express strips the mount point from
+  // req.path, which would break allowlist matching (see authGate.ts).
+  app.use(authGate);
   app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
   // Phase 30: real liveness/readiness (no secrets, no internals). Readiness
   // reports up/down only; the driver error is logged server-side.

@@ -3,7 +3,6 @@ import { promisify } from "util";
 import { db } from "./db";
 import { users, userProfile } from "@shared/schema";
 import { eq, or } from "drizzle-orm";
-import type { Request, Response, NextFunction } from "express";
 
 const scryptAsync = promisify(scrypt);
 
@@ -74,12 +73,7 @@ export async function findOrCreateGoogleUser(googleId: string, email: string | n
   return user;
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (!req.session?.userId) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  next();
-}
+export { requireAuthMiddleware as requireAuth } from "./middleware/userContext";
 
 declare module "express-session" {
   interface SessionData {
