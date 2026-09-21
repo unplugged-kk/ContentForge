@@ -262,6 +262,17 @@ app.use((req, res, next) => {
   const { startContentScheduler } = await import("./content/service");
   startContentScheduler();
 
+  // Phase 31: durable autonomy scheduler. The 6h tick only discovers
+  // (owner, scope) pairs with approved work and enqueues durable
+  // `autonomy.evaluate` jobs; the controller decides everything at execution.
+  // Trigger-only: a missed tick merely delays, and overlap is harmless
+  // (enqueue dedupes + the controller re-evaluates).
+  const { startAutonomyScheduler, stopAutonomyScheduler } = await import(
+    "./content/autonomy/scheduler"
+  );
+  const { isJobRuntimeStarted, getJobRuntime } = await import("./jobs/bootstrap");
+  startAutonomyScheduler(db, () => (isJobRuntimeStarted() ? getJobRuntime() : null));
+
   // Startup validation for X_THREAD_FINISHER
   const finisher = process.env.X_THREAD_FINISHER?.trim();
   if (finisher && finisher.length > 275) {
@@ -287,6 +298,11 @@ app.use((req, res, next) => {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`received ${signal}, shutting down`, "server");
+    try {
+      stopAutonomyScheduler();
+    } catch (err) {
+      console.error("Failed to stop autonomy scheduler:", err);
+    }
     try {
       await stopJobRuntime();
     } catch (err) {

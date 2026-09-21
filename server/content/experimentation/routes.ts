@@ -484,6 +484,29 @@ export function createPolicyCandidateRouter(deps: ExperimentApiDeps): Router {
         body.notes,
       );
 
+      // Phase 31: when a human approves a candidate for future use, ask the
+      // bounded-autonomy controller soon (best-effort; the 6h reconcile
+      // covers misses). Never fails the review request; never trusts this
+      // payload — the worker rereads everything.
+      if (updated && updated.status === "approved_for_future") {
+        void (async () => {
+          try {
+            const [{ isJobRuntimeStarted, getJobRuntime }] = await Promise.all([
+              import("../../jobs/bootstrap"),
+            ]);
+            if (!isJobRuntimeStarted()) return;
+            const { notifyCandidateApproved } = await import("../autonomy/scheduler");
+            await notifyCandidateApproved(getJobRuntime(), {
+              ownerId,
+              targetScope: updated.targetScope,
+              candidateId: updated.id,
+            });
+          } catch (error) {
+            console.error("[autonomy-scheduler] approval hook failed:", error);
+          }
+        })();
+      }
+
       return res.json(updated);
     } catch (error) {
       if (error instanceof z.ZodError) {

@@ -10,9 +10,11 @@ import { registerBuiltinProviders } from "../research/bootstrap";
 import { registerResearchRunJob } from "../research/job";
 import { researchEngine, researchStorage } from "../research/service";
 import { registerContentJobs } from "../content/service";
+import { registerAutonomyEvaluateJob } from "../content/autonomy/job";
 import { registerAgentRunJob } from "../agent/job";
 import { getAgentRuntime, registerAgentTools } from "../agent/service";
 import { JobRuntime } from "./runtime";
+import { db } from "../db";
 
 let runtime: JobRuntime | null = null;
 
@@ -32,6 +34,13 @@ export function registerRuntimeJobs(): void {
   registerBuiltinProviders();
   registerResearchRunJob({ engine: researchEngine, storage: researchStorage });
   registerContentJobs();
+  registerAutonomyEvaluateJob({
+    db,
+    getRuntime: () => {
+      if (!runtime) throw new Error("Job runtime has not been started");
+      return runtime;
+    },
+  });
   registerAgentTools();
   registerAgentRunJob(() => getAgentRuntime());
 }
