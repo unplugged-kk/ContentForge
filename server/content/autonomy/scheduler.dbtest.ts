@@ -443,6 +443,46 @@ describeDb("durable autonomous scheduler (db)", () => {
     await waitFor(async () => (await activationCount(o)) >= 2, 25_000, "both scopes activate");
   });
 
+  it("10 executions across different owners activate independently", async () => {
+    // NOTE ordering: this test must run before the restart test (which swaps
+    // the suite runtime) and away from the reconcile test (whose enqueued jobs
+    // would contend for the single test worker). It proves owner isolation
+    // under concurrency, not worker throughput.
+    const seeds = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => seedEligibleCandidate(owner(21 + i))),
+    );
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) => fullyEnable(owner(21 + i))),
+    );
+    await Promise.all(
+      seeds.map((s, i) =>
+        enqueueAutonomyEvaluation(runtime, {
+          ownerId: owner(21 + i),
+          targetScope: s.scope,
+          correlationId: `${RUN}-multi-${i}`,
+        }),
+      ),
+    ).then((outcomes) => {
+      outcomes.forEach((o, i) => {
+        assert.ok(o.queueJobId, `job ${i} persisted (not deduplicated)`);
+      });
+    });
+    await waitFor(
+      async () => {
+        for (let i = 0; i < 10; i++) {
+          if ((await activationCount(owner(21 + i))) < 1) return false;
+        }
+        return true;
+      },
+      90_000,
+      "all owners activate",
+    );
+    // No owner sees another owner's activation.
+    for (let i = 0; i < 10; i++) {
+      assert.equal(await activationCount(owner(21 + i)), 1);
+    }
+  });
+
   it("restart recovers a pending job without loss", async () => {
     const o = owner(16);
     const { scope } = await seedEligibleCandidate(o);
@@ -516,8 +556,46 @@ describeDb("durable autonomous scheduler (db)", () => {
     const second = await reconcile(db, runtime);
     assert.equal(second.failed, 0);
     assert.ok(second.deduplicated >= 1, "second sweep deduplicates within the window");
+    // Drain: reconcile enqueues real jobs for every due pair in the file;
+    // let the worker finish them so later tests never contend for it.
+    await waitFor(async () => {
+      const r = await admin.query(
+        `select count(*)::int as c from ${SCHEMA}.job where name = '${AUTONOMY_EVALUATE_JOB_TYPE}' and state in ('created','retry','active')`,
+      );
+      return r.rows[0].c === 0;
+    }, 90_000, "reconciled jobs drain");
   });
 
+  it("state changed after enqueue controls execution (reread proof)", async () => {
+    const o = owner(31);
+    const { scope } = await seedEligibleCandidate(o);
+    await fullyEnable(o);
+    // Payload created while enabled; kill switch flips before execution.
+    const def = getJob(AUTONOMY_EVALUATE_JOB_TYPE);
+    assert.ok(def);
+    const { disableAutonomy } = await import("./config");
+    await disableAutonomy(db, o, o);
+    await def.handler(
+      { ownerId: o, targetScope: scope, correlationId: `${RUN}-reread` },
+      testCtx(),
+    );
+    assert.equal(await activationCount(o), 0, "post-enqueue kill switch denies");
+    assert.ok((await decisionCodes(o)).some((c) => /DISABLED/.test(c)));
+  });
+
+  it("malformed payloads are rejected, never executed", async () => {
+    await assert.rejects(
+      () =>
+        runtime.enqueue({
+          jobType: AUTONOMY_EVALUATE_JOB_TYPE,
+          payload: { ownerId: 1, targetScope: "x", correlationId: "c", policy: { objective: "smuggled" } },
+          correlationId: "c",
+          idempotencyKey: `test-malformed-${Date.now()}`,
+        }),
+      /policy/,
+      "strict schema rejects smuggled objects at enqueue",
+    );
+  });
   it("human 29.3 activation still works alongside the scheduler", async () => {
     const o = owner(20);
     const { candidate } = await seedEligibleCandidate(o);
