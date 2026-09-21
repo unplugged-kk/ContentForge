@@ -38,6 +38,9 @@ jobs:
       CI: true
       # Isolated CI database only — do not replace with Railway or shared dev URLs.
       DATABASE_URL: postgresql://test:test@localhost:5432/contentforge_e2e
+      # Phase 30 fail-closed boot requires SESSION_SECRET in production
+      # (the E2E webServer runs NODE_ENV=production). CI-only value.
+      SESSION_SECRET: ci-e2e-session-secret-not-for-production
 
     steps:
       - name: Checkout
