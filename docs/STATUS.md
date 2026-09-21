@@ -1,7 +1,30 @@
 # ContentForge status
 
-Living status for Phase B work on `replit` / PR #3. Architecture detail lives in
-`plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
+Canonical branch is now `main` (PR #3 `status-report → replit` is superseded;
+see Phase 31.4 report). History below is preserved as written; current state
+newest-first.
+
+## Release line (main) — Phases 30–31 at a glance
+
+- 30 Production Readiness: GO WITH EXPLICIT MITIGATIONS
+  (`docs/phase-30-production-readiness-report.md`)
+- 30.1 Auth/ownership remediation: BLOCKER FIXED (global authGate, owner-1
+  fallbacks fail closed)
+- 30.2 Final production re-gate: GO WITH EXPLICIT MITIGATIONS
+  (`docs/phase-30.2-final-production-regate.md`)
+- 30.3 Post-merge UX audit: UX READY, zero new findings
+  (`docs/phase-30.3-post-merge-ux-audit-report.md`)
+- 31 Durable autonomous scheduler: IMPLEMENTED (pg-boss `autonomy.evaluate`;
+  controller remains sole authority)
+- 31.1 Scheduler deep audit: SCHEDULER READY
+  (`docs/phase-31.1-scheduler-deep-audit-report.md`)
+- 31.2 Post-scheduler UX audit: UX READY
+  (`docs/phase-31.2-post-scheduler-ux-audit.md`)
+- 31.3 Operational soak: SOAK PASSED
+  (`docs/phase-31.3-operational-soak-report.md`)
+
+Legacy note: this file began as living status for Phase B work on `replit` /
+PR #3. Architecture detail lives in `plans/contentforge-product/PHASE-B-IMPLEMENTATION.md`.
 
 ## Phase 29.5 — Final Product UX Re-Audit + Polish
 
