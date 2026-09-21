@@ -1,0 +1,889 @@
+/**
+ * Deterministic RSS fixture for live E2E verification.
+ *
+ * Runs inside a Docker container publishing host port 80, so the real
+ * ContentForge RSS provider fetches it over real HTTP on the only port the SSRF
+ * syntax gate permits for `http:` (80). The fixture content is fixed — the
+ * primary E2E never depends on an external site.
+ *
+ * Endpoints:
+ *   GET /health           liveness probe
+ *   GET /feed.xml         deterministic feed with 3 well-known items
+ *   GET /empty.xml        valid feed with zero items (no usable research)
+ *   GET /flaky.xml        fails on the FIRST request only, then serves /feed.xml
+ *   GET /flaky-long.xml   FIRST request returns an item whose native id exceeds the
+ *                         research_sources.native_id column, making persistence fail
+ *                         (a genuine transient/DB-class failure); later requests
+ *                         serve /feed.xml so the pg-boss retry can succeed
+ *   GET /slow.xml?delay=N delays N ms (default 8000) before serving /feed.xml
+ *   GET /reset            resets fixture counters
+ *   GET /stats            fixture counters as JSON
+ *   POST /control/x-write-mode           {mode:"pending",matchSubstring} arms the next POST
+ *                                        /x/tweets whose body.text contains matchSubstring to 202
+ *   POST /control/x-resolve-write-action {id,status,tweetId?,message?} resolves a pending write
+ *   GET /x/write-actions/:id             xQuick write-action status poll/reconcile endpoint
+ *   POST /control/x-media-mode           {mode:"fail",matchSubstring} arms the next POST /x/media
+ *                                        whose alt_text contains matchSubstring to a transient 503
+ *   POST /x/media                        xQuick media-upload endpoint (Phase 7 image delivery)
+ *   POST /control/linkedin-mode          {mode:"network-fail",matchSubstring} arms the next POST
+ *                                        /rest/posts whose body.commentary contains matchSubstring
+ *                                        to drop the connection before responding (ambiguous outcome)
+ *   POST /rest/posts                     LinkedIn Posts API — create
+ *   GET /rest/posts                      LinkedIn Posts API — list by author (reconciliation lookup)
+ *   POST /control/linkedin-record-post   {commentary} simulates LinkedIn having actually received a
+ *                                        write whose response never reached us (post-hoc discovery)
+ *   POST /control/threads-mode           {mode:"network-fail-publish",matchSubstring} arms the next
+ *                                        POST .../threads_publish whose creation matches the marker
+ *   POST /control/threads-record-media   {id,text} records a published Threads media for listing
+ *
+ * This file is TEST INFRASTRUCTURE. It is never imported by the application.
+ */
+
+import http from "node:http";
+
+const PORT = Number(process.env.FIXTURE_PORT ?? 80);
+const RUN = process.env.FIXTURE_RUN ?? "e2e";
+const ORIGIN = `https://fixture.contentforge.test/${RUN}`;
+
+const ITEMS = [
+  {
+    title: "Kubernetes scheduler plugins reach general availability",
+    link: `${ORIGIN}/kubernetes-scheduler-plugins`,
+    guid: `${RUN}-k8s-scheduler`,
+    date: "2026-09-01T00:00:00.000Z",
+    snippet:
+      "Kubernetes scheduler plugins are now a stable extension point for custom placement decisions across large clusters.",
+  },
+  {
+    title: "Operating Kubernetes control planes at scale",
+    link: `${ORIGIN}/kubernetes-control-plane`,
+    guid: `${RUN}-k8s-control-plane`,
+    date: "2026-09-02T00:00:00.000Z",
+    snippet:
+      "Kubernetes control plane capacity planning and API server latency under sustained load.",
+  },
+  {
+    title: "Cost signals for Kubernetes workloads",
+    link: `${ORIGIN}/kubernetes-cost`,
+    guid: `${RUN}-k8s-cost`,
+    date: "2026-09-03T00:00:00.000Z",
+    snippet:
+      "Measuring the real cost of Kubernetes workloads with request-to-limit ratios and bin packing.",
+  },
+];
+
+function feedXml() {
+  const items = ITEMS.map(
+    (item) => `
+    <item>
+      <title>${item.title}</title>
+      <link>${item.link}</link>
+      <guid isPermaLink="false">${item.guid}</guid>
+      <pubDate>${new Date(item.date).toUTCString()}</pubDate>
+      <description>${item.snippet}</description>
+    </item>`,
+  ).join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>ContentForge Deterministic Fixture ${RUN}</title>
+    <link>${ORIGIN}</link>
+    <description>Deterministic RSS fixture for ContentForge live E2E</description>
+    <lastBuildDate>${new Date("2026-09-03T00:00:00.000Z").toUTCString()}</lastBuildDate>${items}
+  </channel>
+</rss>`;
+}
+
+function emptyFeedXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>ContentForge Empty Fixture ${RUN}</title>
+    <link>${ORIGIN}/empty</link>
+    <description>Valid feed with no items</description>
+  </channel>
+</rss>`;
+}
+
+let flakyHits = 0;
+let flakyLongHits = 0;
+let requests = 0;
+let tweetCounter = 0;
+/** When true, the next completion returns a payload that fails validation. */
+let invalidNext = false;
+/** Artificial model latency (ms), so a generation job can be observed queued. */
+let modelDelayMs = 0;
+/**
+ * "immediate" (default) or "pending" — arms the next POST /x/tweets whose
+ * `text` contains `xPendingMarker` only. Scoped by content, not merely
+ * one-shot, so the real periodic content-scheduler cron (which runs
+ * throughout the whole live E2E run and may itself publish unrelated,
+ * already-due schedules concurrently) can never accidentally consume or
+ * defeat an arm meant for a specific test's artifact text.
+ */
+let xWriteMode = "immediate";
+let xPendingMarker = null;
+let xPendingSeq = 0;
+let xAnalyticsMode = "ok";
+/** writeActionId -> { status: "pending" | "success" | "failed", tweetId?, url?, message? } */
+const xWriteActions = new Map();
+/**
+ * Content-scoped arming for the Phase 7 media-upload boundary (`POST
+ * /x/media`), same one-shot-per-matching-request pattern as `xWriteMode`.
+ * "fail" makes the next upload whose alt_text contains `xMediaFailMarker`
+ * return a transient 503 instead of a media id.
+ */
+let xMediaMode = "immediate";
+let xMediaFailMarker = null;
+let xMediaSeq = 0;
+
+/** Same content-scoped arming pattern as xWriteMode, for the LinkedIn Posts API double. */
+let linkedinMode = "immediate";
+let linkedinFailMarker = null;
+let linkedinUrnSeq = 0;
+/** { commentary, createdAt } — every post LinkedIn "actually received". */
+const linkedinPosts = [];
+
+let threadsMode = "immediate";
+let threadsFailMarker = null;
+let threadsSeq = 0;
+const threadsContainers = new Map();
+const threadsMedia = new Map();
+const threadsListed = [];
+
+let instagramMode = "immediate";
+let instagramFailMarker = null;
+let instagramSeq = 0;
+const instagramContainers = new Map();
+const instagramMedia = new Map();
+const instagramListed = [];
+const instagramBlobs = new Map();
+
+/** Read a JSON request body (bounded). */
+function readBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8") || "";
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          resolve(JSON.parse(trimmed || "{}"));
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      if (raw.includes("=")) {
+        resolve(Object.fromEntries(new URLSearchParams(raw).entries()));
+        return;
+      }
+      resolve({});
+    });
+  });
+}
+
+/**
+ * Deterministic OpenAI-compatible completion, so the REAL model gateway
+ * (`server/ai` + `aiCall`) is exercised end to end without calling a provider.
+ * Returns the payload shape the format's registry schema expects.
+ */
+function completionBody(format, invalid = false) {
+  let content;
+  if (invalid) {
+    // Structurally invalid for the registered schema: an x_thread needs >= 1 unit.
+    content = JSON.stringify(format === "x_thread" ? { units: [] } : {});
+  } else if (format === "x_thread") {
+    content = JSON.stringify({ units: ["Kubernetes scheduling is now a policy surface.", "Platform teams can own placement."] });
+  } else {
+    content = JSON.stringify({ text: "Kubernetes scheduling is now a policy surface, not a hardcoded heuristic." });
+  }
+  return {
+    id: "chatcmpl-fixture",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fixture-model",
+    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+  };
+}
+
+/**
+ * Deterministic style-observation completion (Phase 11) — the SAME
+ * chat/completions boundary the text-generation gateway already doubles,
+ * keyed off the analyzer's own system prompt marker rather than a new
+ * endpoint. Structurally valid against `styleObservationSchema` every time.
+ */
+function styleObservationCompletionBody() {
+  const observation = {
+    confidence: "strong",
+    confidenceReason: "e2e fixture: deterministic sample",
+    dimensions: {
+      tone: "direct, practitioner-grade",
+      sentenceRhythm: "short declarative sentences",
+      verbosity: "terse",
+      formattingTendencies: "line breaks between ideas",
+      punctuationTendencies: "minimal",
+      vocabularyRegister: "technical",
+      hookPatterns: ["opens with a specific number"],
+      paragraphStructure: "one idea per line",
+      questionUsage: "rare",
+      listUsage: "occasional numbered list",
+      emojiTendencies: "none",
+      ctaPatterns: ["ends with a direct question"],
+      rhetoricalPatterns: ["contrarian framing"],
+      recurringTraits: ["specific metrics", "real scenarios"],
+    },
+  };
+  return {
+    id: "chatcmpl-fixture-style",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fixture-model",
+    choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify(observation) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+  };
+}
+
+/**
+ * Deterministic chat-intent extraction response (OpenAI-compatible).
+ */
+function intentCompletionBody() {
+  const intent = {
+    title: "Kubernetes scheduling as a policy surface",
+    insightBody:
+      "Scheduler plugins became a stable extension point, so placement policy now lives with the platform team rather than in the scheduler binary.",
+    angles: [
+      "Platform teams own placement policy",
+      "Cost is the next scheduling input",
+    ],
+    concept: "explain why scheduling moved into platform ownership",
+    objective: "educate platform engineers",
+    audience: "platform engineering teams",
+    format: "x_post",
+    channel: "x",
+  };
+  return {
+    id: "chatcmpl-intent",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "fixture-model",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: JSON.stringify(intent) },
+        finish_reason: "stop",
+      },
+    ],
+    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+  };
+}
+
+/**
+ * POST handlers double the EXTERNAL services only:
+ *   POST /v1/chat/completions  → the model provider (AI_BASE_URL)
+ *   POST /x/tweets             → xQuick (XQUICK_API_BASE_URL)
+ * ContentForge's own code paths (gateway, adapter, workers) run for real.
+ */
+async function handlePost(req, res, url) {
+  const send = (status, body) => {
+    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
+
+  if (url.pathname === "/control/invalid-next") {
+    await readBody(req);
+    invalidNext = true;
+    return send(200, { ok: true, invalidNext });
+  }
+
+  if (url.pathname === "/control/model-delay") {
+    const body = await readBody(req);
+    modelDelayMs = Number(body.ms ?? 0);
+    return send(200, { ok: true, modelDelayMs });
+  }
+
+  if (url.pathname.endsWith("/chat/completions")) {
+    const body = await readBody(req);
+    const prompt = JSON.stringify(body.messages ?? []);
+    if (modelDelayMs > 0) await new Promise((r) => setTimeout(r, modelDelayMs));
+    // Chat-to-post intent extraction (deterministic).
+    if (prompt.includes("CONTENT_REQUEST_INTENT")) {
+      return send(200, intentCompletionBody());
+    }
+    // Style analysis (Phase 11) — keyed off the analyzer's own system prompt marker.
+    if (prompt.includes("WRITING STYLE")) {
+      return send(200, styleObservationCompletionBody());
+    }
+    // Forced invalid payload: fails the format registry's validation.
+    if (invalidNext) {
+      invalidNext = false;
+      return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post", true));
+    }
+    return send(200, completionBody(prompt.includes("x_thread") ? "x_thread" : "x_post"));
+  }
+
+  // Arms the NEXT `POST /x/tweets` to return 202 + writeActionId instead of an
+  // immediate tweet id — simulates xQuick accepting a write asynchronously.
+  if (url.pathname === "/x/analytics") {
+    const body = await readBody(req);
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    if (xAnalyticsMode === "fail-transient") {
+      xAnalyticsMode = "ok";
+      return send(503, { message: "analytics upstream timeout" });
+    }
+    if (xAnalyticsMode === "fail-permanent") {
+      xAnalyticsMode = "ok";
+      return send(401, { message: "invalid credentials" });
+    }
+    return send(200, {
+      data: ids.map((id) => ({
+        id,
+        public_metrics: {
+          impression_count: 100,
+          like_count: 7,
+          retweet_count: 2,
+          reply_count: 1,
+          quote_count: 0,
+          bookmark_count: 3,
+        },
+      })),
+    });
+  }
+
+  if (url.pathname === "/control/x-analytics-mode") {
+    const body = await readBody(req);
+    xAnalyticsMode = body.mode === "fail-transient" || body.mode === "fail-permanent" ? body.mode : "ok";
+    return send(200, { ok: true, mode: xAnalyticsMode });
+  }
+
+  // Arms the NEXT `POST /x/tweets` to return 202 + writeActionId instead of an
+  // immediate tweet id — simulates xQuick accepting a write asynchronously.
+  if (url.pathname === "/control/x-write-mode") {
+    const body = await readBody(req);
+    xWriteMode = body.mode === "pending" ? "pending" : "immediate";
+    xPendingMarker = xWriteMode === "pending" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: xWriteMode, matchSubstring: xPendingMarker });
+  }
+
+  // Sets (or changes) the status a pending write action resolves to, for the
+  // NEXT `GET /x/write-actions/:id` check onward — simulates the write
+  // completing (or failing) on X's side sometime after we gave up polling.
+  if (url.pathname === "/control/x-resolve-write-action") {
+    const body = await readBody(req);
+    xWriteActions.set(body.id, {
+      status: body.status,
+      tweetId: body.tweetId,
+      url: body.url ?? `https://x.com/cf_e2e/status/${body.tweetId}`,
+      message: body.message,
+    });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/x/tweets") {
+    const body = await readBody(req);
+    const matchesArm =
+      xWriteMode === "pending" && xPendingMarker && typeof body.text === "string" && body.text.includes(xPendingMarker);
+    if (matchesArm) {
+      xPendingSeq += 1;
+      const id = `wa-${RUN}-${xPendingSeq}`;
+      xWriteActions.set(id, { status: "pending" });
+      xWriteMode = "immediate"; // consumed only by the matching request
+      xPendingMarker = null;
+      return send(202, { writeActionId: id });
+    }
+    // Unrelated concurrent traffic (e.g. the real periodic content-scheduler
+    // cron publishing some other already-due schedule) is never affected by
+    // an arm meant for a different test's text.
+    tweetCounter += 1;
+    const id = `tweet-${tweetCounter}`;
+    return send(200, { id, tweetId: id, url: `https://x.com/cf_e2e/status/${id}`, username: "cf_e2e", status: "ok" });
+  }
+
+  // Arms the NEXT `POST /x/media` whose alt_text contains matchSubstring to a
+  // transient 503 — the media-upload transport's failure boundary, distinct
+  // from `/control/x-write-mode` (post creation).
+  if (url.pathname === "/control/x-media-mode") {
+    const body = await readBody(req);
+    xMediaMode = body.mode === "fail" ? "fail" : "immediate";
+    xMediaFailMarker = xMediaMode === "fail" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: xMediaMode, matchSubstring: xMediaFailMarker });
+  }
+
+  if (url.pathname === "/x/media") {
+    const body = await readBody(req);
+    const matchesArm =
+      xMediaMode === "fail" && xMediaFailMarker && typeof body.alt_text === "string" && body.alt_text.includes(xMediaFailMarker);
+    if (matchesArm) {
+      xMediaMode = "immediate"; // consumed only by the matching request
+      xMediaFailMarker = null;
+      return send(503, { message: "503 upstream media store unavailable" });
+    }
+    xMediaSeq += 1;
+    return send(200, { mediaId: `media-${RUN}-${xMediaSeq}` });
+  }
+
+  // Arms the NEXT `POST /rest/posts` whose commentary contains matchSubstring
+  // to drop the connection before any response — simulates a network-level
+  // ambiguity (LinkedIn's Posts API is otherwise synchronous, so this is the
+  // only way a LinkedIn write becomes ambiguous).
+  if (url.pathname === "/control/linkedin-mode") {
+    const body = await readBody(req);
+    linkedinMode = body.mode === "network-fail" ? "network-fail" : "immediate";
+    linkedinFailMarker = linkedinMode === "network-fail" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: linkedinMode, matchSubstring: linkedinFailMarker });
+  }
+
+  if (url.pathname === "/control/linkedin-record-post") {
+    const body = await readBody(req);
+    linkedinPosts.push({ commentary: body.commentary, createdAt: Date.now() });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/rest/posts") {
+    const body = await readBody(req);
+    const matchesArm =
+      linkedinMode === "network-fail" &&
+      linkedinFailMarker &&
+      typeof body.commentary === "string" &&
+      body.commentary.includes(linkedinFailMarker);
+    if (matchesArm) {
+      linkedinMode = "immediate"; // consumed only by the matching request
+      linkedinFailMarker = null;
+      req.destroy();
+      return;
+    }
+    linkedinPosts.push({ commentary: body.commentary, createdAt: Date.now() });
+    linkedinUrnSeq += 1;
+    const urn = `urn:li:share:${RUN}-${linkedinUrnSeq}`;
+    res.writeHead(201, { "content-type": "application/json", "x-restli-id": urn, "cache-control": "no-store" });
+    return res.end();
+  }
+
+  if (url.pathname === "/control/threads-mode") {
+    const body = await readBody(req);
+    threadsMode = body.mode === "network-fail-publish" ? "network-fail-publish" : "immediate";
+    threadsFailMarker = threadsMode === "network-fail-publish" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: threadsMode, matchSubstring: threadsFailMarker });
+  }
+
+  if (url.pathname === "/control/threads-record-media") {
+    const body = await readBody(req);
+    threadsListed.push({
+      id: body.id,
+      text: body.text,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.threads.net/post/${body.id}`,
+    });
+    threadsMedia.set(body.id, { text: body.text });
+    return send(200, { ok: true });
+  }
+
+  if (req.method === "POST" && /\/threads$/.test(url.pathname) && !url.pathname.endsWith("/threads_publish")) {
+    const body = await readBody(req);
+    threadsSeq += 1;
+    const id = `c-${RUN}-${threadsSeq}`;
+    threadsContainers.set(id, { text: body.text ?? "", status: "FINISHED" });
+    return send(200, { id });
+  }
+
+  if (url.pathname.endsWith("/threads_publish")) {
+    const body = await readBody(req);
+    const creationId = body.creation_id;
+    const text = threadsContainers.get(creationId)?.text ?? "";
+    const matchesArm =
+      threadsMode === "network-fail-publish" && threadsFailMarker && text.includes(threadsFailMarker);
+    if (matchesArm) {
+      threadsMode = "immediate";
+      threadsFailMarker = null;
+      req.destroy();
+      return;
+    }
+    threadsSeq += 1;
+    const mediaId = `m-${RUN}-${threadsSeq}`;
+    threadsMedia.set(mediaId, { text });
+    threadsListed.push({
+      id: mediaId,
+      text,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.threads.net/post/${mediaId}`,
+    });
+    if (threadsContainers.has(creationId)) threadsContainers.get(creationId).status = "PUBLISHED";
+    return send(200, { id: mediaId });
+  }
+
+  if (url.pathname === "/control/instagram-mode") {
+    const body = await readBody(req);
+    instagramMode = body.mode === "network-fail-publish" ? "network-fail-publish" : "immediate";
+    instagramFailMarker = instagramMode === "network-fail-publish" ? String(body.matchSubstring ?? "") : null;
+    return send(200, { ok: true, mode: instagramMode, matchSubstring: instagramFailMarker });
+  }
+
+  if (url.pathname === "/control/instagram-record-media") {
+    const body = await readBody(req);
+    instagramListed.push({
+      id: body.id,
+      caption: body.caption,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.instagram.com/p/${body.id}/`,
+    });
+    instagramMedia.set(body.id, { caption: body.caption });
+    return send(200, { ok: true });
+  }
+
+  if (url.pathname === "/ig-stage-media") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    instagramSeq += 1;
+    const id = `blob-${RUN}-${instagramSeq}`;
+    instagramBlobs.set(id, Buffer.concat(chunks));
+    return send(200, { url: `http://127.0.0.1/ig-media/${id}` });
+  }
+
+  if (req.method === "POST" && /\/v25\.0\/[^/]+\/media$/.test(url.pathname) && !url.pathname.endsWith("/media_publish")) {
+    const body = await readBody(req);
+    instagramSeq += 1;
+    const id = `ic-${RUN}-${instagramSeq}`;
+    instagramContainers.set(id, {
+      caption: body.caption ?? "",
+      status: "FINISHED",
+      children: body.children,
+      mediaType: body.media_type ?? null,
+      videoUrl: body.video_url ?? null,
+    });
+    return send(200, { id });
+  }
+
+  if (url.pathname.endsWith("/media_publish")) {
+    const body = await readBody(req);
+    const creationId = body.creation_id;
+    const caption = instagramContainers.get(creationId)?.caption ?? "";
+    const matchesArm =
+      instagramMode === "network-fail-publish" &&
+      instagramFailMarker &&
+      caption.includes(instagramFailMarker);
+    if (matchesArm) {
+      instagramMode = "immediate";
+      instagramFailMarker = null;
+      req.destroy();
+      return;
+    }
+    instagramSeq += 1;
+    const mediaId = `im-${RUN}-${instagramSeq}`;
+    instagramMedia.set(mediaId, { caption });
+    instagramListed.push({
+      id: mediaId,
+      caption,
+      timestamp: new Date().toISOString(),
+      permalink: `https://www.instagram.com/p/${mediaId}/`,
+    });
+    if (instagramContainers.has(creationId)) instagramContainers.get(creationId).status = "PUBLISHED";
+    return send(200, { id: mediaId });
+  }
+
+  return send(404, { error: "not found" });
+}
+
+/**
+ * One item whose native id (guid) exceeds `research_sources.native_id`
+ * varchar(500). The provider collects it happily; persistence fails, which the
+ * engine classifies as a transient failure and pg-boss retries.
+ */
+function overlongFeedXml() {
+  const guid = "o".repeat(600);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>ContentForge Overlong Fixture ${RUN}</title>
+    <link>${ORIGIN}/overlong</link>
+    <description>Single item with an over-long native id</description>
+    <item>
+      <title>Kubernetes overlong native id probe</title>
+      <link>${ORIGIN}/overlong-item</link>
+      <guid isPermaLink="false">${guid}</guid>
+      <pubDate>${new Date("2026-09-03T00:00:00.000Z").toUTCString()}</pubDate>
+      <description>Kubernetes item whose native id exceeds the persistence column, so the write fails.</description>
+    </item>
+  </channel>
+</rss>`;
+}
+
+const server = http.createServer(async (req, res) => {
+  requests += 1;
+  const url = new URL(req.url, "http://localhost");
+
+  if (req.method === "POST") return handlePost(req, res, url);
+
+  const send = (status, body, type = "application/rss+xml; charset=utf-8") => {
+    res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
+    res.end(body);
+  };
+
+  // ── Deterministic provider fixtures (Phase 2) ────────────────────────────────
+  // Reddit public JSON listing.
+  if (url.pathname.startsWith("/reddit/")) {
+    const sub = url.pathname.match(/\/r\/([^/]+)\//)?.[1] ?? "all";
+    return send(
+      200,
+      JSON.stringify({
+        data: {
+          children: [
+            {
+              data: {
+                name: `t3_${RUN}reddit1`,
+                id: `${RUN}reddit1`,
+                title: "Kubernetes scheduler plugins are now stable",
+                permalink: `/r/${sub}/comments/${RUN}reddit1/kubernetes_scheduler_plugins/`,
+                url: `https://example.com/${RUN}/reddit-post`,
+                selftext: "A practitioner write-up on scheduler plugins and placement policy.",
+                author: "ada",
+                created_utc: 1767225600,
+                subreddit: sub,
+                score: 240,
+                num_comments: 31,
+              },
+            },
+            {
+              data: {
+                name: `t3_${RUN}reddit2`,
+                id: `${RUN}reddit2`,
+                title: "Cost signals for Kubernetes workloads",
+                permalink: `/r/${sub}/comments/${RUN}reddit2/cost_signals/`,
+                selftext: "Request-to-limit ratios and bin packing in practice.",
+                author: "grace",
+                created_utc: 1767312000,
+                subreddit: sub,
+                score: 88,
+                num_comments: 9,
+              },
+            },
+          ],
+        },
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  // Hacker News (Algolia) search/front page.
+  if (url.pathname.startsWith("/hn/")) {
+    return send(
+      200,
+      JSON.stringify({
+        hits: [
+          {
+            objectID: `${RUN}hn1`,
+            title: "Scheduler plugins and the move to platform-owned policy",
+            url: `https://example.com/${RUN}/hn-story`,
+            author: "pg",
+            created_at: "2026-03-01T10:00:00.000Z",
+            points: 310,
+            num_comments: 120,
+          },
+          {
+            objectID: `${RUN}hn2`,
+            title: "Measuring Kubernetes cost per workload",
+            url: `https://example.com/${RUN}/hn-cost`,
+            author: "cmeik",
+            created_at: "2026-03-02T10:00:00.000Z",
+            points: 140,
+            num_comments: 40,
+          },
+        ],
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  // YouTube public channel Atom feed (view-source link must be reachable for validation).
+  if (url.pathname.startsWith("/youtube/")) {
+    const channelId = url.searchParams.get("channel_id") ?? "fixture-channel";
+    return send(
+      200,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>ContentForge Fixture Channel</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/${channelId}"/>
+  <entry>
+    <id>yt:video:${RUN}vid1</id>
+    <yt:videoId>${RUN}vid1</yt:videoId>
+    <title>Scheduler plugins, explained</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=${RUN}vid1"/>
+    <published>2026-02-10T09:00:00.000Z</published>
+    <author><name>ContentForge</name></author>
+  </entry>
+  <entry>
+    <id>yt:video:${RUN}vid2</id>
+    <yt:videoId>${RUN}vid2</yt:videoId>
+    <title>Kubernetes cost per workload</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=${RUN}vid2"/>
+    <published>2026-02-11T09:00:00.000Z</published>
+    <author><name>ContentForge</name></author>
+  </entry>
+</feed>`,
+    );
+  }
+
+  // A plain HTML page for the web provider.
+  if (url.pathname.startsWith("/web/")) {
+    return send(
+      200,
+      `<!doctype html><html><head><title>Platform-owned scheduling</title>
+<meta name="author" content="ContentForge"></head>
+<body><article><h1>Platform-owned scheduling</h1>
+<p>Scheduler plugins became a stable extension point, so placement policy now lives with the platform team rather than inside the scheduler binary.</p>
+<p>Cost signals are the next input teams want to schedule against.</p></article></body></html>`,
+      "text/html; charset=utf-8",
+    );
+  }
+
+  if (url.pathname === "/rest/posts") {
+    const elements = linkedinPosts.map((p, i) => ({
+      id: `urn:li:share:${RUN}-listed-${i}`,
+      commentary: p.commentary,
+      createdAt: p.createdAt,
+    }));
+    return send(200, JSON.stringify({ elements }), "application/json; charset=utf-8");
+  }
+
+  if (url.pathname.endsWith("/insights")) {
+    const parts = url.pathname.split("/").filter(Boolean);
+    const id = parts[parts.length - 2];
+    if (url.pathname.includes("/v25.0/")) {
+      return send(
+        200,
+        JSON.stringify({
+          data: [
+            { name: "views", values: [{ value: 40 }] },
+            { name: "likes", values: [{ value: 5 }] },
+            { name: "comments", values: [{ value: 2 }] },
+            { name: "saved", values: [{ value: 3 }] },
+            { name: "shares", values: [{ value: 1 }] },
+            { name: "reach", values: [{ value: 30 }] },
+            { name: "total_interactions", values: [{ value: 11 }] },
+          ],
+          id,
+        }),
+        "application/json; charset=utf-8",
+      );
+    }
+    return send(
+      200,
+      JSON.stringify({
+        data: [
+          { name: "views", values: [{ value: 40 }] },
+          { name: "likes", values: [{ value: 5 }] },
+          { name: "replies", values: [{ value: 2 }] },
+          { name: "reposts", values: [{ value: 1 }] },
+          { name: "quotes", values: [{ value: 3 }] },
+          { name: "shares", values: [{ value: 4 }] },
+        ],
+        id,
+      }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  if (/\/v1\.0\/[^/]+\/threads$/.test(url.pathname)) {
+    return send(200, JSON.stringify({ data: threadsListed }), "application/json; charset=utf-8");
+  }
+
+  if (url.pathname === "/v25.0/me" || (url.pathname.includes("/v25.0/") && url.pathname.endsWith("/me"))) {
+    return send(
+      200,
+      JSON.stringify({ id: "cf_e2e_ig", username: "cf_e2e", account_type: "BUSINESS" }),
+      "application/json; charset=utf-8",
+    );
+  }
+
+  if (url.pathname === "/v1.0/me" || (url.pathname.includes("/v1.0/") && url.pathname.endsWith("/me"))) {
+    return send(200, JSON.stringify({ id: "cf_e2e_threads", username: "cf_e2e" }), "application/json; charset=utf-8");
+  }
+
+  if (/\/v25\.0\/[^/]+\/media$/.test(url.pathname)) {
+    return send(200, JSON.stringify({ data: instagramListed }), "application/json; charset=utf-8");
+  }
+
+  const igNode = url.pathname.match(/^\/v25\.0\/([^/]+)$/);
+  if (igNode) {
+    const id = igNode[1];
+    if (instagramContainers.has(id)) {
+      const c = instagramContainers.get(id);
+      return send(200, JSON.stringify({ id, status_code: c.status }), "application/json; charset=utf-8");
+    }
+    if (instagramMedia.has(id)) {
+      const m = instagramMedia.get(id);
+      return send(
+        200,
+        JSON.stringify({ id, caption: m.caption, permalink: `https://www.instagram.com/p/${id}/` }),
+        "application/json; charset=utf-8",
+      );
+    }
+  }
+
+  const threadsNode = url.pathname.match(/^\/v1\.0\/([^/]+)$/);
+  if (threadsNode) {
+    const id = threadsNode[1];
+    if (threadsContainers.has(id)) {
+      const c = threadsContainers.get(id);
+      return send(200, JSON.stringify({ id, status: c.status }), "application/json; charset=utf-8");
+    }
+    if (threadsMedia.has(id)) {
+      const m = threadsMedia.get(id);
+      return send(
+        200,
+        JSON.stringify({ id, text: m.text, permalink: `https://www.threads.net/post/${id}` }),
+        "application/json; charset=utf-8",
+      );
+    }
+  }
+
+  const writeActionMatch = url.pathname.match(/^\/x\/write-actions\/(.+)$/);
+  if (writeActionMatch) {
+    const state = xWriteActions.get(decodeURIComponent(writeActionMatch[1]));
+    const json = (status, body) => send(status, JSON.stringify(body), "application/json; charset=utf-8");
+    if (!state) return json(404, { message: "unknown write action" });
+    if (state.status === "pending") return json(200, { status: "pending" });
+    if (state.status === "success") return json(200, { status: "success", tweetId: state.tweetId, url: state.url });
+    return json(200, { status: "failed", message: state.message ?? "write action failed" });
+  }
+
+  switch (url.pathname) {
+    case "/health":
+      return send(200, "ok", "text/plain");
+    case "/feed.xml":
+      return send(200, feedXml());
+    case "/empty.xml":
+      return send(200, emptyFeedXml());
+    case "/flaky.xml": {
+      flakyHits += 1;
+      if (flakyHits === 1) {
+        return send(500, "fixture: deliberate first-request failure", "text/plain");
+      }
+      return send(200, feedXml());
+    }
+    case "/flaky-long.xml": {
+      flakyLongHits += 1;
+      if (flakyLongHits === 1) return send(200, overlongFeedXml());
+      return send(200, feedXml());
+    }
+    case "/slow.xml": {
+      const delay = Number(url.searchParams.get("delay") ?? 8000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return send(200, feedXml());
+    }
+    case "/reset":
+      flakyHits = 0;
+      flakyLongHits = 0;
+      return send(200, "reset", "text/plain");
+    case "/stats":
+      return send(200, JSON.stringify({ flakyHits, flakyLongHits, requests }), "application/json");
+    default:
+      return send(404, "not found", "text/plain");
+  }
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`rss fixture listening on 0.0.0.0:${PORT} (run=${RUN})`);
+});

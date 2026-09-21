@@ -1,0 +1,37 @@
+name: Migration Guard
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  guard:
+    name: Schema/Migration Consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate migrations from current schema
+        env:
+          # db:generate doesn't need DB connectivity, but drizzle config validates presence.
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+        run: npm run db:generate
+
+      - name: Ensure generated migration files are committed
+        run: |
+          if ! git diff --quiet -- migrations; then
+            echo "::error::Uncommitted migration drift detected. Run 'npm run db:generate' and commit migrations/*."
+            git --no-pager diff -- migrations
+            exit 1
+          fi

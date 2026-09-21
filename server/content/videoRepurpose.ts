@@ -1,0 +1,1150 @@
+/**
+ * Video repurposing (Phase 27).
+ *
+ * Distinct from VisualGeneration: an owned VideoAsset is clipped into N short
+ * VideoAssets. ContentForge owns intent, lineage, approval, and publishing.
+ * OpenShorts (when configured) is a worker. The fixture proves orchestration
+ * without merging OpenShorts/Video Factory/HyperFrames source.
+ */
+
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import type { VideoRepurposingJob, VideoRepurposingOutput, VisualAsset } from "@shared/schema";
+import { JobFailure, describeError } from "../jobs/failures";
+import type { ContentStoragePort, JsonRecord } from "./storage";
+import {
+  createLocalAssetStorage,
+  validateMediaOutput,
+  InvalidVisualInputError,
+  type AssetStoragePort,
+} from "./visual";
+import { fixtureMp4Bytes } from "./visualFixture";
+
+export const VIDEO_REPURPOSE_LIMITS = {
+  maxClipsPerSource: 10,
+  maxVideosPerBatch: 10,
+  maxSourceDurationMs: 30 * 60 * 1000,
+  maxOutputDurationMs: 3 * 60 * 1000,
+  maxBytes: 80 * 1024 * 1024,
+} as const;
+
+export const LOCAL_VIDEO_REPURPOSE_FIXTURE_ID = "local-video-repurpose-fixture";
+export const OPENSHORTS_PROVIDER_ID = "openshorts";
+
+export type VideoRepurposeStatus =
+  | "requested"
+  | "accepted"
+  | "queued"
+  | "processing"
+  | "ready"
+  | "partial"
+  | "failed"
+  | "unknown";
+
+export type VideoRepurposeFailureClass = "transient" | "rate_limited" | "permanent" | "unknown";
+
+export interface VideoRepurposeClip {
+  position: number;
+  clipId: string;
+  bytes: Buffer;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  startMs: number | null;
+  endMs: number | null;
+  title: string | null;
+  caption: string | null;
+  aspectRatio: string | null;
+  failed?: boolean;
+  errorMessage?: string;
+}
+
+export interface VideoRepurposeSubmitResult {
+  providerJobId: string;
+  status: VideoRepurposeStatus;
+}
+
+export interface VideoRepurposeStatusResult {
+  providerJobId: string;
+  status: VideoRepurposeStatus;
+  failureClass?: VideoRepurposeFailureClass;
+  errorMessage?: string | null;
+  clips: VideoRepurposeClip[];
+}
+
+export interface VideoRepurposeRequest {
+  semanticId: string;
+  source: {
+    assetId: number;
+    storageKey: string;
+    mime: string;
+    durationMs: number | null;
+    bytes: Buffer;
+  };
+  clipCount: number;
+  snapshot: JsonRecord;
+}
+
+export interface VideoRepurposeHealth {
+  configured: boolean;
+  reachable: boolean;
+  apiRouteAvailable?: boolean;
+  llmReady?: boolean;
+  processingReady?: boolean;
+  reason?: string | null;
+  notes?: string[];
+}
+
+export interface VideoRepurposingProviderPort {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  health?(): Promise<VideoRepurposeHealth>;
+  submit(request: VideoRepurposeRequest): Promise<VideoRepurposeSubmitResult>;
+  getStatus(providerJobId: string): Promise<VideoRepurposeStatusResult>;
+}
+
+const providers = new Map<string, VideoRepurposingProviderPort>();
+
+export function registerVideoRepurposingProvider(provider: VideoRepurposingProviderPort): void {
+  providers.set(provider.providerId, provider);
+}
+
+export function getVideoRepurposingProvider(providerId: string): VideoRepurposingProviderPort {
+  const found = providers.get(providerId);
+  if (!found) throw new VideoRepurposeInputError([`unknown video repurposing provider "${providerId}"`]);
+  return found;
+}
+
+export function listVideoRepurposingProviders(): VideoRepurposingProviderPort[] {
+  return Array.from(providers.values());
+}
+
+export function resetVideoRepurposingProviders(): void {
+  providers.clear();
+}
+
+function emitVideoEvent(type: string, fields: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      source: "content",
+      type,
+      ...fields,
+    }),
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function uniquifyMp4(base: Buffer, salt: number): Buffer {
+  const extra = Buffer.alloc(16);
+  extra.writeUInt32BE(16, 0);
+  extra.write("free", 4, "ascii");
+  extra.writeUInt32BE(salt >>> 0, 8);
+  extra.writeUInt32BE(0xcf270027, 12);
+  return Buffer.concat([base, extra]);
+}
+
+export function createFixtureVideoRepurposeProvider(
+  options: {
+    providerId?: string;
+    failMode?: "none" | "transient" | "permanent" | "partial" | "unknown";
+    failAtIndex?: number;
+  } = {},
+): VideoRepurposingProviderPort & { calls(): number } {
+  const providerId = options.providerId ?? LOCAL_VIDEO_REPURPOSE_FIXTURE_ID;
+  const jobs = new Map<string, VideoRepurposeStatusResult>();
+  let calls = 0;
+  const base = fixtureMp4Bytes();
+
+  function clipsFor(request: VideoRepurposeRequest): VideoRepurposeClip[] {
+    const out: VideoRepurposeClip[] = [];
+    for (let i = 0; i < request.clipCount; i += 1) {
+      if (options.failMode === "partial" && (options.failAtIndex ?? 1) === i) {
+        out.push({
+          position: i,
+          clipId: `${request.semanticId}-clip-${i}`,
+          bytes: Buffer.alloc(0),
+          mime: "video/mp4",
+          width: 1080,
+          height: 1920,
+          durationMs: 1000,
+          startMs: null,
+          endMs: null,
+          title: `Clip ${i + 1}`,
+          caption: null,
+          aspectRatio: "9:16",
+          failed: true,
+          errorMessage: "fixture clip failed",
+        });
+        continue;
+      }
+      out.push({
+        position: i,
+        clipId: `${request.semanticId}-clip-${i}`,
+        bytes: uniquifyMp4(base, i + 1),
+        mime: "video/mp4",
+        width: 1080,
+        height: 1920,
+        durationMs: 1000,
+        startMs: null,
+        endMs: null,
+        title: `Clip ${i + 1}`,
+        caption: null,
+        aspectRatio: "9:16",
+      });
+    }
+    return out;
+  }
+
+  return {
+    providerId,
+    providerVersion: "video-repurpose-fixture-1",
+    calls: () => calls,
+    async health() {
+      return {
+        configured: true,
+        reachable: true,
+        apiRouteAvailable: true,
+        processingReady: true,
+        reason: "deterministic fixture; not a clip engine",
+        notes: ["deterministic fixture; not a clip engine"],
+      };
+    },
+    async submit(request) {
+      calls += 1;
+      if (options.failMode === "transient") {
+        throw JobFailure.transient("fixture video repurpose unavailable");
+      }
+      if (options.failMode === "permanent") {
+        throw JobFailure.permanent("fixture video repurpose rejected the request");
+      }
+      if (options.failMode === "unknown") {
+        jobs.set(request.semanticId, {
+          providerJobId: request.semanticId,
+          status: "unknown",
+          failureClass: "unknown",
+          errorMessage: "fixture side effect is ambiguous",
+          clips: [],
+        });
+        return { providerJobId: request.semanticId, status: "unknown" };
+      }
+      const clipRows = clipsFor(request);
+      const failed = clipRows.filter((c) => c.failed).length;
+      const status: VideoRepurposeStatus =
+        failed === 0 ? "ready" : failed === clipRows.length ? "failed" : "partial";
+      jobs.set(request.semanticId, {
+        providerJobId: request.semanticId,
+        status,
+        clips: clipRows,
+      });
+      return { providerJobId: request.semanticId, status: "accepted" };
+    },
+    async getStatus(providerJobId) {
+      const existing = jobs.get(providerJobId);
+      if (!existing) {
+        return { providerJobId, status: "unknown", clips: [], failureClass: "unknown" };
+      }
+      return existing;
+    },
+  };
+}
+
+export function openshortsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.OPENSHORTS_API_URL?.trim());
+}
+
+function readErrorDetail(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const record = body as Record<string, unknown>;
+  if (typeof record.detail === "string") return record.detail;
+  if (record.detail && typeof record.detail === "object") {
+    const detail = record.detail as Record<string, unknown>;
+    if (typeof detail.message === "string") return detail.message;
+    if (typeof detail.error === "string") return detail.error;
+  }
+  if (typeof record.error === "string") return record.error;
+  if (typeof record.message === "string") return record.message;
+  return "";
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = "name" in error ? String((error as { name?: unknown }).name ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return name === "AbortError" || name === "TimeoutError" || /aborted|timeout/i.test(message);
+}
+
+/** Only follow upload_url when it is this OpenShorts origin + /api/uploads/:id (no SSRF). */
+export function resolveOpenShortsUploadPath(baseUrl: string, uploadId: string, uploadUrl?: string | null): string {
+  const fallback = `/api/uploads/${encodeURIComponent(uploadId)}`;
+  if (!uploadUrl?.trim()) return fallback;
+  try {
+    const base = new URL(baseUrl.includes("://") ? baseUrl : `http://${baseUrl}`);
+    const parsed = new URL(uploadUrl, base);
+    if (parsed.origin !== base.origin) return fallback;
+    if (parsed.pathname !== `/api/uploads/${uploadId}` && parsed.pathname !== `/api/uploads/${encodeURIComponent(uploadId)}`) {
+      return fallback;
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return fallback;
+  }
+}
+
+export function createOpenShortsProvider(options: {
+  baseUrl: string;
+  apiKey?: string;
+  geminiKey?: string;
+  fetchImpl?: typeof fetch;
+  llmProbeUrl?: string | null;
+  processTimeoutMs?: number;
+}): VideoRepurposingProviderPort {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const llmProbeUrl = options.llmProbeUrl?.trim() || "http://127.0.0.1:11434/v1/models";
+  const processTimeoutMs = options.processTimeoutMs ?? 60_000;
+
+  async function api(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+    if (options.geminiKey) headers.set("x-gemini-key", options.geminiKey);
+    return fetchImpl(`${baseUrl}${path}`, { ...init, headers });
+  }
+
+  return {
+    providerId: OPENSHORTS_PROVIDER_ID,
+    providerVersion: "openshorts-1",
+    async health() {
+      const notes = [
+        "OpenShorts is a clipping worker; ContentForge owns publishing",
+        "REST uses /api/process and /api/status/:job_id, not MCP tool names",
+      ];
+      let reachable = false;
+      let apiRouteAvailable = false;
+      let llmReady = false;
+      let processingReady = false;
+      let reason: string | null = "openshorts health probe failed";
+      try {
+        const live = await api("/health", { method: "GET" });
+        reachable = live.ok;
+        if (!reachable) {
+          return { configured: true, reachable: false, apiRouteAvailable: false, llmReady: false, processingReady: false, reason: `GET /health returned ${live.status}`, notes };
+        }
+        const ready = await api("/health/ready", { method: "GET" });
+        const configRes = await api("/api/config", { method: "GET" });
+        const config = configRes.ok ? ((await configRes.json()) as Record<string, unknown>) : {};
+        const localLlm = config.localLlm && typeof config.localLlm === "object";
+        try {
+          const llm = await fetchImpl(llmProbeUrl, { method: "GET" });
+          llmReady = llm.ok;
+        } catch {
+          llmReady = false;
+        }
+        const probe = await api("/api/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ acknowledged: true }),
+        });
+        const probeBody = await probe.json().catch(() => ({}));
+        const detail = readErrorDetail(probeBody);
+        apiRouteAvailable = probe.status !== 404;
+        if (probe.status === 404) {
+          reason = "POST /api/process is not available on this host";
+        } else if (probe.status === 402) {
+          reason = detail || "provider quota unavailable";
+        } else if (probe.status === 401) {
+          reason = detail || "provider credentials unavailable";
+        } else if (probe.status === 400 && /gemini/i.test(detail)) {
+          reason = localLlm && !llmReady ? "local LLM unavailable" : "provider credentials unavailable";
+        } else if (probe.status === 400 && /must provide url|upload_id/i.test(detail)) {
+          if (!localLlm) {
+            reason = "local LLM is not configured on OpenShorts";
+          } else if (!llmReady) {
+            reason = "local LLM unavailable";
+          } else if (!ready.ok) {
+            reason = "OpenShorts process route is up but not ready";
+          } else {
+            processingReady = true;
+            reason = null;
+          }
+        } else if (probe.status === 400) {
+          reason = detail || "OpenShorts rejected an empty process probe";
+        } else if (probe.ok) {
+          processingReady = false;
+          reason = "unexpected process success without a source; refusing to claim operational";
+        } else {
+          reason = detail || `POST /api/process returned ${probe.status}`;
+        }
+        return { configured: true, reachable, apiRouteAvailable, llmReady, processingReady, reason, notes };
+      } catch {
+        return { configured: true, reachable, apiRouteAvailable, llmReady, processingReady: false, reason, notes };
+      }
+    },
+    async submit(request) {
+      if (!request.source.bytes?.length) {
+        throw JobFailure.permanent("OpenShorts submit requires owned VideoAsset bytes");
+      }
+      const slotRes = await api("/api/uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: `cfvr-${request.source.assetId}.mp4` }),
+      });
+      if (!slotRes.ok) {
+        if (slotRes.status === 429) throw JobFailure.rateLimited("openshorts rate limited");
+        if (slotRes.status === 402) throw JobFailure.permanent("openshorts quota unavailable");
+        if (slotRes.status >= 400 && slotRes.status < 500) {
+          throw JobFailure.permanent(`openshorts rejected upload slot (${slotRes.status})`);
+        }
+        throw JobFailure.transient(`openshorts upload slot ${slotRes.status}`);
+      }
+      const slot = (await slotRes.json()) as { upload_id?: string; upload_url?: string };
+      const uploadId = String(slot.upload_id ?? "").trim();
+      if (!uploadId) throw JobFailure.permanent("openshorts upload slot missing upload_id");
+
+      const putPath = resolveOpenShortsUploadPath(baseUrl, uploadId, slot.upload_url);
+      const put = await api(putPath, {
+        method: "PUT",
+        headers: { "content-type": request.source.mime || "video/mp4" },
+        body: new Uint8Array(request.source.bytes),
+      });
+      if (!put.ok) {
+        if (put.status === 400) throw JobFailure.permanent(`openshorts rejected uploaded bytes (${put.status})`);
+        if (put.status >= 400 && put.status < 500) throw JobFailure.permanent(`openshorts upload failed (${put.status})`);
+        throw JobFailure.transient(`openshorts upload ${put.status}`);
+      }
+
+      let res: Response;
+      try {
+        res = await api("/api/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            upload_id: uploadId,
+            acknowledged: true,
+            target_clips: request.clipCount,
+            output_format: "vertical",
+          }),
+          signal: AbortSignal.timeout(processTimeoutMs),
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          return { providerJobId: `upload:${uploadId}`, status: "unknown" };
+        }
+        throw error;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const detail = readErrorDetail(body);
+        if (res.status === 429) throw JobFailure.rateLimited(detail || "openshorts rate limited");
+        if (res.status === 402) throw JobFailure.permanent(detail || "openshorts quota unavailable");
+        if (res.status >= 400 && res.status < 500) {
+          throw JobFailure.permanent(detail || `openshorts rejected /api/process (${res.status})`);
+        }
+        throw JobFailure.transient(detail || `openshorts /api/process ${res.status}`);
+      }
+      const body = (await res.json()) as { job_id?: string; status?: string };
+      const providerJobId = String(body.job_id ?? "").trim();
+      if (!providerJobId) throw JobFailure.transient("openshorts /api/process returned no job_id");
+      return { providerJobId, status: mapOpenShortsStatus(body.status) };
+    },
+    async getStatus(providerJobId) {
+      if (providerJobId.startsWith("upload:")) {
+        return {
+          providerJobId,
+          status: "unknown",
+          clips: [],
+          failureClass: "unknown",
+          errorMessage: "process timed out after upload; reconcile the same identity without resubmitting",
+        };
+      }
+      let res: Response;
+      try {
+        res = await api(`/api/status/${encodeURIComponent(providerJobId)}`, {
+          method: "GET",
+          signal: AbortSignal.timeout(20_000),
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          return { providerJobId, status: "processing", clips: [], errorMessage: "openshorts status timed out" };
+        }
+        throw error;
+      }
+      if (res.status === 404) {
+        return { providerJobId, status: "unknown", clips: [], failureClass: "unknown" };
+      }
+      if (!res.ok) throw JobFailure.transient(`openshorts status ${res.status}`);
+      const body = (await res.json()) as {
+        status?: string;
+        partial?: boolean;
+        error?: string;
+        result?: { clips?: Array<Record<string, unknown>> };
+        clips?: Array<Record<string, unknown>>;
+      };
+      let status = mapOpenShortsStatus(body.status);
+      if (status === "accepted" || status === "queued" || status === "processing") {
+        return { providerJobId, status, clips: [], errorMessage: body.error ?? null };
+      }
+      const rawClips = Array.isArray(body.result?.clips) ? body.result!.clips! : Array.isArray(body.clips) ? body.clips : [];
+      const clips: VideoRepurposeClip[] = [];
+      for (const [index, clip] of Array.from(rawClips.entries())) {
+        const clipId = String(clip.id ?? clip.clip_id ?? `${providerJobId}-${index}`);
+        const videoUrl = typeof clip.video_url === "string" ? clip.video_url : typeof clip.download_url === "string" ? clip.download_url : null;
+        const startSec = typeof clip.start === "number" ? clip.start : null;
+        const endSec = typeof clip.end === "number" ? clip.end : null;
+        const failed = Boolean(clip.failed) || String(clip.status ?? "") === "failed" || !videoUrl;
+        let bytes = Buffer.alloc(0);
+        if (!failed && videoUrl) {
+          if (/^https?:\/\//i.test(videoUrl)) {
+            try {
+              const parsed = new URL(videoUrl);
+              const base = new URL(baseUrl);
+              if (parsed.origin === base.origin) {
+                const downloaded = await fetchImpl(videoUrl);
+                if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
+              }
+            } catch {
+              bytes = Buffer.alloc(0);
+            }
+          } else {
+            const downloaded = await api(videoUrl.startsWith("/") ? videoUrl : `/${videoUrl}`, { method: "GET" });
+            if (downloaded.ok) bytes = Buffer.from(await downloaded.arrayBuffer());
+          }
+        }
+        const durationMs =
+          startSec != null && endSec != null ? Math.max(0, Math.round((endSec - startSec) * 1000)) : typeof clip.duration_ms === "number" ? clip.duration_ms : null;
+        const title =
+          typeof clip.title === "string"
+            ? clip.title
+            : typeof clip.video_title_for_youtube_short === "string"
+              ? clip.video_title_for_youtube_short
+              : null;
+        clips.push({
+          position: index,
+          clipId,
+          bytes,
+          mime: "video/mp4",
+          width: typeof clip.width === "number" && clip.width > 0 ? clip.width : 1080,
+          height: typeof clip.height === "number" && clip.height > 0 ? clip.height : 1920,
+          durationMs: durationMs && durationMs > 0 ? durationMs : null,
+          startMs: startSec != null ? Math.round(startSec * 1000) : null,
+          endMs: endSec != null ? Math.round(endSec * 1000) : null,
+          title,
+          caption: typeof clip.video_description_for_instagram === "string" ? clip.video_description_for_instagram : null,
+          aspectRatio: "9:16",
+          failed: failed || bytes.length === 0,
+          errorMessage: failed || bytes.length === 0 ? String(clip.error ?? "clip download failed") : undefined,
+        });
+      }
+      if (status === "ready" && (body.partial || clips.some((c) => c.failed))) {
+        status = clips.some((c) => !c.failed) ? "partial" : "failed";
+      }
+      return {
+        providerJobId,
+        status,
+        errorMessage: body.error ?? null,
+        clips,
+      };
+    },
+  };
+}
+
+function mapOpenShortsStatus(raw: string | undefined): VideoRepurposeStatus {
+  const value = String(raw ?? "unknown").toLowerCase();
+  if (value === "accepted") return "accepted";
+  if (value === "queued") return "queued";
+  if (value === "processing" || value === "running") return "processing";
+  if (value === "ready" || value === "done" || value === "completed") return "ready";
+  if (value === "partial") return "partial";
+  if (value === "failed" || value === "error") return "failed";
+  return "unknown";
+}
+
+export function createConfiguredOpenShortsProvider(
+  env: NodeJS.ProcessEnv = process.env,
+): VideoRepurposingProviderPort | null {
+  const baseUrl = env.OPENSHORTS_API_URL?.trim();
+  if (!baseUrl) return null;
+  return createOpenShortsProvider({
+    baseUrl,
+    apiKey: env.OPENSHORTS_API_KEY?.trim() || undefined,
+    geminiKey: env.OPENSHORTS_GEMINI_KEY?.trim() || undefined,
+    llmProbeUrl: env.OPENSHORTS_LLM_PROBE_URL?.trim() || "http://127.0.0.1:11434/v1/models",
+  });
+}
+
+export function registerBuiltinVideoRepurposingProviders(env: NodeJS.ProcessEnv = process.env): void {
+  if (!providers.has(LOCAL_VIDEO_REPURPOSE_FIXTURE_ID)) {
+    registerVideoRepurposingProvider(
+      createFixtureVideoRepurposeProvider({
+        failMode: (env.VIDEO_REPURPOSE_FAIL_MODE as "none" | "transient" | "permanent" | "partial" | "unknown" | undefined) ?? "none",
+      }),
+    );
+  }
+  const openshorts = createConfiguredOpenShortsProvider(env);
+  if (openshorts && !providers.has(OPENSHORTS_PROVIDER_ID)) {
+    registerVideoRepurposingProvider(openshorts);
+  }
+}
+
+export class VideoRepurposeInputError extends Error {
+  readonly issues: string[];
+  constructor(issues: string[]) {
+    super(`Invalid video repurposing request: ${issues.join("; ")}`);
+    this.name = "VideoRepurposeInputError";
+    this.issues = issues;
+  }
+}
+
+export const createVideoRepurposingSchema = z.object({
+  sourceVisualAssetId: z.number().int().positive(),
+  clipCount: z.number().int().min(1).max(VIDEO_REPURPOSE_LIMITS.maxClipsPerSource).optional(),
+  providerId: z.string().trim().min(1).max(80).optional(),
+  regenerate: z.boolean().optional(),
+  regenerationNonce: z.string().trim().min(1).max(100).optional(),
+});
+
+export type CreateVideoRepurposingInput = z.input<typeof createVideoRepurposingSchema>;
+
+export interface VideoRepurposeStoragePort {
+  claimVideoRepurposingJob(row: {
+    userId?: number | null;
+    sourceVisualAssetId: number;
+    idempotencyKey: string;
+    providerId: string;
+    providerVersion?: string | null;
+    clipCount: number;
+    requestSnapshot: JsonRecord;
+    correlationId: string;
+  }): Promise<{ job: VideoRepurposingJob; created: boolean }>;
+  getVideoRepurposingJob(id: number): Promise<VideoRepurposingJob | undefined>;
+  getVideoRepurposingJobForOwner(id: number, ownerId: number): Promise<VideoRepurposingJob | undefined>;
+  markVideoRepurposingJob(
+    id: number,
+    patch: {
+      status: string;
+      attempt?: number;
+      providerJobId?: string | null;
+      providerVersion?: string | null;
+      errorClass?: string | null;
+      errorMessage?: string | null;
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+    },
+  ): Promise<void>;
+  insertVideoRepurposingOutput(row: {
+    jobId: number;
+    userId?: number | null;
+    position: number;
+    visualAssetId?: number | null;
+    status: string;
+    startMs?: number | null;
+    endMs?: number | null;
+    durationMs?: number | null;
+    title?: string | null;
+    caption?: string | null;
+    aspectRatio?: string | null;
+    providerClipId?: string | null;
+    errorMessage?: string | null;
+    metadata?: JsonRecord;
+  }): Promise<VideoRepurposingOutput>;
+  listVideoRepurposingOutputs(jobId: number): Promise<VideoRepurposingOutput[]>;
+  getVisualAsset(id: number): Promise<VisualAsset | undefined>;
+  insertVisualAsset(row: Parameters<ContentStoragePort["insertVisualAsset"]>[0]): Promise<VisualAsset>;
+}
+
+export interface VideoRepurposeDeps {
+  content: VideoRepurposeStoragePort;
+  storage: AssetStoragePort;
+}
+
+export function videoRepurposingIdempotencyKey(input: {
+  userId: number;
+  sourceVisualAssetId: number;
+  providerId: string;
+  clipCount: number;
+  regenerationNonce?: string | null;
+}): string {
+  const basis = JSON.stringify({
+    u: input.userId,
+    s: input.sourceVisualAssetId,
+    p: input.providerId,
+    n: input.clipCount,
+    r: input.regenerationNonce ?? null,
+  });
+  return `vr:${createHash("sha256").update(basis).digest("hex").slice(0, 48)}`;
+}
+
+export function semanticRepurposeId(jobId: number): string {
+  return `cfvr-${jobId}`;
+}
+
+export function selectVideoRepurposingProvider(preferred?: string | null): VideoRepurposingProviderPort {
+  const requested = preferred?.trim() || LOCAL_VIDEO_REPURPOSE_FIXTURE_ID;
+  if (requested !== LOCAL_VIDEO_REPURPOSE_FIXTURE_ID && requested !== OPENSHORTS_PROVIDER_ID) {
+    throw new VideoRepurposeInputError([`unknown video repurposing provider "${requested}"`]);
+  }
+  if (requested === OPENSHORTS_PROVIDER_ID && !providers.has(OPENSHORTS_PROVIDER_ID)) {
+    throw new VideoRepurposeInputError(["openshorts is not configured"]);
+  }
+  return getVideoRepurposingProvider(requested);
+}
+
+export async function createVideoRepurposingJob(
+  userId: number,
+  input: CreateVideoRepurposingInput,
+  deps: VideoRepurposeDeps,
+): Promise<{ job: VideoRepurposingJob; created: boolean }> {
+  const parsed = createVideoRepurposingSchema.safeParse(input ?? {});
+  if (!parsed.success) {
+    throw new VideoRepurposeInputError(
+      parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
+    );
+  }
+  const body = parsed.data;
+  const source = await deps.content.getVisualAsset(body.sourceVisualAssetId);
+  if (!source || (source.userId !== null && source.userId !== userId)) {
+    throw new VideoRepurposeInputError(["source video asset not found"]);
+  }
+  if (source.kind !== "video" || !source.mime.startsWith("video/")) {
+    throw new VideoRepurposeInputError(["source must be a VideoAsset"]);
+  }
+  if (source.status !== "ready") {
+    throw new VideoRepurposeInputError([`source visual asset is "${source.status}", not ready`]);
+  }
+  if (source.durationMs != null && source.durationMs > VIDEO_REPURPOSE_LIMITS.maxSourceDurationMs) {
+    throw new VideoRepurposeInputError([`source duration exceeds ${VIDEO_REPURPOSE_LIMITS.maxSourceDurationMs} ms`]);
+  }
+  if (source.byteSize != null && source.byteSize > VIDEO_REPURPOSE_LIMITS.maxBytes) {
+    throw new VideoRepurposeInputError(["source exceeds max video bytes"]);
+  }
+
+  const clipCount = body.clipCount ?? 3;
+  const provider = selectVideoRepurposingProvider(body.providerId);
+  const regenerationNonce = body.regenerate
+    ? (body.regenerationNonce ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
+    : null;
+  const idempotencyKey = videoRepurposingIdempotencyKey({
+    userId,
+    sourceVisualAssetId: source.id,
+    providerId: provider.providerId,
+    clipCount,
+    regenerationNonce,
+  });
+  const snapshot: JsonRecord = {
+    sourceVisualAssetId: source.id,
+    sourceStorageKey: source.storageKey,
+    sourceContentHash: source.contentHash,
+    clipCount,
+    providerId: provider.providerId,
+    format: "9:16",
+  };
+  return deps.content.claimVideoRepurposingJob({
+    userId,
+    sourceVisualAssetId: source.id,
+    idempotencyKey,
+    providerId: provider.providerId,
+    providerVersion: provider.providerVersion,
+    clipCount,
+    requestSnapshot: snapshot,
+    correlationId: `${idempotencyKey.slice(0, 24)}-${Date.now().toString(36)}`.slice(0, 100),
+  });
+}
+
+export interface VideoRepurposeRunResult {
+  jobId: number;
+  status: VideoRepurposeStatus;
+  reused: boolean;
+  assetIds: number[];
+  failureClass?: VideoRepurposeFailureClass;
+  failureMessage?: string;
+}
+
+function classifyRepurposeError(error: unknown): VideoRepurposeFailureClass {
+  if (isAbortError(error)) return "unknown";
+  if (error instanceof JobFailure) {
+    if (error.failureClass === "rate_limited") return "rate_limited";
+    if (error.failureClass === "transient") return "transient";
+    return "permanent";
+  }
+  const message = describeError(error);
+  if (/timeout|aborted/i.test(message)) return "unknown";
+  return /ECONN|ENOTFOUND|fetch failed|socket|\b5\d\d\b|429|rate.?limit/i.test(message)
+    ? "transient"
+    : "permanent";
+}
+
+export async function runVideoRepurposing(
+  jobId: number,
+  deps: VideoRepurposeDeps,
+): Promise<VideoRepurposeRunResult> {
+  const job = await deps.content.getVideoRepurposingJob(jobId);
+  if (!job) throw JobFailure.permanent(`VideoRepurposingJob ${jobId} not found`);
+  const existingOutputs = await deps.content.listVideoRepurposingOutputs(job.id);
+  const readyExisting = existingOutputs.filter((o) => o.status === "ready" && o.visualAssetId != null);
+  if (job.status === "ready" && readyExisting.length >= job.clipCount) {
+    return {
+      jobId: job.id,
+      status: "ready",
+      reused: true,
+      assetIds: readyExisting.map((o) => o.visualAssetId!) ,
+    };
+  }
+
+  const provider = getVideoRepurposingProvider(job.providerId);
+  const semanticId = job.providerJobId || semanticRepurposeId(job.id);
+  emitVideoEvent("video.repurpose.started", {
+    videoRepurposingJobId: job.id,
+    providerId: job.providerId,
+    providerJobId: job.providerJobId,
+    sourceVideoAssetId: job.sourceVisualAssetId,
+  });
+  await deps.content.markVideoRepurposingJob(job.id, {
+    status: "processing",
+    startedAt: new Date(),
+    attempt: job.attempt,
+  });
+
+  const source = await deps.content.getVisualAsset(job.sourceVisualAssetId);
+  if (!source) {
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: "failed",
+      errorClass: "permanent",
+      errorMessage: "source VideoAsset missing",
+      finishedAt: new Date(),
+    });
+    return { jobId: job.id, status: "failed", reused: false, assetIds: [], failureClass: "permanent", failureMessage: "source VideoAsset missing" };
+  }
+
+  let statusResult: VideoRepurposeStatusResult;
+  try {
+    if (job.providerJobId) {
+      statusResult = await provider.getStatus(job.providerJobId);
+      if (statusResult.status === "unknown") {
+        return {
+          jobId: job.id,
+          status: "unknown",
+          reused: true,
+          assetIds: readyExisting.map((o) => o.visualAssetId!).filter(Boolean),
+          failureClass: "unknown",
+          failureMessage: "provider job identity is known; reconciling the same OpenShorts job without resubmitting",
+        };
+      }
+    } else {
+      const submitted = await provider.submit({
+        semanticId,
+        source: {
+          assetId: source.id,
+          storageKey: source.storageKey,
+          mime: source.mime,
+          durationMs: source.durationMs,
+          bytes: await deps.storage.get(source.storageKey),
+        },
+        clipCount: job.clipCount,
+        snapshot: (job.requestSnapshot ?? {}) as JsonRecord,
+      });
+      await deps.content.markVideoRepurposingJob(job.id, {
+        status: submitted.status === "unknown" ? "unknown" : "accepted",
+        providerJobId: submitted.providerJobId,
+        providerVersion: provider.providerVersion,
+      });
+      emitVideoEvent("video.repurpose.accepted", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: submitted.providerJobId,
+        sourceVideoAssetId: source.id,
+      });
+      if (submitted.status === "unknown") {
+        return {
+          jobId: job.id,
+          status: "unknown",
+          reused: false,
+          assetIds: [],
+          failureClass: "unknown",
+          failureMessage: "provider side effect is ambiguous; reconcile the same identity",
+        };
+      }
+      statusResult = await provider.getStatus(submitted.providerJobId);
+    }
+  } catch (error) {
+    const failureClass = classifyRepurposeError(error);
+    const message = describeError(error);
+    const nextStatus: VideoRepurposeStatus = failureClass === "unknown" ? "unknown" : "failed";
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: nextStatus,
+      errorClass: failureClass,
+      errorMessage: message,
+      finishedAt: nextStatus === "failed" ? new Date() : null,
+    });
+    return {
+      jobId: job.id,
+      status: nextStatus,
+      reused: false,
+      assetIds: readyExisting.map((o) => o.visualAssetId!).filter(Boolean),
+      failureClass,
+      failureMessage: message,
+    };
+  }
+
+  if (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") {
+    const budgetMs = Number(process.env.VIDEO_REPURPOSE_POLL_BUDGET_MS ?? 25 * 60 * 1000);
+    const deadline = Date.now() + (Number.isFinite(budgetMs) ? budgetMs : 25 * 60 * 1000);
+    let delayMs = 5_000;
+    while (
+      (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") &&
+      Date.now() < deadline
+    ) {
+      emitVideoEvent("video.repurpose.processing", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: statusResult.providerJobId,
+        sourceVideoAssetId: source.id,
+      });
+      await deps.content.markVideoRepurposingJob(job.id, {
+        status: statusResult.status,
+        providerJobId: statusResult.providerJobId,
+      });
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs + 5_000, 30_000);
+      statusResult = await provider.getStatus(statusResult.providerJobId);
+    }
+  }
+  if (statusResult.status === "accepted" || statusResult.status === "queued" || statusResult.status === "processing") {
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: statusResult.status,
+      providerJobId: statusResult.providerJobId,
+    });
+    throw JobFailure.transient(`video repurposing job ${job.id} is ${statusResult.status}`);
+  }
+  if (statusResult.status === "unknown") {
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: "unknown",
+      providerJobId: statusResult.providerJobId,
+      errorClass: "unknown",
+      errorMessage: statusResult.errorMessage ?? "provider state unknown",
+    });
+    return {
+      jobId: job.id,
+      status: "unknown",
+      reused: false,
+      assetIds: readyExisting.map((o) => o.visualAssetId!).filter(Boolean),
+      failureClass: "unknown",
+      failureMessage: statusResult.errorMessage ?? "provider state unknown",
+    };
+  }
+
+  const occupied = new Set(readyExisting.map((o) => o.position));
+  const importedIds: number[] = readyExisting.map((o) => o.visualAssetId!);
+  let importedFailures = 0;
+
+  for (const clip of statusResult.clips) {
+    if (occupied.has(clip.position)) continue;
+    if (clip.failed || !clip.bytes.length) {
+      importedFailures += 1;
+      await deps.content.insertVideoRepurposingOutput({
+        jobId: job.id,
+        userId: job.userId,
+        position: clip.position,
+        status: "failed",
+        providerClipId: clip.clipId,
+        errorMessage: clip.errorMessage ?? "clip failed",
+        title: clip.title,
+        caption: clip.caption,
+        aspectRatio: clip.aspectRatio,
+        startMs: clip.startMs,
+        endMs: clip.endMs,
+        durationMs: clip.durationMs,
+        metadata: { provider: provider.providerId, providerJobId: statusResult.providerJobId },
+      });
+      continue;
+    }
+    try {
+      validateMediaOutput(
+        {
+          bytes: clip.bytes,
+          mime: clip.mime,
+          width: clip.width,
+          height: clip.height,
+          durationMs: clip.durationMs,
+        },
+        {
+          maxBytes: VIDEO_REPURPOSE_LIMITS.maxBytes,
+          maxDurationMs: VIDEO_REPURPOSE_LIMITS.maxOutputDurationMs,
+        },
+      );
+      const stored = await deps.storage.put(clip.bytes, clip.mime);
+      const asset = await deps.content.insertVisualAsset({
+        userId: job.userId,
+        visualGenerationId: null,
+        kind: "video",
+        storageKey: stored.storageKey,
+        mime: clip.mime,
+        width: clip.width,
+        height: clip.height,
+        durationMs: clip.durationMs,
+        container: "mp4",
+        codec: null,
+        frameRate: null,
+        byteSize: stored.byteSize,
+        contentHash: stored.contentHash,
+        altText: clip.title,
+        caption: clip.caption,
+        role: "clip",
+        metadata: {
+          sourceVisualAssetId: source.id,
+          videoRepurposingJobId: job.id,
+          provider: provider.providerId,
+          providerJobId: statusResult.providerJobId,
+          providerClipId: clip.clipId,
+          startMs: clip.startMs,
+          endMs: clip.endMs,
+          aspectRatio: clip.aspectRatio,
+        },
+        provenance: "derived",
+        position: clip.position,
+      });
+      await deps.content.insertVideoRepurposingOutput({
+        jobId: job.id,
+        userId: job.userId,
+        position: clip.position,
+        visualAssetId: asset.id,
+        status: "ready",
+        startMs: clip.startMs,
+        endMs: clip.endMs,
+        durationMs: clip.durationMs,
+        title: clip.title,
+        caption: clip.caption,
+        aspectRatio: clip.aspectRatio,
+        providerClipId: clip.clipId,
+        metadata: { provider: provider.providerId, providerJobId: statusResult.providerJobId },
+      });
+      importedIds.push(asset.id);
+      occupied.add(clip.position);
+      emitVideoEvent("video.asset.imported", {
+        videoRepurposingJobId: job.id,
+        providerId: provider.providerId,
+        providerJobId: statusResult.providerJobId,
+        sourceVideoAssetId: source.id,
+        videoAssetId: asset.id,
+      });
+    } catch (error) {
+      if (!(error instanceof InvalidVisualInputError)) {
+        throw JobFailure.transient(
+          `import failed; provider job ${statusResult.providerJobId} retained: ${describeError(error)}`,
+        );
+      }
+      importedFailures += 1;
+      await deps.content.insertVideoRepurposingOutput({
+        jobId: job.id,
+        userId: job.userId,
+        position: clip.position,
+        status: "failed",
+        providerClipId: clip.clipId,
+        errorMessage: describeError(error),
+        metadata: { provider: provider.providerId, stage: "import" },
+      });
+    }
+  }
+
+  const outputs = await deps.content.listVideoRepurposingOutputs(job.id);
+  const ready = outputs.filter((o) => o.status === "ready" && o.visualAssetId != null);
+  const failed = outputs.filter((o) => o.status === "failed");
+  const assetIds = ready.map((o) => o.visualAssetId!);
+
+  if (ready.length >= job.clipCount) {
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: "ready",
+      providerJobId: statusResult.providerJobId,
+      errorClass: null,
+      errorMessage: null,
+      finishedAt: new Date(),
+    });
+    emitVideoEvent("video.repurpose.completed", {
+      videoRepurposingJobId: job.id,
+      providerId: provider.providerId,
+      providerJobId: statusResult.providerJobId,
+      sourceVideoAssetId: source.id,
+    });
+    return { jobId: job.id, status: "ready", reused: false, assetIds };
+  }
+  if (ready.length > 0) {
+    await deps.content.markVideoRepurposingJob(job.id, {
+      status: "partial",
+      providerJobId: statusResult.providerJobId,
+      errorClass: "partial",
+      errorMessage: `${failed.length} clip(s) failed`,
+      finishedAt: new Date(),
+    });
+    emitVideoEvent("video.repurpose.partial", {
+      videoRepurposingJobId: job.id,
+      providerId: provider.providerId,
+      providerJobId: statusResult.providerJobId,
+      sourceVideoAssetId: source.id,
+    });
+    return {
+      jobId: job.id,
+      status: "partial",
+      reused: false,
+      assetIds,
+      failureClass: "permanent",
+      failureMessage: `${failed.length} clip(s) failed`,
+    };
+  }
+  await deps.content.markVideoRepurposingJob(job.id, {
+    status: "failed",
+    providerJobId: statusResult.providerJobId,
+    errorClass: "permanent",
+    errorMessage: statusResult.errorMessage ?? "no clips imported",
+    finishedAt: new Date(),
+  });
+  emitVideoEvent("video.repurpose.failed", {
+    videoRepurposingJobId: job.id,
+    providerId: provider.providerId,
+    providerJobId: statusResult.providerJobId,
+    sourceVideoAssetId: source.id,
+  });
+  return {
+    jobId: job.id,
+    status: "failed",
+    reused: false,
+    assetIds: [],
+    failureClass: "permanent",
+    failureMessage: statusResult.errorMessage ?? "no clips imported",
+  };
+}
+
+export function videoRepurposingProviderMatrix(env: NodeJS.ProcessEnv = process.env): Array<{
+  provider: string;
+  capability: string;
+  configured: boolean;
+  verified: boolean;
+  status: string;
+}> {
+  return [
+    {
+      provider: OPENSHORTS_PROVIDER_ID,
+      capability: "repurpose_video",
+      configured: openshortsConfigured(env),
+      verified: false,
+      status: providers.has(OPENSHORTS_PROVIDER_ID)
+        ? "architecturally-ready"
+        : openshortsConfigured(env)
+          ? "architecturally-ready"
+          : "unconfigured",
+    },
+    {
+      provider: LOCAL_VIDEO_REPURPOSE_FIXTURE_ID,
+      capability: "repurpose_video",
+      configured: providers.has(LOCAL_VIDEO_REPURPOSE_FIXTURE_ID),
+      verified: providers.has(LOCAL_VIDEO_REPURPOSE_FIXTURE_ID),
+      status: providers.has(LOCAL_VIDEO_REPURPOSE_FIXTURE_ID) ? "implemented" : "not-registered",
+    },
+  ];
+}
+
+export function defaultVideoRepurposeDeps(content: VideoRepurposeStoragePort): VideoRepurposeDeps {
+  return { content, storage: createLocalAssetStorage() };
+}

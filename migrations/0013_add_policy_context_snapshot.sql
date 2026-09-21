@@ -1,0 +1,1 @@
+ALTER TABLE "generation_policies" ADD COLUMN "context_snapshot" jsonb DEFAULT '{}'::jsonb NOT NULL;

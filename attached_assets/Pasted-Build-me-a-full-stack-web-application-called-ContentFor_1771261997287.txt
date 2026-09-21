@@ -1,0 +1,540 @@
+Build me a full-stack web application called "ContentForge" — a personal content creation and publishing tool that helps me generate, schedule, manage, and directly publish posts to X (Twitter) and Threads about Data & AI topics, combined with my core expertise in DevOps and Cloud Infrastructure. The app supports multiple AI providers (cloud and local) so I can switch between them freely.
+
+## About Me (Context for Content Generation)
+I'm Kishore Kumar Behera — an Infrastructure Engineering Lead with 11+ years of experience across AWS, Azure, GCP. I work with Kubernetes, Terraform, Crossplane, GitHub Actions, Flux CD, and have built platforms supporting 50+ microservices. I've delivered $500K+ in cost optimization and lead distributed engineering teams. I want to build a personal brand on X and Threads that bridges **Data & AI** with **DevOps/Platform Engineering** — a unique intersection that few people own.
+
+## My Content Pillars (use these to categorize and generate content):
+1. **Data Infrastructure & MLOps** — Data pipelines, feature stores, model serving on Kubernetes, ML platform engineering, data mesh, lakehouse architecture
+2. **AI for DevOps / AIOps** — AI-powered observability, intelligent incident management, LLM-assisted IaC, AI agents for platform engineering
+3. **Cloud-Native Data Platforms** — Running Kafka, Spark, Flink, Airflow on Kubernetes; multi-cloud data strategies; cost optimization for data workloads
+4. **Infrastructure as Code for Data** — Terraform/Crossplane for data resources, GitOps for data pipelines, automating data platform provisioning
+5. **Career & Leadership** — Engineering management insights, team building in remote-first orgs, mentoring, career growth in DevOps/Data/AI
+6. **Hot Takes & Trends** — Commentary on latest Data & AI news, tool comparisons, industry shifts
+
+## App Requirements
+
+### Tech Stack
+- **Backend**: Go (Golang) with Gin or Chi router
+- **Frontend**: React with Tailwind CSS (or Next.js if simpler)
+- **Database**: PostgreSQL (store drafts, scheduled posts, content ideas, analytics, connected accounts, provider configs)
+- **LLM Integration**: Multi-provider support (see "AI Provider Hub" section below)
+- **Social APIs**: X (Twitter) API v2 with OAuth 2.0 PKCE, Meta Threads API with OAuth
+- **Containerized**: Provide a Dockerfile and docker-compose.yml so I can run it on Rancher Desktop locally
+
+---
+
+### Core Features
+
+#### 1. AI Provider Hub (Multi-LLM Support)
+
+Build a unified AI provider abstraction layer in the Go backend. All content generation features should route through this layer so the user can switch providers without changing anything else.
+
+**Supported Cloud Providers:**
+| Provider | Models | SDK/API |
+|----------|--------|---------|
+| Anthropic | claude-sonnet-4-20250514, claude-opus-4-0-20250115, claude-haiku-4-5-20251001 | Anthropic API (api.anthropic.com) |
+| OpenAI | gpt-4o, gpt-4o-mini, gpt-4-turbo, o1, o1-mini, o3-mini | OpenAI API |
+| Google Gemini | gemini-2.0-flash, gemini-2.0-pro, gemini-1.5-pro, gemini-1.5-flash | Google AI Studio / Vertex AI |
+| Mistral AI | mistral-large, mistral-medium, mistral-small, codestral | Mistral API (api.mistral.ai) |
+| Cohere | command-r-plus, command-r, command | Cohere API |
+| Groq | llama-3.3-70b, llama-3.1-8b, mixtral-8x7b, gemma2-9b | Groq API (ultra-fast inference) |
+| Together AI | Llama 3.3, Mixtral, Qwen, DeepSeek models | Together API |
+| Perplexity | sonar-pro, sonar | Perplexity API (search-grounded) |
+| DeepSeek | deepseek-chat, deepseek-reasoner | DeepSeek API |
+| xAI | grok-2, grok-2-mini | xAI API |
+
+**Supported Local/Self-Hosted Providers:**
+| Provider | How It Works |
+|----------|-------------|
+| Ollama | Connects to local Ollama instance (default: http://localhost:11434). Auto-discovers installed models via `GET /api/tags`. Supports llama3, mistral, codellama, phi3, gemma, qwen, deepseek-coder, etc. |
+| LM Studio | Connects to LM Studio's local server (default: http://localhost:1234/v1). OpenAI-compatible API. |
+| LocalAI | Connects to LocalAI instance (default: http://localhost:8080/v1). OpenAI-compatible API. |
+| vLLM | Connects to vLLM server (default: http://localhost:8000/v1). OpenAI-compatible API. |
+| llama.cpp server | Connects to llama.cpp HTTP server. Lightweight, single-model serving. |
+| Text Generation WebUI (oobabooga) | Connects via OpenAI-compatible API extension. |
+| Custom OpenAI-Compatible | Any endpoint that implements the OpenAI chat completions API format — user provides base URL and optional API key. |
+
+**Architecture — Provider Interface (Go):**
+```go
+// All providers implement this interface
+type LLMProvider interface {
+    Name() string
+    GenerateContent(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
+    ListModels(ctx context.Context) ([]Model, error)
+    HealthCheck(ctx context.Context) error
+}
+
+type GenerationRequest struct {
+    SystemPrompt string
+    UserPrompt   string
+    Model        string
+    MaxTokens    int
+    Temperature  float64
+    TopP         float64
+}
+
+type GenerationResponse struct {
+    Content      string
+    Model        string
+    Provider     string
+    TokensUsed   TokenUsage
+    LatencyMs    int64
+}
+
+type TokenUsage struct {
+    Input  int
+    Output int
+    Total  int
+}
+```
+
+**Settings UI — Provider Configuration Page:**
+- A dedicated "AI Providers" page in Settings
+- For each cloud provider: input field for API key, toggle to enable/disable, dropdown to select default model
+- For local providers: input field for base URL (pre-filled with defaults), "Test Connection" button, auto-discover models button for Ollama
+- API keys stored encrypted in PostgreSQL (use Go's `crypto/aes` with a master key from env var `ENCRYPTION_KEY`)
+- A "Default Provider" selector — which provider + model to use by default for all content generation
+- Per-generation override: in the content generation form, add a dropdown to temporarily pick a different provider/model for that specific generation
+- **Provider Health Dashboard**: show green/red status for each configured provider, last response latency, model count
+
+**Token Usage & Cost Tracking:**
+- Track token usage per generation (input/output tokens)
+- Store in database with provider, model, and timestamp
+- Show running cost estimates on the Analytics page (use approximate per-token pricing)
+- Monthly usage breakdown by provider
+
+---
+
+#### 2. Social Media Publishing (X + Threads)
+
+**X (Twitter) Integration — OAuth 2.0 PKCE Flow:**
+
+- Implement X API v2 OAuth 2.0 with PKCE (no client secret needed for public clients)
+- OAuth flow:
+  1. User clicks "Connect X Account" in Settings
+  2. App redirects to `https://twitter.com/i/oauth2/authorize` with PKCE challenge
+  3. User authorizes the app
+  4. Callback receives auth code → exchange for access token + refresh token
+  5. Store tokens encrypted in DB (same encryption as API keys)
+  6. Auto-refresh tokens before expiry using refresh token grant
+- Required X API v2 scopes: `tweet.read`, `tweet.write`, `users.read`, `offline.access`
+- X API v2 endpoints to implement:
+  - `POST /2/tweets` — Post a single tweet
+  - `POST /2/tweets` with `reply.in_reply_to_tweet_id` — Post thread (chain of replies)
+  - `GET /2/users/me` — Fetch connected account info (username, profile pic, follower count)
+  - `GET /2/tweets/:id` with `tweet.fields=public_metrics` — Fetch engagement metrics for posted tweets
+  - `DELETE /2/tweets/:id` — Delete a posted tweet
+- Rate limit handling: implement exponential backoff, respect `x-rate-limit-remaining` headers, queue posts if rate limited
+- X API app setup instructions in README:
+  1. Go to https://developer.x.com/en/portal/dashboard
+  2. Create a project + app
+  3. Enable OAuth 2.0 with type "Public" (for PKCE)
+  4. Set callback URL to `http://localhost:3000/callback/x` (dev) or production URL
+  5. Copy Client ID → paste into ContentForge settings
+  6. Note: X Free tier allows 1,500 tweets/month (read), 500 tweets/month (write) — show remaining quota in UI
+
+**Threads (Meta) Integration — OAuth Flow:**
+
+- Implement Meta's Threads API (via Instagram Graph API / Threads Publishing API)
+- OAuth flow:
+  1. User clicks "Connect Threads Account" in Settings
+  2. Redirect to Meta OAuth: `https://www.threads.net/oauth/authorize`
+  3. User authorizes → callback with auth code
+  4. Exchange code for long-lived access token (60 days)
+  5. Store encrypted, auto-refresh before expiry
+- Required Threads API scopes: `threads_basic`, `threads_content_publish`, `threads_read_replies`, `threads_manage_insights`
+- Threads API endpoints to implement:
+  - `POST /{user-id}/threads` → Create media container (text post)
+  - `POST /{user-id}/threads_publish` → Publish the container
+  - For threads/carousels: create multiple containers, then publish as carousel
+  - `GET /{thread-id}/insights` → Fetch engagement metrics (views, likes, replies, reposts)
+  - `GET /{user-id}/threads` → List published threads
+- Character limit for Threads: 500 characters per post (validate in UI before posting)
+- Threads API app setup instructions in README:
+  1. Go to https://developers.facebook.com/
+  2. Create a Meta app with "Threads API" use case
+  3. Add Threads Login product
+  4. Set callback URL
+  5. Submit for App Review (required for publishing)
+  6. Copy App ID + App Secret → paste into ContentForge settings
+
+**Cross-Platform Publishing Features:**
+- When a post is "Ready", show publish buttons: "Post to X", "Post to Threads", "Post to Both"
+- **Content Adapter**: Auto-adapt content per platform:
+  - X: 280 char limit, threads via reply chains
+  - Threads: 500 char limit, native thread/carousel support
+  - If content exceeds platform limit, AI auto-splits or summarizes to fit (using the active LLM provider)
+- **Publish Queue**: Background worker (Go goroutine or job queue) that processes scheduled posts at their scheduled time and publishes to connected platforms
+- **Post Status Sync**: After publishing, store the platform-specific post ID (tweet ID, thread ID) in DB for metric fetching
+- **Auto-Fetch Metrics**: Cron job runs every 6 hours, fetches engagement metrics from X and Threads APIs for all published posts, updates analytics table automatically
+- **Publish Log**: Every publish attempt logged with: timestamp, platform, status (success/failed), error message if any, API response
+- **Disconnect Account**: Ability to revoke access and remove tokens for each platform
+
+**Connected Accounts UI (Settings Page):**
+- Show connected accounts with:
+  - Platform icon + username + profile picture
+  - Connection status (connected/expired/error)
+  - "Reconnect" button if token expired
+  - "Disconnect" button
+  - Last sync timestamp
+  - Remaining API quota (for X)
+- "Connect X Account" / "Connect Threads Account" buttons with platform branding
+
+---
+
+#### 3. Content Generation Engine
+- A form where I select:
+  - **Content Pillar** (from the 6 above)
+  - **Post Type**: Thread (up to 10 tweets), Single Tweet, Poll, Quote Tweet template, Hot Take
+  - **Tone**: Technical, Conversational, Provocative/Contrarian, Storytelling, Educational
+  - **Target Platform**: X only, Threads only, Both (adapts character limits and formatting)
+  - **AI Provider/Model**: Dropdown to override default provider for this generation
+  - **Optional context**: Paste a link, article summary, or topic idea
+- Calls the selected LLM provider to generate 3 variations of the content
+- Each variation shows character count per tweet/post and total thread length
+- Platform compliance indicator: green check if within limits, red warning if over
+- I can edit inline, regenerate individual tweets in a thread, or remix
+- "Generate with different model" button to quickly compare outputs across providers
+
+#### 4. Content Calendar & Scheduling
+- Calendar view (week/month) showing planned posts
+- Color-coded by target platform (X = blue, Threads = purple, Both = gradient)
+- Drag-and-drop to reschedule
+- Status tracking: Draft → Ready → Scheduled → Publishing → Posted / Failed
+- Best posting time suggestions (store configurable time slots like "8 AM IST", "6 PM EST" etc.)
+- **Scheduled Publishing**: Background job picks up posts at scheduled time and publishes via connected platform APIs
+- Failed publishes show retry button with error details
+
+#### 5. Content Ideas Bank
+- A place to quickly jot down content ideas (title + brief note + pillar tag)
+- AI-powered "Expand Idea" button that takes a rough idea and generates a full draft (uses active provider)
+- Trending topics integration — fetch trending AI/Data topics (can use a simple RSS feed from sources like: The Batch by Andrew Ng, TLDR AI newsletter, Hacker News AI section)
+
+#### 6. Template Library
+- Pre-built tweet/thread templates I can reuse:
+  - "X things I learned about [topic] after [experience]"
+  - "Unpopular opinion: [hot take about Data/AI tool]"
+  - "[Tool A] vs [Tool B] — here's what nobody tells you"
+  - "I migrated [X] to [Y]. Here's the real cost breakdown"
+  - "Stop doing [common practice]. Do [better practice] instead."
+  - "The 3 skills that took me from [junior role] to [senior role]"
+  - Thread: "A thread on how we built [system] at scale 🧵"
+- Each template has placeholder variables that get filled by AI based on my context
+
+#### 7. Analytics Dashboard (Hybrid: Auto-Fetch + Manual)
+- **Auto-fetched metrics** from X and Threads APIs for published posts:
+  - X: impressions, likes, retweets, replies, quote tweets, bookmark count
+  - Threads: views, likes, replies, reposts
+- **Manual entry fallback** for metrics not available via API or for posts made outside the app
+- Charts showing performance by: content pillar, post type, tone, day/time, **platform**, **AI provider used**
+- "Top Performing Posts" section to identify what resonates
+- **Cross-platform comparison**: Same content posted to both → side-by-side engagement comparison
+- **AI Provider comparison**: Which provider generates content that performs best?
+- Follower growth tracking (auto-fetched from connected accounts)
+- Token usage & estimated cost charts broken down by provider
+
+#### 8. Hashtag & Hook Generator
+- Given a topic, suggest relevant hashtags (max 3-5, not spammy)
+- Generate 5 hook variations for any post (the critical first line)
+- Show character count and "scroll-stopping score" (a simple AI-rated 1-10 on how attention-grabbing the hook is)
+- Platform-aware: suggest hashtags style based on X vs Threads norms
+
+---
+
+### Database Schema (PostgreSQL)
+```sql
+-- AI Provider configurations
+CREATE TABLE ai_providers (
+  id SERIAL PRIMARY KEY,
+  provider_type VARCHAR(50) NOT NULL, -- anthropic, openai, gemini, mistral, cohere, groq, together, perplexity, deepseek, xai, ollama, lmstudio, localai, vllm, llamacpp, oobabooga, custom_openai
+  display_name VARCHAR(100) NOT NULL,
+  is_local BOOLEAN DEFAULT FALSE,
+  base_url VARCHAR(500), -- for local providers or custom endpoints
+  api_key_encrypted TEXT, -- encrypted API key for cloud providers
+  default_model VARCHAR(100),
+  is_enabled BOOLEAN DEFAULT TRUE,
+  is_default BOOLEAN DEFAULT FALSE, -- only one can be default
+  config_json JSONB, -- extra provider-specific config
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Connected social accounts
+CREATE TABLE social_accounts (
+  id SERIAL PRIMARY KEY,
+  platform VARCHAR(20) NOT NULL, -- x, threads
+  platform_user_id VARCHAR(100),
+  username VARCHAR(100),
+  display_name VARCHAR(200),
+  profile_image_url TEXT,
+  access_token_encrypted TEXT NOT NULL,
+  refresh_token_encrypted TEXT,
+  token_expires_at TIMESTAMPTZ,
+  scopes TEXT, -- comma-separated granted scopes
+  is_connected BOOLEAN DEFAULT TRUE,
+  last_synced_at TIMESTAMPTZ,
+  metadata_json JSONB, -- follower count, rate limits, etc.
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content pillars
+CREATE TABLE pillars (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  color VARCHAR(7) -- hex color for UI
+);
+
+-- Content posts
+CREATE TABLE posts (
+  id SERIAL PRIMARY KEY,
+  pillar_id INTEGER REFERENCES pillars(id),
+  post_type VARCHAR(20) NOT NULL, -- tweet, thread, poll, quote_template, hot_take
+  tone VARCHAR(20),
+  target_platform VARCHAR(20) DEFAULT 'both', -- x, threads, both
+  status VARCHAR(20) DEFAULT 'draft', -- draft, ready, scheduled, publishing, posted, failed
+  scheduled_at TIMESTAMPTZ,
+  posted_at TIMESTAMPTZ,
+  ai_provider_id INTEGER REFERENCES ai_providers(id), -- which provider generated this
+  ai_model_used VARCHAR(100),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Individual tweets/posts within a post (supports threads)
+CREATE TABLE tweets (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, -- order in thread
+  content TEXT NOT NULL,
+  char_count INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Published post references (links posts to platform-specific IDs)
+CREATE TABLE published_posts (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+  social_account_id INTEGER REFERENCES social_accounts(id),
+  platform VARCHAR(20) NOT NULL, -- x, threads
+  platform_post_id VARCHAR(100), -- tweet ID or thread ID
+  platform_url TEXT, -- direct link to the post
+  published_at TIMESTAMPTZ DEFAULT NOW(),
+  status VARCHAR(20) DEFAULT 'success', -- success, failed, deleted
+  error_message TEXT,
+  metadata_json JSONB -- raw API response
+);
+
+-- Publish log (every attempt, success or failure)
+CREATE TABLE publish_log (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id),
+  platform VARCHAR(20) NOT NULL,
+  action VARCHAR(20) NOT NULL, -- publish, delete, retry
+  status VARCHAR(20) NOT NULL, -- success, failed, rate_limited
+  error_message TEXT,
+  api_response_json JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Content ideas bank
+CREATE TABLE ideas (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(280) NOT NULL,
+  notes TEXT,
+  pillar_id INTEGER REFERENCES pillars(id),
+  is_expanded BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Templates
+CREATE TABLE templates (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  pattern TEXT NOT NULL,
+  post_type VARCHAR(20),
+  pillar_id INTEGER REFERENCES pillars(id)
+);
+
+-- Analytics (auto-fetched + manual)
+CREATE TABLE analytics (
+  id SERIAL PRIMARY KEY,
+  post_id INTEGER REFERENCES posts(id),
+  platform VARCHAR(20), -- x, threads, manual
+  impressions INTEGER DEFAULT 0,
+  likes INTEGER DEFAULT 0,
+  retweets INTEGER DEFAULT 0, -- or reposts for Threads
+  replies INTEGER DEFAULT 0,
+  quotes INTEGER DEFAULT 0,
+  bookmarks INTEGER DEFAULT 0,
+  profile_visits INTEGER DEFAULT 0,
+  views INTEGER DEFAULT 0, -- Threads-specific
+  source VARCHAR(20) DEFAULT 'manual', -- api_auto, manual
+  recorded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Follower tracking (auto-fetched from connected accounts)
+CREATE TABLE follower_snapshots (
+  id SERIAL PRIMARY KEY,
+  platform VARCHAR(20) NOT NULL,
+  count INTEGER NOT NULL,
+  recorded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- AI token usage tracking
+CREATE TABLE ai_usage_log (
+  id SERIAL PRIMARY KEY,
+  provider_id INTEGER REFERENCES ai_providers(id),
+  provider_type VARCHAR(50) NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  total_tokens INTEGER,
+  latency_ms INTEGER,
+  estimated_cost_usd DECIMAL(10, 6), -- approximate cost
+  feature VARCHAR(50), -- generate, expand_idea, fill_template, hooks, hashtags
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### API Endpoints (Go Backend)
+--- AI Provider Management ---
+GET    /api/providers              — List all configured AI providers with status
+POST   /api/providers              — Add/configure a new AI provider
+PUT    /api/providers/:id          — Update provider config (API key, base URL, default model)
+DELETE /api/providers/:id          — Remove a provider
+POST   /api/providers/:id/test     — Test connection and return available models
+GET    /api/providers/:id/models   — List available models for a provider
+PATCH  /api/providers/:id/default  — Set as default provider
+GET    /api/providers/health       — Health check all enabled providers
+--- Social Account Management ---
+GET    /api/social/accounts        — List connected social accounts
+GET    /api/social/x/auth          — Initiate X OAuth 2.0 PKCE flow (returns redirect URL)
+GET    /api/social/x/callback      — X OAuth callback (exchanges code for tokens)
+GET    /api/social/threads/auth    — Initiate Threads OAuth flow
+GET    /api/social/threads/callback — Threads OAuth callback
+DELETE /api/social/accounts/:id    — Disconnect / revoke a social account
+POST   /api/social/accounts/:id/refresh — Force refresh tokens
+--- Content Generation (uses active AI provider) ---
+POST   /api/generate              — Generate content (specify provider/model or use default)
+POST   /api/generate/compare      — Generate with multiple providers side-by-side
+--- Posts CRUD ---
+GET    /api/posts                  — List all posts (with filters: status, platform, pillar)
+POST   /api/posts                  — Create post
+PUT    /api/posts/:id              — Update post
+DELETE /api/posts/:id              — Delete post
+PATCH  /api/posts/:id/status       — Update post status
+--- Publishing ---
+POST   /api/posts/:id/publish      — Publish a post to connected platform(s)
+POST   /api/posts/:id/publish/x    — Publish to X only
+POST   /api/posts/:id/publish/threads — Publish to Threads only
+DELETE /api/posts/:id/unpublish/:platform — Delete from platform
+GET    /api/posts/:id/publish-log  — Get publish history for a post
+POST   /api/posts/:id/adapt        — AI-adapt content for a different platform
+--- Ideas ---
+GET    /api/ideas                  — List ideas
+POST   /api/ideas                  — Create idea
+POST   /api/ideas/:id/expand      — AI-expand an idea into a draft
+--- Templates ---
+GET    /api/templates              — List templates
+POST   /api/templates/fill         — Fill a template with AI
+--- Analytics ---
+GET    /api/analytics/summary      — Analytics dashboard data (cross-platform)
+GET    /api/analytics/comparison   — Cross-platform comparison for same content
+GET    /api/analytics/providers    — AI provider performance comparison
+POST   /api/analytics              — Record manual analytics
+POST   /api/analytics/sync         — Trigger manual metrics sync from platforms
+--- Hooks & Hashtags ---
+POST   /api/hooks/generate         — Generate hook variations
+POST   /api/hashtags/suggest       — Suggest hashtags for a topic
+--- Calendar ---
+GET    /api/calendar               — Calendar view data
+--- AI Usage ---
+GET    /api/usage                  — Token usage and cost breakdown
+GET    /api/usage/by-provider      — Usage grouped by provider
+
+### LLM System Prompt (used across all providers for content generation)
+
+When calling any LLM provider for content generation, use this system prompt:
+
+"""
+You are a ghostwriter for Kishore Kumar Behera, a senior Infrastructure Engineering Lead with 11+ years in DevOps, Cloud (AWS/Azure/GCP), Kubernetes, and Platform Engineering. He is building a personal brand on X (Twitter) and Threads at the intersection of Data & AI and DevOps/Infrastructure.
+
+Writing style guidelines:
+- Write in first person as Kishore
+- Be technically credible — use specific tools, metrics, and real-world scenarios
+- Avoid generic AI hype; focus on practical, hands-on insights
+- Mix technical depth with accessibility — a senior engineer should nod along, a mid-level engineer should learn something
+- Use short, punchy sentences for tweets. No fluff.
+- For threads, start with a killer hook (curiosity gap, bold claim, or surprising stat)
+- End threads with a clear takeaway or call to action
+- Tone should match the selected tone: technical, conversational, provocative, storytelling, or educational
+- For X: Stay within 280 characters per individual tweet
+- For Threads: Stay within 500 characters per individual post
+- Use line breaks for readability in longer posts
+- Sparingly use emojis (max 1-2 per tweet, only if natural)
+- Never use hashtags inside post body — they go at the end if anywhere
+"""
+
+### Docker Setup
+
+Provide:
+- `Dockerfile` for Go backend (multi-stage build)
+- `Dockerfile` for React frontend
+- `docker-compose.yml` with services: backend, frontend, postgres
+- Volume mount for postgres data persistence
+- Environment variables:
+Required
+DATABASE_URL=postgres://contentforge:password@postgres:5432/contentforge?sslmode=disable
+ENCRYPTION_KEY=<32-byte-hex-key-for-encrypting-api-keys-and-tokens>
+PORT=8080
+Optional — can also be configured via UI
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+MISTRAL_API_KEY=
+COHERE_API_KEY=
+GROQ_API_KEY=
+TOGETHER_API_KEY=
+PERPLEXITY_API_KEY=
+DEEPSEEK_API_KEY=
+XAI_API_KEY=
+Local LLM endpoints (defaults shown)
+OLLAMA_URL=http://host.docker.internal:11434
+LMSTUDIO_URL=http://host.docker.internal:1234/v1
+LOCALAI_URL=http://host.docker.internal:8080/v1
+Social OAuth (get from developer portals)
+X_CLIENT_ID=
+X_REDIRECT_URI=http://localhost:3000/callback/x
+THREADS_APP_ID=
+THREADS_APP_SECRET=
+THREADS_REDIRECT_URI=http://localhost:3000/callback/threads
+- For local LLM access from inside Docker, use `host.docker.internal` (works on Rancher Desktop / Docker Desktop). Add `extra_hosts: ["host.docker.internal:host-gateway"]` to backend service in docker-compose.
+- The app should work on Rancher Desktop with `docker-compose up`
+
+### UI/UX Guidelines
+- Clean, minimal dark theme (think Linear or Raycast aesthetic)
+- Left sidebar navigation: Generate, Calendar, Ideas, Templates, Analytics, Settings
+- Settings sub-pages: AI Providers, Connected Accounts, Preferences
+- Content generation should feel snappy — show a loading skeleton while AI generates
+- Provider indicator badge on every generated content (shows which AI model created it)
+- Inline editing with auto-save
+- Mobile-responsive (I'll check posts on my phone too)
+- Toast notifications for actions (saved, scheduled, published, failed)
+- Keyboard shortcuts for power users (Cmd+Enter to generate, Cmd+S to save, Cmd+P to publish)
+- Platform icons (X bird, Threads logo) throughout the UI for clarity
+- Publish confirmation modal showing preview of how the post will look on each platform
+
+### Nice to Have (Phase 2)
+- RSS feed integration for auto-fetching trending AI topics
+- Export to CSV for analytics
+- "Repurpose" button — take a thread and convert to a single tweet summary, or vice versa
+- Engagement simulator — AI predicts likely engagement range based on content analysis
+- Multi-account support (multiple X or Threads accounts)
+- LinkedIn integration (similar OAuth flow, for cross-posting articles)
+- Bluesky integration (AT Protocol)
+- Mastodon integration (ActivityPub API)
+- Webhook support for notifications (Slack, Discord) when posts are published
+- A/B testing mode — publish variation A to X and variation B to Threads, compare results
+- Browser extension to capture content ideas from anywhere on the web

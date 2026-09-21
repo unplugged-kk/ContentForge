@@ -1,0 +1,2 @@
+CREATE INDEX "research_jobs_user_idx" ON "research_jobs" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "research_sources_job_provider_native_uq" ON "research_sources" USING btree ("job_id","provider","native_id");

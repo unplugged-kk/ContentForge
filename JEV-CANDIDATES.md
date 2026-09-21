@@ -1,0 +1,19 @@
+# JEV Candidates — implementation table
+
+| ID | Location | Current Decision | Current Method | Jev Type | Frequency | Expected Benefit | Risk | Complexity | Priority |
+|----|----------|------------------|----------------|----------|-----------|------------------|------|------------|----------|
+| JC-01 | `server/routes.ts:2268-2328` `POST /api/viral/score` | 8-dim viral scores + overall + improvements | LLM JSON (`gpt-4o-mini`, ~1.5K in/1K out) | Score ×8 + Noul (publish-worthy?) | Interactive, per draft + re-scores | Latency 3-8s→<1s; typed scores; cacheable | Low (advisory, no side effect) | Low — pure function swap | **Tier 1** |
+| JC-02 | `server/discoverRefresh.ts:294-320` discover rank | Which 20 ideas, rank, viral_score, timeliness, pillar, type | 1 big LLM JSON over ~30 raw items | Choice (rank/select) + Score (viral) + Choice (pillar/type) | 1-2×/day + on-demand | Deterministic triage; fewer wasted drafts; testable | Med (bad rank wastes 3 drafts) | Med — prompt→schema port | **Tier 1** |
+| JC-03 | `shared/agent-ui.ts:192-381` intent compiler | Which tools + targets + window + story | Regex over free text | Choice (plan) + Choice (targets/window) | Every agent run | Kills brittle regex; fewer mis-routed runs | Med (wrong plan wastes run) | Med — needs golden set | **Tier 1** |
+| JC-04 | `server/autopilot.ts:52-202,454-473` niche/type/template/engagement | Niche pass? which type/template? rank order? | Keyword lists + threshold chains + additive scores | Noul (niche?) + Choice (type/template) + Score (engagement) | 3×/day + autofill | Tunable, explainable ranking; shared state SS-1 | Med (selects what publishes) | Med | Tier 2 |
+| JC-05 | `server/marketPulse.ts:86-181` boost | Breaking or evergreen? ×1.5? | Keyword overlap | Score (boost) + Noul (breaking?) | Daily | Calibrated timeliness vs hard ×1.5 | Low | Low — folds into JC-04 state | Tier 2 |
+| JC-06 | `server/routes.ts:1098-1473,2729-2804` ingest/vault | Store? ignore? merge? (memory admission) | LLM summarize + deterministic CRUD | Noul (store?) + Score (relevance/novelty) | On ingest | Cleaner vault; less junk memory | Low | Med — needs dedupe keys | Tier 2 |
+| JC-07 | `server/youtubeConnector.ts:82` | Is this video worth a draft? | Brand-prompt LLM | Noul + Score | Cron (6h) | Fewer junk drafts | Low | Low | Tier 2 |
+| JC-08 | `server/content/styleAnalyzer.ts:42-101` | Confidence strong/weak/insufficient + accept observation? | LLM self-graded confidence | Noul (sufficient?) + Score | Per analysis | Honest gate; blocks hallucinated traits | Low (already conservative) | Low | Tier 2 |
+| JC-09 | `server/content/adapters.ts:170,507,682,861`, `visualProviders/openaiImage.ts:41`, `learning/metrics.ts:132` | Retry / escalate / stop? | Regex → transient/permanent/policy_human | Choice (retry/escalate/stop) | Per failure | Fewer retry storms + fewer silent drops | Med (side effects) | Med — shadow mode first | Tier 3 |
+| JC-10 | `server/routes.ts:2708,3320` schedule suggest | Which slot? | Static best-times + LLM suggest | Choice (slot) | Per schedule | Better timing w/ confidence | Low | Low | Tier 3 |
+| JC-11 | `server/routes.ts:2590-2609` ai-learn | Adopt this voice trait? | LLM distill → profile write | Noul (adopt?) + Score | Rare | Safer memory writes | Med (pollutes brand) | Med — human review kept | Tier 3 |
+
+Shared-state: **SS-1** JC-01+JC-04+JC-05 share one per-content state. **SS-2** JC-02 scores relevance/quality/urgency/risk per idea in one state instead of one mega-prompt. **SS-3** JC-09 evaluates class+disposition together per failure.
+
+Tier 4 (do NOT Jev): all generation endpoints, research `intelligence.ts` ranking, `classifySource`, experiment assignment/evaluation, autonomy eligibility, publish validators, budgets/circuits/cooldowns, lifecycle transitions, arithmetic, `status == "failed"` checks.
