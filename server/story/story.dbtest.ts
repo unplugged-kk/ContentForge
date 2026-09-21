@@ -132,6 +132,16 @@ describeDb("story domain (db)", () => {
 
     const app = express();
     app.use(express.json());
+    // Phase 30.2: routes now enforce per-row ownership against the
+    // server-side session (production: authGate guarantees it). This harness
+    // stands in for an authenticated owner-1 session, matching the seeded
+    // userId: 1 rows, so the tests keep proving service error mapping
+    // (201/400/404/409/422) rather than auth (covered by authGate +
+    // ownerIsolation suites).
+    app.use((req, _res, next) => {
+      (req as unknown as { session?: { userId?: number } }).session = { userId: 1 };
+      next();
+    });
     app.use("/api/stories", createStoryRouter(deps));
     server = app.listen(0);
     await new Promise<void>((resolve) => server.once("listening", () => resolve()));

@@ -9,6 +9,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Story } from "@shared/schema";
+import { getUserId } from "../middleware/userContext";
 import {
   createStoryFromResearch,
   InvalidStoryInputError,
@@ -58,10 +59,17 @@ function httpStatusFor(error: unknown): { status: number; message: string } | nu
 export function createStoryRouter(deps: CreateStoryDeps): Router {
   const router = Router();
 
-  router.get("/", async (_req, res, next) => {
+  router.get("/", async (req, res, next) => {
     try {
+      // Phase 30.2: owner-scoped list — own rows plus legacy unattributed
+      // (NULL) rows; attributed foreign rows are never listed.
+      const ownerId = getUserId(req);
       const rows = deps.stories.listStories ? await deps.stories.listStories() : [];
-      return res.json(rows.map(serializeStory));
+      return res.json(
+        rows
+          .filter((s) => s.userId === null || s.userId === ownerId)
+          .map(serializeStory),
+      );
     } catch (error) {
       return next(error);
     }
@@ -108,6 +116,12 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
     }
 
     try {
+      // Phase 30.2: a caller may only derive stories from their own (or
+      // legacy unattributed) research — never from another owner's job.
+      const job = await deps.research.getJob(researchJobId);
+      if (!job || (job.userId !== null && job.userId !== getUserId(req))) {
+        throw new ResearchJobNotFoundError(researchJobId);
+      }
       const story = await createStoryFromResearch(researchJobId, synthesis, deps);
       return res.status(201).json(serializeStory(story));
     } catch (error) {
@@ -124,7 +138,11 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
     }
     try {
       const story = await deps.stories.getStory(id);
-      if (!story) return res.status(404).json({ message: "Story not found" });
+      // Phase 30.2: attributed foreign rows are indistinguishable from
+      // missing (non-leaking 404); legacy NULL rows remain visible.
+      if (!story || (story.userId !== null && story.userId !== getUserId(req))) {
+        return res.status(404).json({ message: "Story not found" });
+      }
       return res.json(serializeStory(story));
     } catch (error) {
       return next(error);

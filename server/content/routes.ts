@@ -488,6 +488,22 @@ function parseId(value: unknown): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+/**
+ * Phase 30.2: per-row owner check for id-addressed reads and mutations.
+ *
+ * Rows with NULL userId are legacy unattributed rows (visible bridge — the
+ * pre-attribution corpus has no owner to enforce). Rows attributed to another
+ * owner are indistinguishable from missing (404, non-leaking), mirroring the
+ * established publication/style-profile pattern. The /api authGate guarantees
+ * an authenticated caller; `ownerId` is derived server-side via getUserId.
+ */
+function isForeignRow(
+  row: { userId: number | null } | null | undefined,
+  ownerId: number | undefined,
+): boolean {
+  return !!row && row.userId !== null && row.userId !== ownerId;
+}
+
 function message(error: unknown): string | null {
   if (error instanceof Error) return error.message;
   return null;
@@ -509,6 +525,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createOpportunityBody.parse(req.body ?? {});
       const { storyId, ...rest } = body;
+      // Phase 30.2: a caller may only branch opportunities from their own
+      // (or legacy unattributed) stories — never from another owner's story.
+      const story = await deps.opportunities.stories.getStory(storyId);
+      if (!story || isForeignRow(story, getUserId(req))) {
+        return res.status(404).json({ message: "Story not found" });
+      }
       const opportunity = await createOpportunityFromStory(storyId, rest, deps.opportunities);
       return res.status(201).json(serializeOpportunity(opportunity));
     } catch (error) {
@@ -723,7 +745,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid opportunity id" });
     try {
       const opportunity = await deps.content.getOpportunity(id);
-      if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+      if (!opportunity || isForeignRow(opportunity, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       return res.json(serializeOpportunity(opportunity));
     } catch (error) {
       return next(error);
@@ -734,6 +758,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const storyId = parseId(req.query.storyId);
     if (storyId === null) return res.status(400).json({ message: "storyId query parameter is required" });
     try {
+      const story = await deps.opportunities.stories.getStory(storyId);
+      if (!story || isForeignRow(story, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       const rows = await deps.content.listOpportunitiesByStory(storyId);
       return res.json(rows.map(serializeOpportunity));
     } catch (error) {
@@ -745,6 +773,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid opportunity id" });
     try {
+      const existing = await deps.content.getOpportunity(id);
+      if (!existing || isForeignRow(existing, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       return res.json(serializeOpportunity(await selectOpportunity(id, deps.opportunities)));
     } catch (error) {
       message(error);
@@ -759,6 +791,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid opportunity id" });
     const killReason = typeof req.body?.killReason === "string" ? req.body.killReason : "";
     try {
+      const existing = await deps.content.getOpportunity(id);
+      if (!existing || isForeignRow(existing, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       return res.json(serializeOpportunity(await killOpportunity(id, killReason, deps.opportunities)));
     } catch (error) {
       if (error instanceof InvalidOpportunityInputError) return res.status(400).json({ message: error.message });
@@ -772,6 +808,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid opportunity id" });
     try {
+      const opportunity = await deps.content.getOpportunity(id);
+      if (!opportunity || isForeignRow(opportunity, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       const rows = await deps.content.listArtifactsByOpportunity(id);
       return res.json(rows.map(serializeArtifact));
     } catch (error) {
@@ -793,7 +833,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createArtifactBody.parse(req.body ?? {});
       const opportunity = await deps.content.getOpportunity(id);
-      if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+      if (!opportunity || isForeignRow(opportunity, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       const artifact = await createArtifact(
         {
           userId: getUserId(req) ?? 1,
@@ -825,6 +867,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createGenerationBody.parse(req.body ?? {});
       const { opportunityId, ...options } = body;
+      // Phase 30.2: paid AI generation may only be queued from the caller's
+      // own (or legacy unattributed) opportunity.
+      const opportunity = await deps.content.getOpportunity(opportunityId);
+      if (!opportunity || isForeignRow(opportunity, getUserId(req))) {
+        return res.status(404).json({ message: "Opportunity not found" });
+      }
       const { job, created } = await createGenerationJob(opportunityId, options, deps.generation);
 
       if (job.status === "queued") {
@@ -854,7 +902,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid generation job id" });
     try {
       const job = await deps.content.getGenerationJob(id);
-      if (!job) return res.status(404).json({ message: "Generation job not found" });
+      if (!job || isForeignRow(job, getUserId(req))) {
+        return res.status(404).json({ message: "Generation job not found" });
+      }
       const artifact = await deps.content.getArtifactByGenerationJob(job.id);
       return res.json({ ...serializeGenerationJob(job), artifactId: artifact?.id ?? null });
     } catch (error) {
@@ -866,6 +916,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid generation job id" });
     try {
+      const job = await deps.content.getGenerationJob(id);
+      if (!job || isForeignRow(job, getUserId(req))) {
+        return res.status(404).json({ message: "Generation job not found" });
+      }
       const result = await runGenerationJob(id, deps.generation);
       return res.json(result);
     } catch (error) {
@@ -895,7 +949,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
       const artifact = await deps.content.getArtifact(id);
-      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
+      }
       return res.json(serializeArtifact(artifact));
     } catch (error) {
       return next(error);
@@ -911,6 +967,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const id = parseId(req.params.id);
       if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
       try {
+        const existing = await deps.content.getArtifact(id);
+        if (!existing || isForeignRow(existing, getUserId(req))) {
+          return res.status(404).json({ message: "Artifact not found" });
+        }
         const artifact = await handler(id, { artifacts: deps.content, learning: deps.learning });
         return res.json(serializeArtifact(artifact));
       } catch (error) {
@@ -928,6 +988,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
+      const head = await deps.content.getArtifact(id);
+      if (!head || isForeignRow(head, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
+      }
       const chain = await getArtifactHistory(id, { artifacts: deps.content });
       return res.json(chain.map(serializeArtifact));
     } catch (error) {
@@ -949,6 +1013,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         return res.status(409).json({
           message: `stale revision: baseArtifactId ${body.baseArtifactId} does not match artifact ${id}`,
         });
+      }
+      const head = await deps.content.getArtifact(id);
+      if (!head || isForeignRow(head, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
       }
       const artifact = await createHumanEditRevision(
         id,
@@ -1025,6 +1093,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createScheduleBody.parse(req.body ?? {});
       const { artifactId, ...options } = body;
+      const artifact = await deps.content.getArtifact(artifactId);
+      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
+      }
       const schedule = await createSchedule(artifactId, options, { content: deps.content });
       return res.status(201).json(serializeSchedule(schedule));
     } catch (error) {
@@ -1075,7 +1147,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid schedule id" });
     try {
       const schedule = await deps.content.getSchedule(id);
-      if (!schedule) return res.status(404).json({ message: "Schedule not found" });
+      if (!schedule || isForeignRow(schedule, getUserId(req))) {
+        return res.status(404).json({ message: "Schedule not found" });
+      }
       return res.json(serializeSchedule(schedule));
     } catch (error) {
       return next(error);
@@ -1149,6 +1223,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
+      const publication = await deps.content.getPublication(id);
+      if (!publication || isForeignRow(publication, getUserId(req))) {
+        return res.status(404).json({ message: "Result not found" });
+      }
       const result = await deps.content.getResultByPublication(id);
       if (!result) return res.status(404).json({ message: "Result not found" });
       return res.json(result);
@@ -1928,7 +2006,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         deps.content.getArtifact(id),
         deps.content.getVisualAsset(body.visualAssetId),
       ]);
-      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
+      }
       if (!asset || asset.userId !== null && asset.userId !== userId) {
         return res.status(404).json({ message: "Visual asset not found" });
       }
@@ -1954,7 +2034,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
       const artifact = await deps.content.getArtifact(id);
-      if (!artifact) return res.status(404).json({ message: "Artifact not found" });
+      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+        return res.status(404).json({ message: "Artifact not found" });
+      }
       return res.json(await deps.content.listVisualAssetRefs(id));
     } catch (error) {
       return next(error);
