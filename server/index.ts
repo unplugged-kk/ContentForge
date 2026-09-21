@@ -15,6 +15,12 @@ import { auditLog } from "./middleware/audit";
 import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
 import { sessionUser } from "./middleware/userContext";
+import {
+  livenessPayload,
+  readinessPayload,
+  redactForAccessLog,
+  resolveSessionSecret,
+} from "./httpHardening";
 
 /**
  * Directory the migrations folder is resolved against, under BOTH supported
@@ -89,7 +95,9 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Phase 30: never log credential-shaped fields (tokens, secrets,
+        // cookies). Redaction mirrors server/jobs/logger.ts.
+        logLine += ` :: ${JSON.stringify(redactForAccessLog(capturedJsonResponse))}`;
       }
 
       log(logLine);
@@ -131,7 +139,8 @@ app.use((req, res, next) => {
   app.use(
     session({
       store: new PgStore({ pool, createTableIfMissing: false }),
-      secret: process.env.SESSION_SECRET || "contentforge-dev-secret",
+      // Phase 30: fail closed in production — never boot with the dev default.
+      secret: resolveSessionSecret(process.env),
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -180,6 +189,18 @@ app.use((req, res, next) => {
   app.use(auditLog);
   app.use(sessionUser);
   app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
+  // Phase 30: real liveness/readiness (no secrets, no internals). Readiness
+  // reports up/down only; the driver error is logged server-side.
+  app.get("/api/health", (_req, res) => res.json(livenessPayload()));
+  app.get("/api/ready", async (_req, res) => {
+    const payload = await readinessPayload(async () => {
+      await pool.query("SELECT 1");
+    }).catch((err) => {
+      console.error("Readiness probe error:", err);
+      return { status: "not_ready" as const, checks: { database: "down" as const } };
+    });
+    res.status(payload.status === "ready" ? 200 : 503).json(payload);
+  });
   app.use(verifyCsrf);
 
   await registerRoutes(httpServer, app);

@@ -24,6 +24,8 @@ import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
 import { upload, validateImageBuffer, validateUploadedImage } from "./middleware/upload";
+import { safeFetch } from "./security/ssrf";
+import { handleLogout } from "./httpHardening";
 
 /**
  * Sanitize HTML before persisting. The Tiptap editor and AI generation both
@@ -967,15 +969,15 @@ export async function registerRoutes(
   async function extractRedditThread(url: string) {
     let cleanUrl = url.replace(/\?.*$/, "").replace(/\/$/, "");
     if (!cleanUrl.endsWith(".json")) cleanUrl += ".json";
-    const response = await fetch(cleanUrl, {
+    // SSRF boundary (Phase 30): caller-supplied URL, must not reach internal
+    // addresses directly or via redirects/DNS rebinding.
+    const result = await safeFetch(cleanUrl, {
       headers: { "User-Agent": "ContentForge/1.0 (content analysis tool)", "Accept": "application/json" },
-      signal: AbortSignal.timeout(10000),
-      redirect: "follow",
+      timeoutMs: 10000,
     });
-    if (!response.ok) throw new Error(`Reddit returned ${response.status}`);
-    const text = await response.text();
+    if (result.status < 200 || result.status >= 300) throw new Error(`Reddit returned ${result.status}`);
     let data: any[];
-    try { data = JSON.parse(text); } catch { throw new Error("Reddit did not return JSON. The URL may be invalid."); }
+    try { data = JSON.parse(result.body); } catch { throw new Error("Reddit did not return JSON. The URL may be invalid."); }
     if (!Array.isArray(data) || data.length < 1) throw new Error("Invalid Reddit response");
 
     const post = data[0]?.data?.children?.[0]?.data;
@@ -1069,11 +1071,13 @@ export async function registerRoutes(
         "Fetching x.com or twitter.com HTML is disabled to comply with X Developer Guidelines. Use an X post URL with configured X API credentials (we load the post via the official API), paste the text instead, or use the X username analysis option.",
       );
     }
-    const response = await fetch(url, {
+    // SSRF boundary (Phase 30): caller-supplied URL, must not reach internal
+    // addresses directly or via redirects/DNS rebinding.
+    const result = await safeFetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; ContentForge/1.0)" },
-      signal: AbortSignal.timeout(10000),
+      timeoutMs: 10000,
     });
-    const html = await response.text();
+    const html = result.body;
     const $ = cheerio.load(html);
     $("script, style, nav, footer, header, aside, .sidebar, .ad, .advertisement, .cookie-banner").remove();
 
@@ -2481,8 +2485,11 @@ Return ONLY the improved content text. Keep the same format and length constrain
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    req.session.destroy(() => {});
-    res.json({ success: true });
+    // Phase 30: clear the client cookie as well as destroying the server
+    // session so a logged-out cookie cannot be replayed.
+    handleLogout(req, res, {
+      secureCookie: process.env.NODE_ENV === "production" && process.env.SESSION_COOKIE_SECURE !== "0",
+    });
   });
 
   app.get("/api/auth/me", async (req, res) => {
@@ -2746,8 +2753,13 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
     try {
       const { url } = req.body;
       if (!url) return res.status(400).json({ message: "URL is required" });
-      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-      const html = await response.text();
+      // SSRF boundary (Phase 30): caller-supplied URL, must not reach
+      // internal addresses directly or via redirects/DNS rebinding.
+      const result = await safeFetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeoutMs: 10000,
+      });
+      const html = result.body;
       const $ = cheerio.load(html);
       $("script, style, nav, footer, header").remove();
       const title = $("title").text().trim() || $("h1").first().text().trim() || "Extracted Content";
@@ -2761,6 +2773,10 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       res.json({ title: title.substring(0, 300), summary: summary.trim(), rawContent: cleaned, url });
     } catch (err: any) {
       console.error("URL extract error:", err);
+      // Blocked/internal URLs are a client error, not a server failure.
+      if (err?.name === "UnsafeUrlError") {
+        return res.status(400).json({ message: `Could not fetch URL: ${err.message}` });
+      }
       res.status(500).json({ message: `Failed to extract URL: ${err.message}` });
     }
   });

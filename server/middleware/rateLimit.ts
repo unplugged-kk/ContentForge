@@ -30,6 +30,7 @@ export const globalLimiter: RateLimitRequestHandler = rateLimit({
     return (
       p === "/api/csrf-token" ||
       p === "/api/health" ||
+      p === "/api/ready" ||
       p === "/favicon.ico"
     );
   },

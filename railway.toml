@@ -8,5 +8,5 @@ restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 
 [deploy.healthcheck]
-path = "/api/auth/config"
+path = "/api/ready"
 timeout = 30
