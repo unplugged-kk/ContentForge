@@ -175,8 +175,15 @@ app.use((req, res, next) => {
   await migrate(db, { migrationsFolder });
   log("database migrations applied", "db");
 
-  const { seedDatabase } = await import("./seed");
-  await seedDatabase().catch((err) => console.error("Seed error:", err));
+  // Demo data is opt-in only. A fresh production database must remain empty
+  // rather than presenting fabricated posts or performance history.
+  if (process.env.SEED_DEMO_DATA === "1") {
+    const { seedDatabase } = await import("./seed");
+    await seedDatabase().catch((err) => console.error("Seed error:", err));
+    log("demo data seed enabled", "db");
+  } else {
+    log("demo data seed disabled (set SEED_DEMO_DATA=1 to enable)", "db");
+  }
 
   // Durable job runtime. Registers built-in providers + job types, then starts
   // workers. pg-boss only — no Redis, no BullMQ.

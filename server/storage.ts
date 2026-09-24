@@ -25,7 +25,7 @@ import {
   cannedResponses, youtubeChannels,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, and, gte } from "drizzle-orm";
+import { eq, desc, sql, and, gte, inArray } from "drizzle-orm";
 import { decryptSecret, ensureEncrypted, isEncrypted } from "./middleware/crypto";
 
 /**
@@ -58,133 +58,142 @@ function safeDecrypt(stored: string, label: string): string {
 }
 
 export interface IStorage {
-  getPillars(): Promise<Pillar[]>;
-  createPillar(pillar: InsertPillar): Promise<Pillar>;
+  getPillars(userId: number): Promise<Pillar[]>;
+  createPillar(userId: number, pillar: InsertPillar): Promise<Pillar>;
 
   getPosts(userId: number): Promise<(Post & { tweets: Tweet[] })[]>;
   getPost(userId: number, id: number): Promise<(Post & { tweets: Tweet[] }) | undefined>;
   createPost(userId: number, post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }>;
   updatePost(userId: number, id: number, post: Partial<InsertPost>): Promise<Post | undefined>;
   updatePostStatus(userId: number, id: number, status: string, scheduledAt?: string): Promise<Post | undefined>;
-  deletePost(userId: number, id: number): Promise<void>;
+  deletePost(userId: number, id: number): Promise<boolean>;
 
-  getIdeas(): Promise<Idea[]>;
-  getIdea(id: number): Promise<Idea | undefined>;
-  createIdea(idea: InsertIdea): Promise<Idea>;
-  updateIdea(id: number, idea: Partial<InsertIdea>): Promise<Idea | undefined>;
-  deleteIdea(id: number): Promise<void>;
+  getIdeas(userId: number): Promise<Idea[]>;
+  getIdea(userId: number, id: number): Promise<Idea | undefined>;
+  createIdea(userId: number, idea: InsertIdea): Promise<Idea>;
+  updateIdea(userId: number, id: number, idea: Partial<InsertIdea>): Promise<Idea | undefined>;
+  deleteIdea(userId: number, id: number): Promise<boolean>;
 
-  getTemplates(): Promise<Template[]>;
-  createTemplate(template: InsertTemplate): Promise<Template>;
+  getTemplates(userId: number): Promise<Template[]>;
+  createTemplate(userId: number, template: InsertTemplate): Promise<Template>;
 
-  getAnalyticsSummary(): Promise<any>;
-  createAnalytics(entry: InsertAnalytics): Promise<Analytics>;
+  getAnalyticsSummary(userId: number): Promise<any>;
+  createAnalytics(userId: number, entry: InsertAnalytics): Promise<Analytics>;
   upsertAnalytics(postId: number, platform: string, data: { impressions: number; likes: number; retweets: number; replies: number; quotes: number; bookmarks: number; views: number }): Promise<void>;
 
   createAiUsageLog(log: InsertAiUsageLog): Promise<AiUsageLog>;
-  getAiUsageLogs(): Promise<AiUsageLog[]>;
-  getAiUsageLogsAll(days?: number): Promise<AiUsageLog[]>;
+  getAiUsageLogs(userId: number): Promise<AiUsageLog[]>;
+  getAiUsageLogsAll(userId: number, days?: number): Promise<AiUsageLog[]>;
 
-  getArticles(): Promise<Article[]>;
-  getArticle(id: number): Promise<Article | undefined>;
-  createArticle(article: InsertArticle): Promise<Article>;
-  updateArticle(id: number, article: Partial<InsertArticle>): Promise<Article | undefined>;
-  deleteArticle(id: number): Promise<void>;
+  getArticles(userId: number): Promise<Article[]>;
+  getArticle(userId: number, id: number): Promise<Article | undefined>;
+  createArticle(userId: number, article: InsertArticle): Promise<Article>;
+  updateArticle(userId: number, id: number, article: Partial<InsertArticle>): Promise<Article | undefined>;
+  deleteArticle(userId: number, id: number): Promise<boolean>;
 
-  getReferences(): Promise<Reference[]>;
-  getReference(id: number): Promise<Reference | undefined>;
-  createReference(ref: InsertReference): Promise<Reference>;
-  updateReference(id: number, ref: Partial<InsertReference>): Promise<Reference | undefined>;
-  deleteReference(id: number): Promise<void>;
-  getReferencesByBatch(batchId: string): Promise<Reference[]>;
+  getReferences(userId: number): Promise<Reference[]>;
+  getReference(userId: number, id: number): Promise<Reference | undefined>;
+  createReference(userId: number, ref: InsertReference): Promise<Reference>;
+  updateReference(userId: number, id: number, ref: Partial<InsertReference>): Promise<Reference | undefined>;
+  deleteReference(userId: number, id: number): Promise<boolean>;
+  getReferencesByBatch(userId: number, batchId: string): Promise<Reference[]>;
 
-  getStyleProfiles(): Promise<StyleProfile[]>;
-  getStyleProfile(id: number): Promise<StyleProfile | undefined>;
-  createStyleProfile(profile: InsertStyleProfile): Promise<StyleProfile>;
-  updateStyleProfile(id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined>;
-  deleteStyleProfile(id: number): Promise<void>;
-  incrementStyleUsage(id: number): Promise<void>;
+  getStyleProfiles(userId: number): Promise<StyleProfile[]>;
+  getStyleProfile(userId: number, id: number): Promise<StyleProfile | undefined>;
+  createStyleProfile(userId: number, profile: InsertStyleProfile): Promise<StyleProfile>;
+  updateStyleProfile(userId: number, id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined>;
+  deleteStyleProfile(userId: number, id: number): Promise<boolean>;
+  incrementStyleUsage(userId: number, id: number): Promise<void>;
 
-  createReferenceContent(rc: InsertReferenceContent): Promise<ReferenceContent>;
+  createReferenceContent(userId: number, rc: InsertReferenceContent): Promise<ReferenceContent>;
 
-  getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]>;
-  createDiscoveredIdeas(ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
-  updateDiscoveredIdeaStatus(id: number, status: string): Promise<DiscoveredIdea | undefined>;
+  getDiscoveredIdeas(userId: number, batchId?: string): Promise<DiscoveredIdea[]>;
+  createDiscoveredIdeas(userId: number, ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
+  updateDiscoveredIdeaStatus(userId: number, id: number, status: string): Promise<DiscoveredIdea | undefined>;
 
   getDiscoverySettings(): Promise<DiscoverySettings>;
   updateDiscoverySettings(settings: Partial<DiscoverySettings>): Promise<DiscoverySettings>;
 
-  getViralScores(postId?: number, articleId?: number): Promise<ViralScore[]>;
-  createViralScore(score: InsertViralScore): Promise<ViralScore>;
+  getViralScores(userId: number, postId?: number, articleId?: number): Promise<ViralScore[]>;
+  createViralScore(userId: number, score: InsertViralScore): Promise<ViralScore>;
 
-  getMonitoredAccounts(): Promise<MonitoredAccount[]>;
-  createMonitoredAccount(account: InsertMonitoredAccount): Promise<MonitoredAccount>;
-  deleteMonitoredAccount(id: number): Promise<void>;
+  getMonitoredAccounts(userId: number): Promise<MonitoredAccount[]>;
+  createMonitoredAccount(userId: number, account: InsertMonitoredAccount): Promise<MonitoredAccount>;
+  deleteMonitoredAccount(userId: number, id: number): Promise<boolean>;
 
-  getRssSources(): Promise<RssSource[]>;
-  getRssSourcesWithAutopost(): Promise<RssSource[]>;
-  createRssSource(source: InsertRssSource): Promise<RssSource>;
-  updateRssSource(id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined>;
-  deleteRssSource(id: number): Promise<void>;
+  getRssSources(userId: number): Promise<RssSource[]>;
+  getRssSourcesWithAutopost(userId: number): Promise<RssSource[]>;
+  createRssSource(userId: number, source: InsertRssSource): Promise<RssSource>;
+  updateRssSource(userId: number, id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined>;
+  deleteRssSource(userId: number, id: number): Promise<boolean>;
 
-  getCannedResponses(): Promise<CannedResponse[]>;
-  getCannedResponse(id: number): Promise<CannedResponse | undefined>;
-  createCannedResponse(data: InsertCannedResponse): Promise<CannedResponse>;
-  updateCannedResponse(id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined>;
-  deleteCannedResponse(id: number): Promise<void>;
-  incrementCannedResponseUsage(id: number): Promise<CannedResponse | undefined>;
+  getCannedResponses(userId: number): Promise<CannedResponse[]>;
+  getCannedResponse(userId: number, id: number): Promise<CannedResponse | undefined>;
+  createCannedResponse(userId: number, data: InsertCannedResponse): Promise<CannedResponse>;
+  updateCannedResponse(userId: number, id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined>;
+  deleteCannedResponse(userId: number, id: number): Promise<boolean>;
+  incrementCannedResponseUsage(userId: number, id: number): Promise<CannedResponse | undefined>;
 
-  getYoutubeChannels(): Promise<YoutubeChannel[]>;
-  getActiveYoutubeChannels(): Promise<YoutubeChannel[]>;
-  createYoutubeChannel(data: InsertYoutubeChannel): Promise<YoutubeChannel>;
-  updateYoutubeChannel(id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined>;
-  deleteYoutubeChannel(id: number): Promise<void>;
+  getYoutubeChannels(userId: number): Promise<YoutubeChannel[]>;
+  getActiveYoutubeChannels(userId: number): Promise<YoutubeChannel[]>;
+  getAllActiveYoutubeChannels(): Promise<YoutubeChannel[]>;
+  createYoutubeChannel(userId: number, data: InsertYoutubeChannel): Promise<YoutubeChannel>;
+  updateYoutubeChannel(userId: number, id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined>;
+  deleteYoutubeChannel(userId: number, id: number): Promise<boolean>;
 
-  getConnectedAccounts(): Promise<ConnectedAccount[]>;
+  getConnectedAccounts(userId: number): Promise<ConnectedAccount[]>;
   getConnectedAccount(platform: string): Promise<ConnectedAccount | undefined>;
   getConnectedAccountForOwner(platform: string, ownerId: number): Promise<ConnectedAccount | undefined>;
   upsertConnectedAccount(account: InsertConnectedAccount): Promise<ConnectedAccount>;
-  deleteConnectedAccount(id: number): Promise<void>;
+  deleteConnectedAccount(userId: number, id: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
-  async getPillars(): Promise<Pillar[]> {
-    return db.select().from(pillars).orderBy(pillars.id);
+  async getPillars(userId: number): Promise<Pillar[]> {
+    return db.select().from(pillars).where(eq(pillars.userId, userId)).orderBy(pillars.id);
   }
 
-  async createPillar(pillar: InsertPillar): Promise<Pillar> {
-    const [result] = await db.insert(pillars).values(pillar).returning();
+  async createPillar(userId: number, pillar: InsertPillar): Promise<Pillar> {
+    const [result] = await db.insert(pillars).values({ ...pillar, userId }).returning();
     return result;
   }
 
-  async getPosts(): Promise<(Post & { tweets: Tweet[] })[]> {
-    const allPosts = await db.select().from(posts).orderBy(desc(posts.createdAt));
-    const allTweets = await db.select().from(tweets).orderBy(tweets.postId, tweets.position);
+  async getPosts(userId: number): Promise<(Post & { tweets: Tweet[] })[]> {
+    const allPosts = await db.select().from(posts).where(eq(posts.userId, userId)).orderBy(desc(posts.createdAt));
+    const postIds = allPosts.map((post) => post.id);
+    const allTweets = postIds.length === 0
+      ? []
+      : await db.select().from(tweets)
+        .where(and(eq(tweets.userId, userId), inArray(tweets.postId, postIds)))
+        .orderBy(tweets.postId, tweets.position);
     return allPosts.map((p) => ({
       ...p,
       tweets: allTweets.filter((t) => t.postId === p.id),
     }));
   }
 
-  async getPost(id: number): Promise<(Post & { tweets: Tweet[] }) | undefined> {
-    const [post] = await db.select().from(posts).where(eq(posts.id, id));
+  async getPost(userId: number, id: number): Promise<(Post & { tweets: Tweet[] }) | undefined> {
+    const [post] = await db.select().from(posts).where(and(eq(posts.id, id), eq(posts.userId, userId)));
     if (!post) return undefined;
-    const postTweets = await db.select().from(tweets).where(eq(tweets.postId, id)).orderBy(tweets.position);
+    const postTweets = await db.select().from(tweets).where(and(eq(tweets.postId, id), eq(tweets.userId, userId))).orderBy(tweets.position);
     return { ...post, tweets: postTweets };
   }
 
   async createPost(userId: number, post: InsertPost, tweetData: InsertTweet[]): Promise<Post & { tweets: Tweet[] }> {
-    const [newPost] = await db.insert(posts).values(post).returning();
+    const [newPost] = await db.insert(posts).values({ ...post, userId }).returning();
     const insertedTweets: Tweet[] = [];
     for (const t of tweetData) {
-      const [tweet] = await db.insert(tweets).values({ ...t, postId: newPost.id }).returning();
+      const [tweet] = await db.insert(tweets).values({ ...t, postId: newPost.id, userId }).returning();
       insertedTweets.push(tweet);
     }
     return { ...newPost, tweets: insertedTweets };
   }
 
   async updatePost(userId: number, id: number, post: Partial<InsertPost>): Promise<Post | undefined> {
-    const [result] = await db.update(posts).set({ ...post, updatedAt: new Date() }).where(eq(posts.id, id)).returning();
+    const [result] = await db.update(posts)
+      .set({ ...post, userId, updatedAt: new Date() })
+      .where(and(eq(posts.id, id), eq(posts.userId, userId)))
+      .returning();
     return result;
   }
 
@@ -192,51 +201,61 @@ export class DatabaseStorage implements IStorage {
     const updates: any = { status, updatedAt: new Date() };
     if (scheduledAt) updates.scheduledAt = new Date(scheduledAt);
     if (status === "posted") updates.postedAt = new Date();
-    const [result] = await db.update(posts).set(updates).where(eq(posts.id, id)).returning();
+    const [result] = await db.update(posts)
+      .set(updates)
+      .where(and(eq(posts.id, id), eq(posts.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deletePost(id: number): Promise<void> {
-    await db.delete(tweets).where(eq(tweets.postId, id));
+  async deletePost(userId: number, id: number): Promise<boolean> {
+    const [owned] = await db.select({ id: posts.id }).from(posts).where(and(eq(posts.id, id), eq(posts.userId, userId)));
+    if (!owned) return false;
+    await db.delete(tweets).where(and(eq(tweets.postId, id), eq(tweets.userId, userId)));
     await db.delete(posts).where(eq(posts.id, id));
+    return true;
   }
 
-  async getIdeas(): Promise<Idea[]> {
-    return db.select().from(ideas).orderBy(desc(ideas.createdAt));
+  async getIdeas(userId: number): Promise<Idea[]> {
+    return db.select().from(ideas).where(eq(ideas.userId, userId)).orderBy(desc(ideas.createdAt));
   }
 
-  async getIdea(id: number): Promise<Idea | undefined> {
-    const [result] = await db.select().from(ideas).where(eq(ideas.id, id));
+  async getIdea(userId: number, id: number): Promise<Idea | undefined> {
+    const [result] = await db.select().from(ideas).where(and(eq(ideas.id, id), eq(ideas.userId, userId)));
     return result;
   }
 
-  async createIdea(idea: InsertIdea): Promise<Idea> {
-    const [result] = await db.insert(ideas).values(idea).returning();
+  async createIdea(userId: number, idea: InsertIdea): Promise<Idea> {
+    const [result] = await db.insert(ideas).values({ ...idea, userId }).returning();
     return result;
   }
 
-  async updateIdea(id: number, idea: Partial<InsertIdea>): Promise<Idea | undefined> {
-    const [result] = await db.update(ideas).set(idea).where(eq(ideas.id, id)).returning();
+  async updateIdea(userId: number, id: number, idea: Partial<InsertIdea>): Promise<Idea | undefined> {
+    const [result] = await db.update(ideas)
+      .set({ ...idea, userId })
+      .where(and(eq(ideas.id, id), eq(ideas.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deleteIdea(id: number): Promise<void> {
-    await db.delete(ideas).where(eq(ideas.id, id));
+  async deleteIdea(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(ideas).where(and(eq(ideas.id, id), eq(ideas.userId, userId))).returning({ id: ideas.id });
+    return deleted.length > 0;
   }
 
-  async getTemplates(): Promise<Template[]> {
-    return db.select().from(templates).orderBy(templates.id);
+  async getTemplates(userId: number): Promise<Template[]> {
+    return db.select().from(templates).where(eq(templates.userId, userId)).orderBy(templates.id);
   }
 
-  async createTemplate(template: InsertTemplate): Promise<Template> {
-    const [result] = await db.insert(templates).values(template).returning();
+  async createTemplate(userId: number, template: InsertTemplate): Promise<Template> {
+    const [result] = await db.insert(templates).values({ ...template, userId }).returning();
     return result;
   }
 
-  async getAnalyticsSummary(): Promise<any> {
-    const allPosts = await this.getPosts();
-    const allAnalytics = await db.select().from(analytics);
-    const recentUsage = await db.select().from(aiUsageLog).orderBy(desc(aiUsageLog.createdAt)).limit(20);
+  async getAnalyticsSummary(userId: number): Promise<any> {
+    const allPosts = await this.getPosts(userId);
+    const allAnalytics = await db.select().from(analytics).where(eq(analytics.userId, userId));
+    const recentUsage = await this.getAiUsageLogsAll(userId, 30);
 
     const totalImpressions = allAnalytics.reduce((s, a) => s + (a.impressions || 0), 0);
     const totalLikes = allAnalytics.reduce((s, a) => s + (a.likes || 0), 0);
@@ -244,7 +263,7 @@ export class DatabaseStorage implements IStorage {
     const totalRetweets = allAnalytics.reduce((s, a) => s + (a.retweets || 0), 0);
     const totalBookmarks = allAnalytics.reduce((s, a) => s + (a.bookmarks || 0), 0);
 
-    const pillarList = await this.getPillars();
+    const pillarList = await this.getPillars(userId);
     const byPillar = pillarList.map((p) => {
       const pillarPosts = allPosts.filter((post) => post.pillarId === p.id);
       const pillarAnalytics = allAnalytics.filter((a) =>
@@ -298,8 +317,8 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async createAnalytics(entry: InsertAnalytics): Promise<Analytics> {
-    const [result] = await db.insert(analytics).values(entry).returning();
+  async createAnalytics(userId: number, entry: InsertAnalytics): Promise<Analytics> {
+    const [result] = await db.insert(analytics).values({ ...entry, userId }).returning();
     return result;
   }
 
@@ -308,11 +327,20 @@ export class DatabaseStorage implements IStorage {
     platform: string,
     data: { impressions: number; likes: number; retweets: number; replies: number; quotes: number; bookmarks: number; views: number },
   ): Promise<void> {
-    // Delete existing x_api record for this post+platform, then insert fresh
+    const [post] = await db.select({ userId: posts.userId }).from(posts).where(eq(posts.id, postId));
+    if (!post?.userId) return;
+
+    // Delete existing x_api record for this post+platform, then insert fresh.
     await db.delete(analytics).where(
-      and(eq(analytics.postId, postId), eq(analytics.platform, platform), eq(analytics.source, "x_api"))
+      and(
+        eq(analytics.postId, postId),
+        eq(analytics.platform, platform),
+        eq(analytics.source, "x_api"),
+        eq(analytics.userId, post.userId),
+      ),
     );
     await db.insert(analytics).values({
+      userId: post.userId,
       postId,
       platform,
       source: "x_api",
@@ -325,120 +353,139 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getAiUsageLogs(): Promise<AiUsageLog[]> {
-    return db.select().from(aiUsageLog).orderBy(desc(aiUsageLog.createdAt)).limit(50);
+  async getAiUsageLogs(userId: number): Promise<AiUsageLog[]> {
+    return db.select().from(aiUsageLog).where(eq(aiUsageLog.userId, userId)).orderBy(desc(aiUsageLog.createdAt)).limit(50);
   }
 
-  async getAiUsageLogsAll(days = 30): Promise<AiUsageLog[]> {
+  async getAiUsageLogsAll(userId: number, days = 30): Promise<AiUsageLog[]> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     return db.select().from(aiUsageLog)
-      .where(sql`${aiUsageLog.createdAt} >= ${since}`)
+      .where(and(eq(aiUsageLog.userId, userId), sql`${aiUsageLog.createdAt} >= ${since}`))
       .orderBy(desc(aiUsageLog.createdAt));
   }
 
-  async getArticles(): Promise<Article[]> {
-    return db.select().from(articles).orderBy(desc(articles.createdAt));
+  async getArticles(userId: number): Promise<Article[]> {
+    return db.select().from(articles).where(eq(articles.userId, userId)).orderBy(desc(articles.createdAt));
   }
 
-  async getArticle(id: number): Promise<Article | undefined> {
-    const [result] = await db.select().from(articles).where(eq(articles.id, id));
+  async getArticle(userId: number, id: number): Promise<Article | undefined> {
+    const [result] = await db.select().from(articles).where(and(eq(articles.id, id), eq(articles.userId, userId)));
     return result;
   }
 
-  async createArticle(article: InsertArticle): Promise<Article> {
-    const [result] = await db.insert(articles).values(article).returning();
+  async createArticle(userId: number, article: InsertArticle): Promise<Article> {
+    const [result] = await db.insert(articles).values({ ...article, userId }).returning();
     return result;
   }
 
-  async updateArticle(id: number, article: Partial<InsertArticle>): Promise<Article | undefined> {
-    const [result] = await db.update(articles).set({ ...article, updatedAt: new Date() }).where(eq(articles.id, id)).returning();
+  async updateArticle(userId: number, id: number, article: Partial<InsertArticle>): Promise<Article | undefined> {
+    const [result] = await db.update(articles)
+      .set({ ...article, userId, updatedAt: new Date() })
+      .where(and(eq(articles.id, id), eq(articles.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deleteArticle(id: number): Promise<void> {
-    await db.delete(articles).where(eq(articles.id, id));
+  async deleteArticle(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(articles).where(and(eq(articles.id, id), eq(articles.userId, userId))).returning({ id: articles.id });
+    return deleted.length > 0;
   }
 
-  async getReferences(): Promise<Reference[]> {
-    return db.select().from(references).orderBy(desc(references.createdAt));
+  async getReferences(userId: number): Promise<Reference[]> {
+    return db.select().from(references).where(eq(references.userId, userId)).orderBy(desc(references.createdAt));
   }
 
-  async getReference(id: number): Promise<Reference | undefined> {
-    const [result] = await db.select().from(references).where(eq(references.id, id));
+  async getReference(userId: number, id: number): Promise<Reference | undefined> {
+    const [result] = await db.select().from(references).where(and(eq(references.id, id), eq(references.userId, userId)));
     return result;
   }
 
-  async createReference(ref: InsertReference): Promise<Reference> {
-    const [result] = await db.insert(references).values(ref).returning();
+  async createReference(userId: number, ref: InsertReference): Promise<Reference> {
+    const [result] = await db.insert(references).values({ ...ref, userId }).returning();
     return result;
   }
 
-  async updateReference(id: number, ref: Partial<InsertReference>): Promise<Reference | undefined> {
-    const [result] = await db.update(references).set(ref).where(eq(references.id, id)).returning();
+  async updateReference(userId: number, id: number, ref: Partial<InsertReference>): Promise<Reference | undefined> {
+    const [result] = await db.update(references)
+      .set({ ...ref, userId })
+      .where(and(eq(references.id, id), eq(references.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deleteReference(id: number): Promise<void> {
-    await db.delete(referencePosts).where(eq(referencePosts.referenceId, id));
-    await db.delete(referenceContent).where(eq(referenceContent.referenceId, id));
+  async deleteReference(userId: number, id: number): Promise<boolean> {
+    const [owned] = await db.select({ id: references.id }).from(references).where(and(eq(references.id, id), eq(references.userId, userId)));
+    if (!owned) return false;
+    await db.delete(referencePosts).where(and(eq(referencePosts.referenceId, id), eq(referencePosts.userId, userId)));
+    await db.delete(referenceContent).where(and(eq(referenceContent.referenceId, id), eq(referenceContent.userId, userId)));
     await db.delete(references).where(eq(references.id, id));
+    return true;
   }
 
-  async getReferencesByBatch(batchId: string): Promise<Reference[]> {
-    return db.select().from(references).where(eq(references.batchId, batchId)).orderBy(desc(references.createdAt));
+  async getReferencesByBatch(userId: number, batchId: string): Promise<Reference[]> {
+    return db.select().from(references).where(and(eq(references.userId, userId), eq(references.batchId, batchId))).orderBy(desc(references.createdAt));
   }
 
-  async getStyleProfiles(): Promise<StyleProfile[]> {
-    return db.select().from(styleProfiles).orderBy(desc(styleProfiles.createdAt));
+  async getStyleProfiles(userId: number): Promise<StyleProfile[]> {
+    return db.select().from(styleProfiles).where(eq(styleProfiles.userId, userId)).orderBy(desc(styleProfiles.createdAt));
   }
 
-  async getStyleProfile(id: number): Promise<StyleProfile | undefined> {
-    const [result] = await db.select().from(styleProfiles).where(eq(styleProfiles.id, id));
+  async getStyleProfile(userId: number, id: number): Promise<StyleProfile | undefined> {
+    const [result] = await db.select().from(styleProfiles).where(and(eq(styleProfiles.id, id), eq(styleProfiles.userId, userId)));
     return result;
   }
 
-  async createStyleProfile(profile: InsertStyleProfile): Promise<StyleProfile> {
-    const [result] = await db.insert(styleProfiles).values(profile).returning();
+  async createStyleProfile(userId: number, profile: InsertStyleProfile): Promise<StyleProfile> {
+    const [result] = await db.insert(styleProfiles).values({ ...profile, userId }).returning();
     return result;
   }
 
-  async updateStyleProfile(id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined> {
-    const [result] = await db.update(styleProfiles).set(profile).where(eq(styleProfiles.id, id)).returning();
+  async updateStyleProfile(userId: number, id: number, profile: Partial<InsertStyleProfile>): Promise<StyleProfile | undefined> {
+    const [result] = await db.update(styleProfiles)
+      .set({ ...profile, userId })
+      .where(and(eq(styleProfiles.id, id), eq(styleProfiles.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deleteStyleProfile(id: number): Promise<void> {
-    await db.delete(styleProfiles).where(eq(styleProfiles.id, id));
+  async deleteStyleProfile(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(styleProfiles).where(and(eq(styleProfiles.id, id), eq(styleProfiles.userId, userId))).returning({ id: styleProfiles.id });
+    return deleted.length > 0;
   }
 
-  async incrementStyleUsage(id: number): Promise<void> {
-    await db.update(styleProfiles).set({ usageCount: sql`${styleProfiles.usageCount} + 1` }).where(eq(styleProfiles.id, id));
+  async incrementStyleUsage(userId: number, id: number): Promise<void> {
+    await db.update(styleProfiles)
+      .set({ usageCount: sql`${styleProfiles.usageCount} + 1`, userId })
+      .where(and(eq(styleProfiles.id, id), eq(styleProfiles.userId, userId)));
   }
 
-  async createReferenceContent(rc: InsertReferenceContent): Promise<ReferenceContent> {
-    const [result] = await db.insert(referenceContent).values(rc).returning();
+  async createReferenceContent(userId: number, rc: InsertReferenceContent): Promise<ReferenceContent> {
+    const [result] = await db.insert(referenceContent).values({ ...rc, userId }).returning();
     return result;
   }
 
-  async getDiscoveredIdeas(batchId?: string): Promise<DiscoveredIdea[]> {
+  async getDiscoveredIdeas(userId: number, batchId?: string): Promise<DiscoveredIdea[]> {
     if (batchId) {
-      return db.select().from(discoveredIdeas).where(eq(discoveredIdeas.batchId, batchId)).orderBy(discoveredIdeas.rank);
+      return db.select().from(discoveredIdeas).where(and(eq(discoveredIdeas.userId, userId), eq(discoveredIdeas.batchId, batchId))).orderBy(discoveredIdeas.rank);
     }
-    return db.select().from(discoveredIdeas).orderBy(desc(discoveredIdeas.discoveredAt), discoveredIdeas.rank).limit(50);
+    return db.select().from(discoveredIdeas).where(eq(discoveredIdeas.userId, userId)).orderBy(desc(discoveredIdeas.discoveredAt), discoveredIdeas.rank).limit(50);
   }
 
-  async createDiscoveredIdeas(ideaList: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]> {
+  async createDiscoveredIdeas(userId: number, ideaList: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]> {
     if (ideaList.length === 0) return [];
     const results: DiscoveredIdea[] = [];
     for (const idea of ideaList) {
-      const [result] = await db.insert(discoveredIdeas).values(idea).returning();
+      const [result] = await db.insert(discoveredIdeas).values({ ...idea, userId }).returning();
       results.push(result);
     }
     return results;
   }
 
-  async updateDiscoveredIdeaStatus(id: number, status: string): Promise<DiscoveredIdea | undefined> {
-    const [result] = await db.update(discoveredIdeas).set({ status }).where(eq(discoveredIdeas.id, id)).returning();
+  async updateDiscoveredIdeaStatus(userId: number, id: number, status: string): Promise<DiscoveredIdea | undefined> {
+    const [result] = await db.update(discoveredIdeas)
+      .set({ status, userId })
+      .where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, userId)))
+      .returning();
     return result;
   }
 
@@ -458,99 +505,120 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getViralScores(postId?: number, articleId?: number): Promise<ViralScore[]> {
+  async getViralScores(userId: number, postId?: number, articleId?: number): Promise<ViralScore[]> {
     if (postId) {
-      return db.select().from(viralScores).where(eq(viralScores.postId, postId)).orderBy(viralScores.version);
+      return db.select().from(viralScores).where(and(eq(viralScores.userId, userId), eq(viralScores.postId, postId))).orderBy(viralScores.version);
     }
     if (articleId) {
-      return db.select().from(viralScores).where(eq(viralScores.articleId, articleId)).orderBy(viralScores.version);
+      return db.select().from(viralScores).where(and(eq(viralScores.userId, userId), eq(viralScores.articleId, articleId))).orderBy(viralScores.version);
     }
-    return db.select().from(viralScores).orderBy(desc(viralScores.createdAt)).limit(20);
+    return db.select().from(viralScores).where(eq(viralScores.userId, userId)).orderBy(desc(viralScores.createdAt)).limit(20);
   }
 
-  async createViralScore(score: InsertViralScore): Promise<ViralScore> {
-    const [result] = await db.insert(viralScores).values(score).returning();
+  async createViralScore(userId: number, score: InsertViralScore): Promise<ViralScore> {
+    const [result] = await db.insert(viralScores).values({ ...score, userId }).returning();
     return result;
   }
 
-  async getMonitoredAccounts(): Promise<MonitoredAccount[]> {
-    return db.select().from(monitoredAccounts).orderBy(monitoredAccounts.platform, monitoredAccounts.username);
+  async getMonitoredAccounts(userId: number): Promise<MonitoredAccount[]> {
+    return db.select().from(monitoredAccounts).where(eq(monitoredAccounts.userId, userId)).orderBy(monitoredAccounts.platform, monitoredAccounts.username);
   }
 
-  async createMonitoredAccount(account: InsertMonitoredAccount): Promise<MonitoredAccount> {
-    const [result] = await db.insert(monitoredAccounts).values(account).returning();
+  async createMonitoredAccount(userId: number, account: InsertMonitoredAccount): Promise<MonitoredAccount> {
+    const [result] = await db.insert(monitoredAccounts).values({ ...account, userId }).returning();
     return result;
   }
 
-  async deleteMonitoredAccount(id: number): Promise<void> {
-    await db.delete(monitoredAccounts).where(eq(monitoredAccounts.id, id));
+  async deleteMonitoredAccount(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(monitoredAccounts).where(and(eq(monitoredAccounts.id, id), eq(monitoredAccounts.userId, userId))).returning({ id: monitoredAccounts.id });
+    return deleted.length > 0;
   }
 
-  async getRssSources(): Promise<RssSource[]> {
-    return db.select().from(rssSources).orderBy(rssSources.name);
+  async getRssSources(userId: number): Promise<RssSource[]> {
+    return db.select().from(rssSources).where(eq(rssSources.userId, userId)).orderBy(rssSources.name);
   }
 
-  async getRssSourcesWithAutopost(): Promise<RssSource[]> {
+  async getRssSourcesWithAutopost(userId: number): Promise<RssSource[]> {
     return db
       .select()
       .from(rssSources)
-      .where(and(eq(rssSources.autopost, true), eq(rssSources.isActive, true)))
+      .where(and(
+        eq(rssSources.userId, userId),
+        eq(rssSources.autopost, true),
+        eq(rssSources.isActive, true),
+      ))
       .orderBy(rssSources.name);
   }
 
-  async createRssSource(source: InsertRssSource): Promise<RssSource> {
-    const [result] = await db.insert(rssSources).values(source).returning();
+  async createRssSource(userId: number, source: InsertRssSource): Promise<RssSource> {
+    const [result] = await db.insert(rssSources).values({ ...source, userId }).returning();
     return result;
   }
 
-  async updateRssSource(id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined> {
-    const [result] = await db.update(rssSources).set(data).where(eq(rssSources.id, id)).returning();
+  async updateRssSource(userId: number, id: number, data: Partial<InsertRssSource>): Promise<RssSource | undefined> {
+    const [result] = await db.update(rssSources)
+      .set({ ...data, userId })
+      .where(and(eq(rssSources.id, id), eq(rssSources.userId, userId)))
+      .returning();
     return result;
   }
 
-  async deleteRssSource(id: number): Promise<void> {
-    await db.delete(rssSources).where(eq(rssSources.id, id));
+  async deleteRssSource(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(rssSources).where(and(eq(rssSources.id, id), eq(rssSources.userId, userId))).returning({ id: rssSources.id });
+    return deleted.length > 0;
   }
 
-  async getCannedResponses(): Promise<CannedResponse[]> {
-    return db.select().from(cannedResponses).orderBy(desc(cannedResponses.createdAt));
+  async getCannedResponses(userId: number): Promise<CannedResponse[]> {
+    return db.select().from(cannedResponses).where(eq(cannedResponses.userId, userId)).orderBy(desc(cannedResponses.createdAt));
   }
 
-  async getCannedResponse(id: number): Promise<CannedResponse | undefined> {
-    const [row] = await db.select().from(cannedResponses).where(eq(cannedResponses.id, id));
+  async getCannedResponse(userId: number, id: number): Promise<CannedResponse | undefined> {
+    const [row] = await db.select().from(cannedResponses).where(and(eq(cannedResponses.id, id), eq(cannedResponses.userId, userId)));
     return row;
   }
 
-  async createCannedResponse(data: InsertCannedResponse): Promise<CannedResponse> {
-    const [row] = await db.insert(cannedResponses).values(data).returning();
+  async createCannedResponse(userId: number, data: InsertCannedResponse): Promise<CannedResponse> {
+    const [row] = await db.insert(cannedResponses).values({ ...data, userId }).returning();
     return row;
   }
 
-  async updateCannedResponse(id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined> {
-    const [row] = await db.update(cannedResponses).set(data).where(eq(cannedResponses.id, id)).returning();
-    return row;
-  }
-
-  async deleteCannedResponse(id: number): Promise<void> {
-    await db.delete(cannedResponses).where(eq(cannedResponses.id, id));
-  }
-
-  async incrementCannedResponseUsage(id: number): Promise<CannedResponse | undefined> {
-    const cur = await this.getCannedResponse(id);
-    if (!cur) return undefined;
-    const [row] = await db
-      .update(cannedResponses)
-      .set({ usageCount: (cur.usageCount ?? 0) + 1 })
-      .where(eq(cannedResponses.id, id))
+  async updateCannedResponse(userId: number, id: number, data: Partial<InsertCannedResponse>): Promise<CannedResponse | undefined> {
+    const [row] = await db.update(cannedResponses)
+      .set({ ...data, userId })
+      .where(and(eq(cannedResponses.id, id), eq(cannedResponses.userId, userId)))
       .returning();
     return row;
   }
 
-  async getYoutubeChannels(): Promise<YoutubeChannel[]> {
-    return db.select().from(youtubeChannels).orderBy(desc(youtubeChannels.createdAt));
+  async deleteCannedResponse(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(cannedResponses).where(and(eq(cannedResponses.id, id), eq(cannedResponses.userId, userId))).returning({ id: cannedResponses.id });
+    return deleted.length > 0;
   }
 
-  async getActiveYoutubeChannels(): Promise<YoutubeChannel[]> {
+  async incrementCannedResponseUsage(userId: number, id: number): Promise<CannedResponse | undefined> {
+    const cur = await this.getCannedResponse(userId, id);
+    if (!cur) return undefined;
+    const [row] = await db
+      .update(cannedResponses)
+      .set({ usageCount: (cur.usageCount ?? 0) + 1, userId })
+      .where(and(eq(cannedResponses.id, id), eq(cannedResponses.userId, userId)))
+      .returning();
+    return row;
+  }
+
+  async getYoutubeChannels(userId: number): Promise<YoutubeChannel[]> {
+    return db.select().from(youtubeChannels).where(eq(youtubeChannels.userId, userId)).orderBy(desc(youtubeChannels.createdAt));
+  }
+
+  async getActiveYoutubeChannels(userId: number): Promise<YoutubeChannel[]> {
+    return db
+      .select()
+      .from(youtubeChannels)
+      .where(and(eq(youtubeChannels.userId, userId), eq(youtubeChannels.isActive, true)))
+      .orderBy(youtubeChannels.channelName);
+  }
+
+  async getAllActiveYoutubeChannels(): Promise<YoutubeChannel[]> {
     return db
       .select()
       .from(youtubeChannels)
@@ -558,22 +626,26 @@ export class DatabaseStorage implements IStorage {
       .orderBy(youtubeChannels.channelName);
   }
 
-  async createYoutubeChannel(data: InsertYoutubeChannel): Promise<YoutubeChannel> {
-    const [row] = await db.insert(youtubeChannels).values(data).returning();
+  async createYoutubeChannel(userId: number, data: InsertYoutubeChannel): Promise<YoutubeChannel> {
+    const [row] = await db.insert(youtubeChannels).values({ ...data, userId }).returning();
     return row;
   }
 
-  async updateYoutubeChannel(id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined> {
-    const [row] = await db.update(youtubeChannels).set(data).where(eq(youtubeChannels.id, id)).returning();
+  async updateYoutubeChannel(userId: number, id: number, data: Partial<InsertYoutubeChannel>): Promise<YoutubeChannel | undefined> {
+    const [row] = await db.update(youtubeChannels)
+      .set({ ...data, userId })
+      .where(and(eq(youtubeChannels.id, id), eq(youtubeChannels.userId, userId)))
+      .returning();
     return row;
   }
 
-  async deleteYoutubeChannel(id: number): Promise<void> {
-    await db.delete(youtubeChannels).where(eq(youtubeChannels.id, id));
+  async deleteYoutubeChannel(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(youtubeChannels).where(and(eq(youtubeChannels.id, id), eq(youtubeChannels.userId, userId))).returning({ id: youtubeChannels.id });
+    return deleted.length > 0;
   }
 
-  async getConnectedAccounts(): Promise<ConnectedAccount[]> {
-    const rows = await db.select().from(connectedAccounts).orderBy(connectedAccounts.platform);
+  async getConnectedAccounts(userId: number): Promise<ConnectedAccount[]> {
+    const rows = await db.select().from(connectedAccounts).where(eq(connectedAccounts.userId, userId)).orderBy(connectedAccounts.platform);
     return rows.map(decryptConnectedAccount);
   }
 
@@ -622,8 +694,9 @@ export class DatabaseStorage implements IStorage {
     return decryptConnectedAccount(result);
   }
 
-  async deleteConnectedAccount(id: number): Promise<void> {
-    await db.delete(connectedAccounts).where(eq(connectedAccounts.id, id));
+  async deleteConnectedAccount(userId: number, id: number): Promise<boolean> {
+    const deleted = await db.delete(connectedAccounts).where(and(eq(connectedAccounts.id, id), eq(connectedAccounts.userId, userId))).returning({ id: connectedAccounts.id });
+    return deleted.length > 0;
   }
 }
 

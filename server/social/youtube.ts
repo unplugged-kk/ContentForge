@@ -221,8 +221,8 @@ export async function getYouTubeConfigSummary(
     : (account?.displayName ?? null);
   const requiredScopesPresent = scopesCoverRequired(profile.scopes);
 
-  const refreshCredentialPresent = Boolean(account?.refreshToken?.trim() || envRefresh);
-  const accessCredentialPresent = Boolean(account?.accessToken?.trim() || envAccess);
+  const refreshCredentialPresent = Boolean(account?.refreshToken?.trim() || (ownerUserId == null ? envRefresh : false));
+  const accessCredentialPresent = Boolean(account?.accessToken?.trim() || (ownerUserId == null ? envAccess : false));
   const clientConfigured = googleOAuthClientConfigured(env);
   const redirectUri = getYouTubeRedirectUri(env);
   const accountConnected = Boolean(
@@ -233,7 +233,7 @@ export async function getYouTubeConfigSummary(
   const channelDiscovered = Boolean(channelId);
   const tokenRefreshPossible = refreshCredentialPresent && clientConfigured;
   const publicationReady = clientConfigured
-    && (accountConnected || envAccess || envRefresh)
+    && (accountConnected || (ownerUserId == null && (envAccess || envRefresh)))
     && refreshCredentialPresent
     && requiredScopesPresent
     && channelDiscovered
@@ -256,7 +256,7 @@ export async function getYouTubeConfigSummary(
     channelTitle,
     connectedUsername: account?.username ?? null,
     connectedUserId: account?.userId ?? null,
-    envTokenConfigured: envAccess || envRefresh,
+    envTokenConfigured: ownerUserId == null && Boolean(envAccess || envRefresh),
     publicationReady,
     ready: publicationReady,
     providerIdempotency: false,
@@ -293,6 +293,8 @@ export async function getYouTubeConfig(
       };
     }
   }
+
+  if (ownerUserId != null) return null;
 
   // Ops / certification fallback: process env tokens.
   const envAccess = env.YOUTUBE_ACCESS_TOKEN?.trim() || null;

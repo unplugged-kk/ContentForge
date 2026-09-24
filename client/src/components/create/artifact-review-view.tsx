@@ -10,6 +10,7 @@ import { SchedulePicker } from "@/components/ui-shared/schedule-picker";
 import { PublishPreview } from "@/components/ui-shared/publish-preview";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getPublicationFeedback } from "@/lib/publication-feedback";
 import { useToast } from "@/hooks/use-toast";
 import {
   deriveVersionNumber,
@@ -250,12 +251,10 @@ export function ArtifactReviewView({
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (response: { outcomes?: Array<{ status?: string | null; channel?: string | null; error?: string | null }> }) => {
       setPublishConfirmOpen(false);
-      toast({
-        title: "Published successfully",
-        description: `Delivered to ${artifact?.channel || "channel"}.`,
-      });
+      const feedback = getPublicationFeedback(response, artifact?.channel || "channel");
+      toast(feedback);
       invalidate();
     },
     onError: (err: any) => {

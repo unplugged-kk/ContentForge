@@ -260,7 +260,7 @@ export function createXChannelAdapter(): ChannelAdapter {
         bytes: attachment.bytes,
         mime: attachment.mime,
         altText: attachment.altText,
-      });
+      }, request.ownerUserId);
     } catch (error) {
       // No post exists yet: a failed upload is retryable or terminal, never unknown.
       const raw = error instanceof Error ? error.message : String(error);
@@ -278,6 +278,7 @@ export function createXChannelAdapter(): ChannelAdapter {
     try {
       const result = await postContentToX([mediaTextFor(request.format, request.payload)], {
         mediaIds: [mediaId],
+        ownerUserId: request.ownerUserId,
       });
       return {
         ok: true,
@@ -351,7 +352,7 @@ export function createXChannelAdapter(): ChannelAdapter {
       }
 
       try {
-        const result = await postContentToX(texts);
+        const result = await postContentToX(texts, { ownerUserId: request.ownerUserId });
         return {
           ok: true,
           providerCalled: true,
@@ -378,11 +379,12 @@ export function createXChannelAdapter(): ChannelAdapter {
           };
         }
         const raw = error instanceof Error ? error.message : String(error);
-        // The transport was invoked; a partial thread may exist. Never report
-        // success, and never silently retry into a duplicate thread.
+        const configMissing = /XQUICK_CONFIG_MISSING/i.test(raw);
+        // A missing local credential fails before the network call. It is a
+        // deterministic setup failure, not an ambiguous provider operation.
         return {
           ok: false,
-          providerCalled: true,
+          providerCalled: !configMissing,
           externalId: null,
           externalUrl: null,
           publishedAt: null,
@@ -413,7 +415,7 @@ export function createXChannelAdapter(): ChannelAdapter {
           : null;
 
       if (writeActionId) {
-        const status = await reconcileXQuickWriteAction(writeActionId);
+        const status = await reconcileXQuickWriteAction(writeActionId, request.ownerUserId ?? null);
         if (!status || status.status === "pending") return null; // still unknown
         if (status.status === "success") {
           return {
@@ -441,7 +443,7 @@ export function createXChannelAdapter(): ChannelAdapter {
         // A read-API miss is not proof of absence (private, deleted, rate
         // limited, or no read endpoint configured all look identical) — stay
         // unknown rather than assume "not published".
-        const text = await fetchTweetTextByIdViaOfficialApi(request.externalId);
+        const text = await fetchTweetTextByIdViaOfficialApi(request.externalId, request.ownerUserId ?? null);
         if (text) {
           return {
             ok: true,
@@ -462,7 +464,7 @@ export function createXChannelAdapter(): ChannelAdapter {
       const now = new Date();
       const window = hourWindow(now);
       const ids = request.externalId.split(",").map((s) => s.trim()).filter(Boolean);
-      const fetched = await fetchXPublicMetrics(ids);
+      const fetched = await fetchXPublicMetrics(ids, request.ownerUserId ?? null);
       if (!fetched.ok) {
         if (fetched.status === 501) {
           return missingMetricsOutcome("x", request.externalId, fetched.retrievedAt, window.observedAt, window.window);
@@ -588,9 +590,10 @@ export function createThreadsChannelAdapter(): ChannelAdapter {
           };
         }
         const raw = error instanceof Error ? error.message : String(error);
+        const configMissing = /THREADS_CONFIG_MISSING|not connected/i.test(raw);
         return {
           ok: false,
-          providerCalled: true,
+          providerCalled: !configMissing,
           externalId: null,
           externalUrl: null,
           publishedAt: null,
@@ -735,7 +738,7 @@ export function createLinkedInChannelAdapter(): ChannelAdapter {
       }
 
       try {
-        const result = await postTextToLinkedIn(text);
+        const result = await postTextToLinkedIn(text, request.ownerUserId);
         return {
           ok: true,
           providerCalled: true,
@@ -758,9 +761,10 @@ export function createLinkedInChannelAdapter(): ChannelAdapter {
           };
         }
         const raw = error instanceof Error ? error.message : String(error);
+        const configMissing = /LINKEDIN_CONFIG_MISSING|not connected/i.test(raw);
         return {
           ok: false,
-          providerCalled: true,
+          providerCalled: !configMissing,
           externalId: null,
           externalUrl: null,
           publishedAt: null,
@@ -783,7 +787,7 @@ export function createLinkedInChannelAdapter(): ChannelAdapter {
         typeof request.reconciliationHint?.attemptedAt === "string" ? request.reconciliationHint.attemptedAt : null;
       if (!commentary || !attemptedAt) return null;
 
-      const status = await reconcileLinkedInPost({ commentary, attemptedAt });
+      const status = await reconcileLinkedInPost({ commentary, attemptedAt }, request.ownerUserId);
       if (!status || status.status === "pending") return null; // still unknown, never assumed absent
       return {
         ok: true,
@@ -1039,9 +1043,9 @@ export function createInstagramChannelAdapter(): ChannelAdapter {
   };
 }
 
-function classifyYouTubeFailure(message: string): AdapterFailureClass {
-  if (/YOUTUBE_CONFIG_MISSING|YOUTUBE_REAL_PUBLISH_BLOCKED|youtube title|youtube description|youtube privacy|youtube requires|youtube Phase|youtube video/i.test(message)) {
-    return "permanent";
+export function classifyYouTubeFailure(message: string): AdapterFailureClass {
+  if (/YOUTUBE_CONFIG_MISSING|YOUTUBE_REAL_PUBLISH_BLOCKED/i.test(message)) {
+    return "policy_human";
   }
   if (/429|rate limit|quotaExceeded|dailyLimitExceeded|503|502|504|timeout|ECONN|ENOTFOUND|fetch failed|ambiguous/i.test(message)) {
     return "transient";

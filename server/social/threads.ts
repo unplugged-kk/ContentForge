@@ -200,9 +200,11 @@ export function threadsAuthorizationUrl(state?: string): string | null {
   return `${getThreadsAuthorizeUrl()}?${params.toString()}`;
 }
 
-export async function getThreadsConfigSummary(): Promise<Record<string, unknown>> {
-  const envToken = Boolean(process.env.THREADS_ACCESS_TOKEN?.trim());
-  const account = await storage.getConnectedAccount("threads");
+export async function getThreadsConfigSummary(ownerUserId?: number | null): Promise<Record<string, unknown>> {
+  const envToken = ownerUserId == null && Boolean(process.env.THREADS_ACCESS_TOKEN?.trim());
+  const account = ownerUserId == null
+    ? await storage.getConnectedAccount("threads")
+    : await storage.getConnectedAccountForOwner("threads", ownerUserId);
   return {
     graphBase: getThreadsGraphBaseUrl(),
     apiVersion: getThreadsApiVersion(),
@@ -217,10 +219,10 @@ export async function getThreadsConfigSummary(): Promise<Record<string, unknown>
 }
 
 async function getThreadsConfig(ownerUserId?: number | null): Promise<ThreadsConfig | null> {
-  const envToken = process.env.THREADS_ACCESS_TOKEN?.trim() || null;
-  const envUser = process.env.THREADS_USER_ID?.trim() || "me";
+  const envToken = ownerUserId == null ? process.env.THREADS_ACCESS_TOKEN?.trim() || null : null;
+  const envUser = ownerUserId == null ? process.env.THREADS_USER_ID?.trim() || "me" : null;
   if (envToken) {
-    return { graphBase: getThreadsGraphBaseUrl(), token: envToken, userId: envUser };
+    return { graphBase: getThreadsGraphBaseUrl(), token: envToken, userId: envUser! };
   }
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("threads", ownerUserId);

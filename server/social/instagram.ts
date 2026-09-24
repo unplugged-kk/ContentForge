@@ -325,9 +325,11 @@ export function instagramAuthorizationUrl(state?: string): string | null {
   return `${getInstagramAuthorizeUrl()}?${params.toString()}`;
 }
 
-export async function getInstagramConfigSummary(): Promise<Record<string, unknown>> {
-  const envToken = Boolean(process.env.INSTAGRAM_ACCESS_TOKEN?.trim());
-  const account = await storage.getConnectedAccount("instagram");
+export async function getInstagramConfigSummary(ownerUserId?: number | null): Promise<Record<string, unknown>> {
+  const envToken = ownerUserId == null && Boolean(process.env.INSTAGRAM_ACCESS_TOKEN?.trim());
+  const account = ownerUserId == null
+    ? await storage.getConnectedAccount("instagram")
+    : await storage.getConnectedAccountForOwner("instagram", ownerUserId);
   return {
     graphBase: getInstagramGraphBaseUrl(),
     apiVersion: getInstagramApiVersion(),
@@ -342,10 +344,10 @@ export async function getInstagramConfigSummary(): Promise<Record<string, unknow
 }
 
 async function getInstagramConfig(ownerUserId?: number | null): Promise<InstagramConfig | null> {
-  const envToken = process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null;
-  const envUser = process.env.INSTAGRAM_USER_ID?.trim() || "me";
+  const envToken = ownerUserId == null ? process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null : null;
+  const envUser = ownerUserId == null ? process.env.INSTAGRAM_USER_ID?.trim() || "me" : null;
   if (envToken) {
-    return { graphBase: getInstagramGraphBaseUrl(), token: envToken, userId: envUser };
+    return { graphBase: getInstagramGraphBaseUrl(), token: envToken, userId: envUser! };
   }
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("instagram", ownerUserId);

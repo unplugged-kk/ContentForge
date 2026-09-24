@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { discoveredIdeas, analytics } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { z } from "zod";
 import * as cheerio from "cheerio";
 import path from "path";
@@ -113,21 +113,21 @@ export async function registerRoutes(
   app.use("/uploads", (await import("express")).default.static(uploadsDir));
 
   // ==================== PILLARS ====================
-  app.get("/api/pillars", async (_req, res) => {
-    try { res.json(await storage.getPillars()); }
+  app.get("/api/pillars", async (req, res) => {
+    try { res.json(await storage.getPillars(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   // ==================== POSTS ====================
-  app.get("/api/posts", async (_req, res) => {
-    try { res.json(await storage.getPosts()); }
+  app.get("/api/posts", async (req, res) => {
+    try { res.json(await storage.getPosts(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   /** Ready + today's scheduled — approval / daily queue. */
-  app.get("/api/posts/queue/today", async (_req, res) => {
+  app.get("/api/posts/queue/today", async (req, res) => {
     try {
-      const all = await storage.getPosts();
+      const all = await storage.getPosts(sessionUserId(req));
       const queue = all.filter((p) => {
         if (p.status === "draft") return true;       // drafts always visible
         if (p.status === "ready") return true;
@@ -153,7 +153,7 @@ export async function registerRoutes(
 
   app.get("/api/posts/:id", async (req, res) => {
     try {
-      const result = await storage.getPost(parseInt(req.params.id));
+      const result = await storage.getPost(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -204,7 +204,11 @@ export async function registerRoutes(
   });
 
   app.delete("/api/posts/:id", async (req, res) => {
-    try { await storage.deletePost(parseInt(req.params.id)); res.status(204).send(); }
+    try {
+      const deleted = await storage.deletePost(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Post not found" });
+      res.status(204).send();
+    }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -212,14 +216,14 @@ export async function registerRoutes(
     try {
       const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
-      const post = await storage.getPost(id);
+      const post = await storage.getPost(sessionUserId(req), id);
       if (!post) return res.status(404).json({ message: "Post not found" });
       if (post.postType === "article") {
         return res.status(400).json({
           message: "Article entries cannot be published via /api/posts/:id/publish. Use article publish flow.",
         });
       }
-      const result = await tryPublishPostById(id);
+      const result = await tryPublishPostById(id, { ownerUserId: sessionUserId(req) });
       res.json({ success: true, ...result });
     } catch (err: any) {
       res.status(500).json({ message: err?.message || "Failed to publish to X" });
@@ -239,14 +243,14 @@ export async function registerRoutes(
   });
 
   // ==================== IDEAS ====================
-  app.get("/api/ideas", async (_req, res) => {
-    try { res.json(await storage.getIdeas()); }
+  app.get("/api/ideas", async (req, res) => {
+    try { res.json(await storage.getIdeas(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.get("/api/ideas/:id", async (req, res) => {
     try {
-      const idea = await storage.getIdea(parseInt(req.params.id));
+      const idea = await storage.getIdea(sessionUserId(req), parseInt(req.params.id));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
       res.json(idea);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -255,7 +259,7 @@ export async function registerRoutes(
   app.post("/api/ideas", async (req, res) => {
     try {
       const parsed = createIdeaBody.parse(req.body);
-      const result = await storage.createIdea({ title: parsed.title, notes: parsed.notes ?? null, pillarId: parsed.pillarId ?? null });
+      const result = await storage.createIdea(sessionUserId(req), { title: parsed.title, notes: parsed.notes ?? null, pillarId: parsed.pillarId ?? null });
       res.status(201).json(result);
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
@@ -264,15 +268,19 @@ export async function registerRoutes(
   });
 
   app.delete("/api/ideas/:id", async (req, res) => {
-    try { await storage.deleteIdea(parseInt(req.params.id)); res.status(204).send(); }
+    try {
+      const deleted = await storage.deleteIdea(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Idea not found" });
+      res.status(204).send();
+    }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.post("/api/ideas/:id/expand", async (req, res) => {
     try {
-      const idea = (await storage.getIdeas()).find((i) => i.id === parseInt(req.params.id));
+      const idea = (await storage.getIdeas(sessionUserId(req))).find((i) => i.id === parseInt(req.params.id));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
-      const allPillars = await storage.getPillars();
+      const allPillars = await storage.getPillars(sessionUserId(req));
       const pillar = allPillars.find((p) => p.id === idea.pillarId);
 
       const { content, usage, latency } = await aiCall([
@@ -289,7 +297,7 @@ export async function registerRoutes(
         { pillarId: idea.pillarId, postType: "thread", tone: "conversational", targetPlatform: "both", status: "draft", aiModel: MODELS.TEXT },
         parsed.tweets.map((t: any, i: number) => ({ content: String(t.content || ""), position: i, charCount: String(t.content || "").length, postId: 0 }))
       );
-      await storage.updateIdea(parseInt(req.params.id), { isExpanded: true });
+      await storage.updateIdea(sessionUserId(req), parseInt(req.params.id), { isExpanded: true });
       res.json(post);
     } catch (err: any) {
       console.error("Expand idea error:", err);
@@ -298,8 +306,8 @@ export async function registerRoutes(
   });
 
   // ==================== TEMPLATES ====================
-  app.get("/api/templates", async (_req, res) => {
-    try { res.json(await storage.getTemplates()); }
+  app.get("/api/templates", async (req, res) => {
+    try { res.json(await storage.getTemplates(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -307,10 +315,10 @@ export async function registerRoutes(
     try {
       const { templateId } = req.body;
       if (!templateId) return res.status(400).json({ message: "templateId is required" });
-      const allTemplates = await storage.getTemplates();
+      const allTemplates = await storage.getTemplates(sessionUserId(req));
       const template = allTemplates.find((t) => t.id === Number(templateId));
       if (!template) return res.status(404).json({ message: "Template not found" });
-      const allPillars = await storage.getPillars();
+      const allPillars = await storage.getPillars(sessionUserId(req));
       const pillar = allPillars.find((p) => p.id === template.pillarId);
 
       const { content, usage, latency } = await aiCall([
@@ -329,7 +337,7 @@ export async function registerRoutes(
   app.post("/api/generate", async (req, res) => {
     try {
       const parsed = generateBody.parse(req.body);
-      const allPillars = await storage.getPillars();
+      const allPillars = await storage.getPillars(sessionUserId(req));
       const pillar = parsed.pillar ? allPillars.find((p) => p.id === parseInt(parsed.pillar!)) : null;
       const charLimit = parsed.platform === "threads" ? 500 : 280;
       const tweetCount = parsed.postType === "thread" ? "5-7" : "1";
@@ -359,15 +367,15 @@ export async function registerRoutes(
   });
 
   // ==================== ANALYTICS ====================
-  app.get("/api/analytics/summary", async (_req, res) => {
-    try { res.json(await storage.getAnalyticsSummary()); }
+  app.get("/api/analytics/summary", async (req, res) => {
+    try { res.json(await storage.getAnalyticsSummary(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/analytics/insights", async (_req, res) => {
+  app.get("/api/analytics/insights", async (req, res) => {
     try {
-      const allPosts = await storage.getPosts();
-      const rows = await db.select().from(analytics);
+      const allPosts = await storage.getPosts(sessionUserId(req));
+      const rows = await db.select().from(analytics).where(eq(analytics.userId, sessionUserId(req)));
       const engagement = (a: (typeof rows)[number]) =>
         (a.likes || 0) +
         (a.retweets || 0) * 2 +
@@ -408,7 +416,7 @@ export async function registerRoutes(
         posts: b.count,
       }));
 
-      const pillars = await storage.getPillars();
+      const pillars = await storage.getPillars(sessionUserId(req));
       const pillarStats = pillars.map((pillar) => {
         const postsIn = posted.filter((p) => p.pillarId === pillar.id);
         let sum = 0;
@@ -436,7 +444,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/analytics", async (req, res) => {
-    try { res.status(201).json(await storage.createAnalytics(req.body)); }
+    try { res.status(201).json(await storage.createAnalytics(sessionUserId(req), req.body)); }
     catch (err: any) { res.status(400).json({ message: err.message }); }
   });
 
@@ -445,7 +453,7 @@ export async function registerRoutes(
   app.post("/api/analytics/sync/x", async (req, res) => {
     try {
       const days = Math.min(Number(req.body?.days ?? 7), 30);
-      await refreshXAnalytics(days);
+      await refreshXAnalytics(days, sessionUserId(req));
       res.json({ ok: true, days });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -453,13 +461,13 @@ export async function registerRoutes(
   });
 
   // X API budget summary — how many tweet reads this month vs. the Basic tier limit
-  app.get("/api/analytics/x-usage", async (_req, res) => {
+  app.get("/api/analytics/x-usage", async (req, res) => {
     try {
       const now = new Date();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-      const logs = await storage.getAiUsageLogsAll(31);
+      const logs = await storage.getAiUsageLogsAll(sessionUserId(req), 31);
       const xLogs = logs.filter(
         (l) => (l.model === "x-api-v2" || l.model === "xquick-api") && l.feature === "x_analytics_sync",
       );
@@ -492,15 +500,19 @@ export async function registerRoutes(
   // Manual trigger: sync analytics for one post by id
   app.post("/api/analytics/sync/x/:id", async (req, res) => {
     try {
-      await syncPostAnalyticsFromX(Number(req.params.id));
+      const ownerUserId = sessionUserId(req);
+      const postId = Number(req.params.id);
+      const post = await storage.getPost(ownerUserId, postId);
+      if (!post) return res.status(404).json({ message: "Post not found" });
+      await syncPostAnalyticsFromX(postId, ownerUserId);
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
   });
 
-  app.get("/api/usage", async (_req, res) => {
-    try { res.json(await storage.getAiUsageLogs()); }
+  app.get("/api/usage", async (req, res) => {
+    try { res.json(await storage.getAiUsageLogs(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -508,7 +520,7 @@ export async function registerRoutes(
   app.get("/api/ai-usage/dashboard", async (req, res) => {
     try {
       const days = Number(req.query.days ?? 30);
-      const logs = await storage.getAiUsageLogsAll(days);
+      const logs = await storage.getAiUsageLogsAll(sessionUserId(req), days);
 
       // Cost per 1M tokens by model (input, output) — covers both direct OpenAI and OpenRouter pricing
       const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -659,14 +671,14 @@ export async function registerRoutes(
   });
 
   // ==================== ARTICLES ====================
-  app.get("/api/articles", async (_req, res) => {
-    try { res.json(await storage.getArticles()); }
+  app.get("/api/articles", async (req, res) => {
+    try { res.json(await storage.getArticles(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.get("/api/articles/:id", async (req, res) => {
     try {
-      const result = await storage.getArticle(parseInt(req.params.id));
+      const result = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Article not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -689,7 +701,7 @@ export async function registerRoutes(
         coverImageUrl: z.string().optional().nullable(),
       }).parse(req.body);
       if (body.contentHtml) body.contentHtml = sanitizeHtml(body.contentHtml);
-      const result = await storage.createArticle(body as any);
+      const result = await storage.createArticle(sessionUserId(req), body as any);
       res.status(201).json(result);
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
@@ -700,14 +712,18 @@ export async function registerRoutes(
   app.put("/api/articles/:id", async (req, res) => {
     try {
       if (req.body?.contentHtml) req.body.contentHtml = sanitizeHtml(req.body.contentHtml);
-      const result = await storage.updateArticle(parseInt(req.params.id), req.body);
+      const result = await storage.updateArticle(sessionUserId(req), parseInt(req.params.id), req.body);
       if (!result) return res.status(404).json({ message: "Article not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.delete("/api/articles/:id", async (req, res) => {
-    try { await storage.deleteArticle(parseInt(req.params.id)); res.status(204).send(); }
+    try {
+      const deleted = await storage.deleteArticle(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Article not found" });
+      res.status(204).send();
+    }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -722,10 +738,10 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/generate-outline", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
       const { topic } = req.body;
-      const allPillars = await storage.getPillars();
+      const allPillars = await storage.getPillars(sessionUserId(req));
       const pillar = allPillars.find((p) => p.id === article.pillarId);
 
       const { content, usage, latency } = await aiCall([
@@ -745,7 +761,7 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/expand-section", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
       const { heading, description, keyPoints } = req.body;
 
@@ -764,10 +780,10 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/generate-full", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
       const { outline } = req.body;
-      const allPillars = await storage.getPillars();
+      const allPillars = await storage.getPillars(sessionUserId(req));
       const pillar = allPillars.find((p) => p.id === article.pillarId);
 
       const { content, usage, latency } = await aiCall([
@@ -786,7 +802,7 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/improve", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
       const { text, goal } = req.body;
 
@@ -805,7 +821,7 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/generate-meta", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
 
       const articleText = article.contentHtml || article.contentMarkdown || article.title;
@@ -826,7 +842,7 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/to-thread", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
 
       const articleText = article.contentHtml || article.contentMarkdown || "";
@@ -853,7 +869,7 @@ export async function registerRoutes(
 
   app.post("/api/articles/:id/to-tweet", async (req, res) => {
     try {
-      const article = await storage.getArticle(parseInt(req.params.id));
+      const article = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!article) return res.status(404).json({ message: "Article not found" });
 
       const articleText = article.contentHtml || article.contentMarkdown || "";
@@ -872,7 +888,7 @@ export async function registerRoutes(
 
   app.post("/api/threads/:id/to-article", async (req, res) => {
     try {
-      const post = await storage.getPost(parseInt(req.params.id));
+      const post = await storage.getPost(sessionUserId(req), parseInt(req.params.id));
       if (!post) return res.status(404).json({ message: "Thread not found" });
 
       const threadText = post.tweets.map((t) => t.content).join("\n\n");
@@ -884,7 +900,7 @@ export async function registerRoutes(
       await logAiUsage(usage, latency, "thread_to_article");
       const wordCount = content.replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length;
 
-      const article = await storage.createArticle({
+      const article = await storage.createArticle(sessionUserId(req), {
         title: post.tweets[0]?.content.substring(0, 100) || "Expanded Article",
         contentJson: {},
         contentHtml: sanitizeHtml(content.trim()),
@@ -901,9 +917,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/articles-publish-capability", async (_req, res) => {
+  app.get("/api/articles-publish-capability", async (req, res) => {
     try {
-      const capability = await getXArticlePublishCapability();
+      const capability = await getXArticlePublishCapability(sessionUserId(req));
       res.json(capability);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -914,9 +930,9 @@ export async function registerRoutes(
     try {
       const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid article id" });
-      const article = await storage.getArticle(id);
+      const article = await storage.getArticle(sessionUserId(req), id);
       if (!article) return res.status(404).json({ message: "Article not found" });
-      const capability = await getXArticlePublishCapability();
+      const capability = await getXArticlePublishCapability(sessionUserId(req));
       if (!capability.canPublish) {
         return res.status(501).json({
           message: capability.reason,
@@ -935,14 +951,14 @@ export async function registerRoutes(
   });
 
   // ==================== SOURCE ANALYSIS / REFERENCES ====================
-  app.get("/api/references", async (_req, res) => {
-    try { res.json(await storage.getReferences()); }
+  app.get("/api/references", async (req, res) => {
+    try { res.json(await storage.getReferences(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.get("/api/references/:id", async (req, res) => {
     try {
-      const result = await storage.getReference(parseInt(req.params.id));
+      const result = await storage.getReference(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Reference not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -1161,7 +1177,7 @@ Return JSON:
 IMPORTANT: Do NOT copy any specific content. Only mirror the structural and stylistic patterns.
 Kishore's unique expertise (DevOps, multi-cloud, Kubernetes, platform engineering) must remain central.` : "";
 
-        const ref = await storage.createReference({
+        const ref = await storage.createReference(sessionUserId(req), {
           sourceUrl: `https://x.com/${username}`,
           sourceType: "x_account",
           sourcePlatform: "x",
@@ -1202,7 +1218,7 @@ Kishore's unique expertise (DevOps, multi-cloud, Kubernetes, platform engineerin
               if (!tweetId) {
                 return res.status(400).json({ message: "Could not parse the post ID from this X URL." });
               }
-              const tweetText = await fetchTweetTextByIdViaOfficialApi(tweetId);
+              const tweetText = await fetchTweetTextByIdViaOfficialApi(tweetId, sessionUserId(req));
               if (!tweetText) {
                 return res.status(400).json({
                   message:
@@ -1412,7 +1428,7 @@ Return JSON:
       const analysis = safeJsonParse(content);
       if (!analysis) return res.status(500).json({ message: "AI analysis failed. Please try again." });
 
-      const ref = await storage.createReference({
+      const ref = await storage.createReference(sessionUserId(req), {
         sourceUrl: url || null,
         sourceType,
         sourcePlatform,
@@ -1490,7 +1506,7 @@ Return JSON:
 
       const successRefs = results.filter((r) => r.id);
       for (const ref of successRefs) {
-        await storage.updateReference(ref.id, { batchId });
+        await storage.updateReference(sessionUserId(req), ref.id, { batchId });
       }
 
       if (successRefs.length >= 2) {
@@ -1517,7 +1533,7 @@ Return JSON:
           const synthesis = safeJsonParse(content);
           if (synthesis) {
             for (const ref of successRefs) {
-              await storage.updateReference(ref.id, { batchSynthesisJson: synthesis });
+              await storage.updateReference(sessionUserId(req), ref.id, { batchSynthesisJson: synthesis });
             }
           }
         } catch (e) {
@@ -1575,7 +1591,7 @@ Return JSON:
       const analysis = safeJsonParse(content);
       if (!analysis) return res.status(500).json({ message: "Screenshot analysis failed." });
 
-      const ref = await storage.createReference({
+      const ref = await storage.createReference(sessionUserId(req), {
         sourceType: analysis.source_type || "screenshot",
         sourcePlatform: analysis.source_platform || "manual",
         sourceAuthorUsername: analysis.author || null,
@@ -1601,7 +1617,7 @@ Return JSON:
     try {
       const { action } = req.params;
       const { referenceId, contentType, topic } = req.body;
-      const ref = await storage.getReference(parseInt(referenceId));
+      const ref = await storage.getReference(sessionUserId(req), parseInt(referenceId));
       if (!ref) return res.status(404).json({ message: "Reference not found" });
 
       const analysis = ref.analysisJson as any;
@@ -1665,7 +1681,7 @@ ${isArticle
         });
       }
 
-      await storage.createReferenceContent({
+      await storage.createReferenceContent(sessionUserId(req), {
         referenceId: ref.id,
         creationAction: action,
       });
@@ -1680,7 +1696,7 @@ ${isArticle
   // ==================== STYLE PROFILES ====================
 
   app.get("/api/styles", async (req, res) => {
-    try { res.json(await storage.getStyleProfiles()); }
+    try { res.json(await storage.getStyleProfiles(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -1688,26 +1704,30 @@ ${isArticle
     try {
       const { name, sourceReferenceId, styleJson, stylePromptSnippet } = req.body;
       if (!name || !stylePromptSnippet) return res.status(400).json({ message: "Name and style prompt snippet are required." });
-      const profile = await storage.createStyleProfile({ name, sourceReferenceId, styleJson: styleJson || {}, stylePromptSnippet });
+      const profile = await storage.createStyleProfile(sessionUserId(req), { name, sourceReferenceId, styleJson: styleJson || {}, stylePromptSnippet });
       if (sourceReferenceId) {
-        await storage.updateReference(sourceReferenceId, { isStyleSaved: true });
+        await storage.updateReference(sessionUserId(req), sourceReferenceId, { isStyleSaved: true });
       }
       res.json(profile);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.delete("/api/styles/:id", async (req, res) => {
-    try { await storage.deleteStyleProfile(parseInt(req.params.id)); res.status(204).send(); }
+    try {
+      const deleted = await storage.deleteStyleProfile(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Style profile not found" });
+      res.status(204).send();
+    }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.post("/api/styles/:id/apply", async (req, res) => {
     try {
-      const profile = await storage.getStyleProfile(parseInt(req.params.id));
+      const profile = await storage.getStyleProfile(sessionUserId(req), parseInt(req.params.id));
       if (!profile) return res.status(404).json({ message: "Style profile not found" });
       const { topic, contentType, pillarId } = req.body;
 
-      await storage.incrementStyleUsage(profile.id);
+      await storage.incrementStyleUsage(sessionUserId(req), profile.id);
 
       const { content, usage, latency } = await aiCall([
         { role: "system", content: `${await getBrandSystemPrompt(sessionUserId(req), "x")}\n\n${profile.stylePromptSnippet}` },
@@ -1736,16 +1756,16 @@ ${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet 
 
   app.post("/api/references/:id/generate", async (req, res) => {
     try {
-      const ref = await storage.getReference(parseInt(req.params.id));
+      const ref = await storage.getReference(sessionUserId(req), parseInt(req.params.id));
       if (!ref) return res.status(404).json({ message: "Reference not found" });
       const { contentType, tone, styleProfileId } = req.body;
 
       let styleSnippet = "";
       if (styleProfileId) {
-        const profile = await storage.getStyleProfile(parseInt(styleProfileId));
+        const profile = await storage.getStyleProfile(sessionUserId(req), parseInt(styleProfileId));
         if (profile) {
           styleSnippet = `\n\n${profile.stylePromptSnippet}`;
-          await storage.incrementStyleUsage(profile.id);
+          await storage.incrementStyleUsage(sessionUserId(req), profile.id);
         }
       }
 
@@ -1785,15 +1805,19 @@ Each tweet under ${charLimit} characters.` },
   });
 
   app.delete("/api/references/:id", async (req, res) => {
-    try { await storage.deleteReference(parseInt(req.params.id)); res.status(204).send(); }
+    try {
+      const deleted = await storage.deleteReference(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Reference not found" });
+      res.status(204).send();
+    }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.post("/api/references/:id/bookmark", async (req, res) => {
     try {
-      const ref = await storage.getReference(parseInt(req.params.id));
+      const ref = await storage.getReference(sessionUserId(req), parseInt(req.params.id));
       if (!ref) return res.status(404).json({ message: "Reference not found" });
-      const result = await storage.updateReference(parseInt(req.params.id), { isBookmarked: !ref.isBookmarked });
+      const result = await storage.updateReference(sessionUserId(req), parseInt(req.params.id), { isBookmarked: !ref.isBookmarked });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -1801,7 +1825,7 @@ Each tweet under ${charLimit} characters.` },
   app.post("/api/references/:id/note", async (req, res) => {
     try {
       const { notes } = req.body;
-      const result = await storage.updateReference(parseInt(req.params.id), { notes });
+      const result = await storage.updateReference(sessionUserId(req), parseInt(req.params.id), { notes });
       if (!result) return res.status(404).json({ message: "Reference not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -1809,7 +1833,7 @@ Each tweet under ${charLimit} characters.` },
 
   app.get("/api/references/batch/:batchId", async (req, res) => {
     try {
-      const refs = await storage.getReferencesByBatch(req.params.batchId);
+      const refs = await storage.getReferencesByBatch(sessionUserId(req), req.params.batchId);
       res.json(refs);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -1822,10 +1846,10 @@ Each tweet under ${charLimit} characters.` },
 
   // ==================== CONNECTED ACCOUNTS ====================
 
-  app.get("/api/social/x/status", async (_req, res) => {
+  app.get("/api/social/x/status", async (req, res) => {
     try {
       res.json({
-        ...(await getXPostingConfigSummary()),
+        ...(await getXPostingConfigSummary(sessionUserId(req))),
         hint: "Posting uses xQuick. Set XQUIK_API_KEY and XQUIK_ACCOUNT (the connected X username/account ID in xQuick). XQUIK_API_BASE_URL defaults to https://xquik.com/api/v1.",
       });
     } catch (err: any) {
@@ -1833,10 +1857,10 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
-  app.get("/api/social/threads/status", async (_req, res) => {
+  app.get("/api/social/threads/status", async (req, res) => {
     try {
       res.json({
-        ...(await getThreadsConfigSummary()),
+        ...(await getThreadsConfigSummary(sessionUserId(req))),
         hint: "Publishing uses the Threads Graph API. Connect via POST /api/accounts/connect { platform: \"threads\", accessToken } or set THREADS_ACCESS_TOKEN and THREADS_USER_ID. Scopes: threads_basic, threads_content_publish, threads_manage_insights.",
       });
     } catch (err: any) {
@@ -1844,10 +1868,10 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
-  app.get("/api/social/instagram/status", async (_req, res) => {
+  app.get("/api/social/instagram/status", async (req, res) => {
     try {
       res.json({
-        ...(await getInstagramConfigSummary()),
+        ...(await getInstagramConfigSummary(sessionUserId(req))),
         hint: "Publishing uses Instagram Content Publishing (professional accounts). Connect via POST /api/accounts/connect { platform: \"instagram\", accessToken } or set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID. Scopes: instagram_business_basic, instagram_business_content_publish, instagram_business_manage_insights.",
       });
     } catch (err: any) {
@@ -1947,9 +1971,9 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
-  app.get("/api/accounts", async (_req, res) => {
+  app.get("/api/accounts", async (req, res) => {
     try {
-      const accounts = await storage.getConnectedAccounts();
+      const accounts = await storage.getConnectedAccounts(sessionUserId(req));
       const safeAccounts = accounts.map((a) => ({
         ...a,
         accessToken: a.accessToken ? "••••••" + a.accessToken.slice(-4) : null,
@@ -1975,6 +1999,7 @@ Each tweet under ${charLimit} characters.` },
             const accountData = await verifyRes.json() as any;
             const account = await storage.upsertConnectedAccount({
               platform: "x",
+              userId: sessionUserId(req),
               username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || accountData.xUsername || "pending_xquik_account",
               displayName: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || accountData.xUsername || "xQuick",
               accessToken,
@@ -1985,6 +2010,7 @@ Each tweet under ${charLimit} characters.` },
           } else {
             const account = await storage.upsertConnectedAccount({
               platform: "x",
+              userId: sessionUserId(req),
               username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || "pending_xquik_account",
               accessToken,
               isActive: true,
@@ -1994,6 +2020,7 @@ Each tweet under ${charLimit} characters.` },
         } catch (e) {
           const account = await storage.upsertConnectedAccount({
             platform: "x",
+            userId: sessionUserId(req),
             username: username || process.env.XQUIK_ACCOUNT || process.env.XQUICK_ACCOUNT || "pending_xquik_account",
             accessToken,
             isActive: true,
@@ -2063,14 +2090,15 @@ Each tweet under ${charLimit} characters.` },
 
   app.delete("/api/accounts/:id", async (req, res) => {
     try {
-      await storage.deleteConnectedAccount(parseInt(req.params.id));
+      const deleted = await storage.deleteConnectedAccount(sessionUserId(req), parseInt(req.params.id));
+      if (!deleted) return res.status(404).json({ message: "Account not found" });
       res.status(204).send();
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.post("/api/accounts/:id/test", async (req, res) => {
     try {
-      const accounts = await storage.getConnectedAccounts();
+      const accounts = await storage.getConnectedAccounts(sessionUserId(req));
       const account = accounts.find((a) => a.id === parseInt(req.params.id));
       if (!account) return res.status(404).json({ message: "Account not found" });
 
@@ -2112,13 +2140,13 @@ Each tweet under ${charLimit} characters.` },
   app.get("/api/discover/ideas", async (req, res) => {
     try {
       const batchId = req.query.batchId as string | undefined;
-      res.json(await storage.getDiscoveredIdeas(batchId));
+      res.json(await storage.getDiscoveredIdeas(sessionUserId(req), batchId));
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/discover/refresh", async (_req, res) => {
+  app.post("/api/discover/refresh", async (req, res) => {
     try {
-      const result = await runDiscoverRefresh();
+      const result = await runDiscoverRefresh(sessionUserId(req));
       res.json(result);
     } catch (err: any) {
       console.error("Discover refresh error:", err);
@@ -2130,7 +2158,7 @@ Each tweet under ${charLimit} characters.` },
     try {
       const { status } = req.body;
       if (!["new", "saved", "drafted", "dismissed"].includes(status)) return res.status(400).json({ message: "Invalid status" });
-      const result = await storage.updateDiscoveredIdeaStatus(parseInt(req.params.id), status);
+      const result = await storage.updateDiscoveredIdeaStatus(sessionUserId(req), parseInt(req.params.id), status);
       if (!result) return res.status(404).json({ message: "Idea not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -2138,21 +2166,21 @@ Each tweet under ${charLimit} characters.` },
 
   app.post("/api/discover/ideas/:id/to-draft", async (req, res) => {
     try {
-      const discovered = (await storage.getDiscoveredIdeas()).find((i) => i.id === parseInt(req.params.id));
+      const discovered = (await storage.getDiscoveredIdeas(sessionUserId(req))).find((i) => i.id === parseInt(req.params.id));
       if (!discovered) return res.status(404).json({ message: "Idea not found" });
 
-      const idea = await storage.createIdea({
+      const idea = await storage.createIdea(sessionUserId(req), {
         title: discovered.title.substring(0, 280),
         notes: `${discovered.description || ""}\n\nSuggested hook: ${discovered.suggestedHook || ""}\nAngle: ${discovered.uniqueAngle || ""}`,
         pillarId: discovered.pillarId,
       });
-      await storage.updateDiscoveredIdeaStatus(parseInt(req.params.id), "saved");
+      await storage.updateDiscoveredIdeaStatus(sessionUserId(req), parseInt(req.params.id), "saved");
       res.json(idea);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   // ==================== DISCOVERY SETTINGS & SOURCES ====================
-  app.get("/api/discover/settings", async (_req, res) => {
+  app.get("/api/discover/settings", async (req, res) => {
     try { res.json(await storage.getDiscoverySettings()); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2162,9 +2190,9 @@ Each tweet under ${charLimit} characters.` },
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/discover/sources", async (_req, res) => {
+  app.get("/api/discover/sources", async (req, res) => {
     try {
-      const [accounts, feeds] = await Promise.all([storage.getMonitoredAccounts(), storage.getRssSources()]);
+      const [accounts, feeds] = await Promise.all([storage.getMonitoredAccounts(sessionUserId(req)), storage.getRssSources(sessionUserId(req))]);
       res.json({ accounts, feeds });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2172,7 +2200,7 @@ Each tweet under ${charLimit} characters.` },
   app.post("/api/discover/sources/rss", async (req, res) => {
     try {
       const body = z.object({ name: z.string().min(1), feedUrl: z.string().url(), category: z.string().optional() }).parse(req.body);
-      res.status(201).json(await storage.createRssSource(body as any));
+      res.status(201).json(await storage.createRssSource(sessionUserId(req), body as any));
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
       res.status(400).json({ message: err.message });
@@ -2182,15 +2210,15 @@ Each tweet under ${charLimit} characters.` },
   app.post("/api/discover/sources/account", async (req, res) => {
     try {
       const body = z.object({ platform: z.string().min(1), username: z.string().min(1), displayName: z.string().optional(), category: z.string().optional() }).parse(req.body);
-      res.status(201).json(await storage.createMonitoredAccount(body as any));
+      res.status(201).json(await storage.createMonitoredAccount(sessionUserId(req), body as any));
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
       res.status(400).json({ message: err.message });
     }
   });
 
-  app.get("/api/discover/rss-sources", async (_req, res) => {
-    try { res.json(await storage.getRssSources()); }
+  app.get("/api/discover/rss-sources", async (req, res) => {
+    try { res.json(await storage.getRssSources(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -2205,7 +2233,7 @@ Each tweet under ${charLimit} characters.` },
         autopostPostType: string;
         autopostPillarId: number | null;
       }>;
-      const updated = await storage.updateRssSource(id, body as any);
+      const updated = await storage.updateRssSource(sessionUserId(req), id, body as any);
       if (!updated) return res.status(404).json({ message: "RSS source not found" });
       res.json(updated);
     } catch (err: any) {
@@ -2213,17 +2241,17 @@ Each tweet under ${charLimit} characters.` },
     }
   });
 
-  app.get("/api/discover/monitored-accounts", async (_req, res) => {
-    try { res.json(await storage.getMonitoredAccounts()); }
+  app.get("/api/discover/monitored-accounts", async (req, res) => {
+    try { res.json(await storage.getMonitoredAccounts(sessionUserId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.post("/api/discover/ideas/:id/bookmark", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const [idea] = await db.select().from(discoveredIdeas).where(eq(discoveredIdeas.id, id));
+      const [idea] = await db.select().from(discoveredIdeas).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req))));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
-      const [updated] = await db.update(discoveredIdeas).set({ isBookmarked: !idea.isBookmarked }).where(eq(discoveredIdeas.id, id)).returning();
+      const [updated] = await db.update(discoveredIdeas).set({ isBookmarked: !idea.isBookmarked }).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req)))).returning();
       res.json(updated);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2231,7 +2259,8 @@ Each tweet under ${charLimit} characters.` },
   app.delete("/api/discover/ideas/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      await db.delete(discoveredIdeas).where(eq(discoveredIdeas.id, id));
+      const deleted = await db.delete(discoveredIdeas).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req)))).returning({ id: discoveredIdeas.id });
+      if (deleted.length === 0) return res.status(404).json({ message: "Idea not found" });
       res.status(204).send();
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2242,7 +2271,7 @@ Each tweet under ${charLimit} characters.` },
     try {
       const id = parseInt(req.params.id);
       const postType: string = req.body?.postType || "thread";
-      const [idea] = await db.select().from(discoveredIdeas).where(eq(discoveredIdeas.id, id));
+      const [idea] = await db.select().from(discoveredIdeas).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req))));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
       const tweetCountHint =
@@ -2275,7 +2304,7 @@ Each tweet under ${charLimit} characters.` },
         { postType, tone: "conversational", targetPlatform: "x", status: "draft", aiModel: MODELS.TEXT } as any,
         tweets,
       );
-      await db.update(discoveredIdeas).set({ status: "used" }).where(eq(discoveredIdeas.id, id));
+      await db.update(discoveredIdeas).set({ status: "used" }).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req))));
       res.json({ postId: (post as any).id, postType, tweetCount: tweets.length, hashtags: result.hashtag_suggestions || [] });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2283,8 +2312,13 @@ Each tweet under ${charLimit} characters.` },
   app.delete("/api/discover/sources/:id", async (req, res) => {
     try {
       const { type } = req.query;
-      if (type === "rss") await storage.deleteRssSource(parseInt(req.params.id));
-      else await storage.deleteMonitoredAccount(parseInt(req.params.id));
+      if (type === "rss") {
+        const deleted = await storage.deleteRssSource(sessionUserId(req), parseInt(req.params.id));
+        if (!deleted) return res.status(404).json({ message: "RSS source not found" });
+      } else {
+        const deleted = await storage.deleteMonitoredAccount(sessionUserId(req), parseInt(req.params.id));
+        if (!deleted) return res.status(404).json({ message: "Monitored account not found" });
+      }
       res.status(204).send();
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2331,10 +2365,10 @@ Return JSON:
       const parsed = safeJsonParse(content);
       if (!parsed?.overall_score) return res.status(500).json({ message: "AI returned invalid response." });
 
-      const existingScores = postId ? await storage.getViralScores(postId) : articleId ? await storage.getViralScores(undefined, articleId) : [];
+      const existingScores = postId ? await storage.getViralScores(sessionUserId(req), postId) : articleId ? await storage.getViralScores(sessionUserId(req), undefined, articleId) : [];
       const version = existingScores.length + 1;
 
-      const score = await storage.createViralScore({
+      const score = await storage.createViralScore(sessionUserId(req), {
         postId: postId || null,
         articleId: articleId || null,
         version,
@@ -2409,7 +2443,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
   });
 
   app.get("/api/viral/scores/:postId", async (req, res) => {
-    try { res.json(await storage.getViralScores(parseInt(req.params.postId))); }
+    try { res.json(await storage.getViralScores(sessionUserId(req), parseInt(req.params.postId))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -2619,7 +2653,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     try {
       const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
-      const posts = await storage.getPosts();
+      const posts = await storage.getPosts(sessionUserId(req));
       const recentContent = posts.slice(0, 10).flatMap(p => p.tweets.map(t => t.content)).join("\n");
       const { content, usage, latency } = await aiCall([
         { role: "system", content: "You are an expert personal branding analyst. Analyze the content and extract key patterns about the writer's style, voice, and approach." },
@@ -2645,7 +2679,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.get("/api/images", async (req, res) => {
     try {
-      const images = await db.select().from(generatedImages).orderBy(desc(generatedImages.createdAt));
+      const images = await db.select().from(generatedImages).where(eq(generatedImages.userId, sessionUserId(req))).orderBy(desc(generatedImages.createdAt));
       res.json(images);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2682,6 +2716,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
         const revisedPrompt = response.data?.[0]?.revised_prompt || finalPrompt;
 
         const [saved] = await db.insert(generatedImages).values({
+          userId: sessionUserId(req),
           prompt,
           revisedPrompt,
           imageUrl,
@@ -2702,16 +2737,17 @@ Return ONLY the improved content text. Keep the same format and length constrain
   app.post("/api/images/:id/favorite", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const [current] = await db.select().from(generatedImages).where(eq(generatedImages.id, id));
+      const [current] = await db.select().from(generatedImages).where(and(eq(generatedImages.id, id), eq(generatedImages.userId, sessionUserId(req))));
       if (!current) return res.status(404).json({ message: "Image not found" });
-      const [updated] = await db.update(generatedImages).set({ isFavorite: !current.isFavorite }).where(eq(generatedImages.id, id)).returning();
+      const [updated] = await db.update(generatedImages).set({ isFavorite: !current.isFavorite }).where(and(eq(generatedImages.id, id), eq(generatedImages.userId, sessionUserId(req)))).returning();
       res.json(updated);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.delete("/api/images/:id", async (req, res) => {
     try {
-      await db.delete(generatedImages).where(eq(generatedImages.id, parseInt(req.params.id)));
+      const deleted = await db.delete(generatedImages).where(and(eq(generatedImages.id, parseInt(req.params.id)), eq(generatedImages.userId, sessionUserId(req)))).returning({ id: generatedImages.id });
+      if (deleted.length === 0) return res.status(404).json({ message: "Image not found" });
       res.status(204).end();
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2720,7 +2756,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     try {
       const { postId, style = "professional" } = req.body;
       if (!postId) return res.status(400).json({ message: "postId required" });
-      const post = await storage.getPost(parseInt(postId));
+      const post = await storage.getPost(sessionUserId(req), parseInt(postId));
       if (!post) return res.status(404).json({ message: "Post not found" });
       const content = post.tweets.map(t => t.content).join(" ");
       const { content: promptSuggestion, usage, latency } = await aiCall([
@@ -2756,7 +2792,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
 
   app.get("/api/vault", async (req, res) => {
     try {
-      const items = await db.select().from(vaultTable).orderBy(desc(vaultTable.createdAt));
+      const items = await db.select().from(vaultTable).where(eq(vaultTable.userId, sessionUserId(req))).orderBy(desc(vaultTable.createdAt));
       res.json(items);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2765,7 +2801,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
     try {
       const { title, content, category, tags, sourceUrl, sourceType } = req.body;
       if (!title || !content) return res.status(400).json({ message: "Title and content are required" });
-      const [item] = await db.insert(vaultTable).values({ title, content, category, tags, sourceUrl, sourceType }).returning();
+      const [item] = await db.insert(vaultTable).values({ userId: sessionUserId(req), title, content, category, tags, sourceUrl, sourceType }).returning();
       res.json(item);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2831,16 +2867,17 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
   app.post("/api/vault/:id/favorite", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const [current] = await db.select().from(vaultTable).where(eq(vaultTable.id, id));
+      const [current] = await db.select().from(vaultTable).where(and(eq(vaultTable.id, id), eq(vaultTable.userId, sessionUserId(req))));
       if (!current) return res.status(404).json({ message: "Not found" });
-      const [updated] = await db.update(vaultTable).set({ isFavorite: !current.isFavorite }).where(eq(vaultTable.id, id)).returning();
+      const [updated] = await db.update(vaultTable).set({ isFavorite: !current.isFavorite }).where(and(eq(vaultTable.id, id), eq(vaultTable.userId, sessionUserId(req)))).returning();
       res.json(updated);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.delete("/api/vault/:id", async (req, res) => {
     try {
-      await db.delete(vaultTable).where(eq(vaultTable.id, parseInt(req.params.id)));
+      const deleted = await db.delete(vaultTable).where(and(eq(vaultTable.id, parseInt(req.params.id)), eq(vaultTable.userId, sessionUserId(req)))).returning({ id: vaultTable.id });
+      if (deleted.length === 0) return res.status(404).json({ message: "Not found" });
       res.status(204).end();
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -2904,9 +2941,9 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
     }
   });
 
-  app.get("/api/youtube/channels", async (_req, res) => {
+  app.get("/api/youtube/channels", async (req, res) => {
     try {
-      res.json(await storage.getYoutubeChannels());
+      res.json(await storage.getYoutubeChannels(sessionUserId(req)));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -2932,7 +2969,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       } catch {
         /* seed optional */
       }
-      const row = await storage.createYoutubeChannel({
+      const row = await storage.createYoutubeChannel(sessionUserId(req), {
         channelId,
         channelName: channelName || undefined,
         channelUrl,
@@ -2947,7 +2984,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
   app.patch("/api/youtube/channels/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const updated = await storage.updateYoutubeChannel(id, req.body);
+      const updated = await storage.updateYoutubeChannel(sessionUserId(req), id, req.body);
       if (!updated) return res.status(404).json({ message: "Channel not found" });
       res.json(updated);
     } catch (err: any) {
@@ -2957,17 +2994,18 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
 
   app.delete("/api/youtube/channels/:id", async (req, res) => {
     try {
-      await storage.deleteYoutubeChannel(parseInt(req.params.id, 10));
+      const deleted = await storage.deleteYoutubeChannel(sessionUserId(req), parseInt(req.params.id, 10));
+      if (!deleted) return res.status(404).json({ message: "Channel not found" });
       res.status(204).end();
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
   });
 
-  app.post("/api/youtube/channels/check-now", async (_req, res) => {
+  app.post("/api/youtube/channels/check-now", async (req, res) => {
     try {
       const { checkYoutubeChannels } = await import("./youtubeConnector");
-      await checkYoutubeChannels();
+      await checkYoutubeChannels(sessionUserId(req));
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2977,7 +3015,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
   app.post("/api/youtube/channels/:id/check-now", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const list = await storage.getYoutubeChannels();
+      const list = await storage.getYoutubeChannels(sessionUserId(req));
       const ch = list.find((c) => c.id === id);
       if (!ch) return res.status(404).json({ message: "Channel not found" });
       const { checkYoutubeChannelRow } = await import("./youtubeConnector");
@@ -3069,7 +3107,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
   // ── CAROUSEL BUILDER ──────────────────────────────────────────────────────────
   app.get("/api/carousels", async (req, res) => {
     try {
-      const items = await db.select().from(carouselsTable).orderBy(desc(carouselsTable.createdAt));
+      const items = await db.select().from(carouselsTable).where(eq(carouselsTable.userId, sessionUserId(req))).orderBy(desc(carouselsTable.createdAt));
       res.json(items);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -3078,7 +3116,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
     try {
       const { title, pillarId, slides, platform, backgroundStyle } = req.body;
       if (!title) return res.status(400).json({ message: "Title is required" });
-      const [item] = await db.insert(carouselsTable).values({ title, pillarId: pillarId || null, slides: slides || [], platform, backgroundStyle }).returning();
+      const [item] = await db.insert(carouselsTable).values({ userId: sessionUserId(req), title, pillarId: pillarId || null, slides: slides || [], platform, backgroundStyle }).returning();
       res.json(item);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -3086,14 +3124,16 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
   app.put("/api/carousels/:id", async (req, res) => {
     try {
       const { title, slides, status, backgroundStyle, platform, pillarId } = req.body;
-      const [updated] = await db.update(carouselsTable).set({ title, slides, status, backgroundStyle, platform, pillarId: pillarId || null }).where(eq(carouselsTable.id, parseInt(req.params.id))).returning();
+      const [updated] = await db.update(carouselsTable).set({ userId: sessionUserId(req), title, slides, status, backgroundStyle, platform, pillarId: pillarId || null }).where(and(eq(carouselsTable.id, parseInt(req.params.id)), eq(carouselsTable.userId, sessionUserId(req)))).returning();
+      if (!updated) return res.status(404).json({ message: "Carousel not found" });
       res.json(updated);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.delete("/api/carousels/:id", async (req, res) => {
     try {
-      await db.delete(carouselsTable).where(eq(carouselsTable.id, parseInt(req.params.id)));
+      const deleted = await db.delete(carouselsTable).where(and(eq(carouselsTable.id, parseInt(req.params.id)), eq(carouselsTable.userId, sessionUserId(req)))).returning({ id: carouselsTable.id });
+      if (deleted.length === 0) return res.status(404).json({ message: "Carousel not found" });
       res.status(204).end();
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -3137,9 +3177,9 @@ Return JSON: {
     isFavorite: z.boolean().optional(),
   });
 
-  app.get("/api/canned-responses", async (_req, res) => {
+  app.get("/api/canned-responses", async (req, res) => {
     try {
-      res.json(await storage.getCannedResponses());
+      res.json(await storage.getCannedResponses(sessionUserId(req)));
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -3148,7 +3188,7 @@ Return JSON: {
   app.post("/api/canned-responses", async (req, res) => {
     try {
       const parsed = cannedResponseBody.parse(req.body);
-      res.status(201).json(await storage.createCannedResponse(parsed as any));
+      res.status(201).json(await storage.createCannedResponse(sessionUserId(req), parsed as any));
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
       res.status(400).json({ message: err.message });
@@ -3159,7 +3199,7 @@ Return JSON: {
     try {
       const id = parseInt(req.params.id, 10);
       const parsed = cannedResponseBody.partial().parse(req.body);
-      const updated = await storage.updateCannedResponse(id, parsed as any);
+      const updated = await storage.updateCannedResponse(sessionUserId(req), id, parsed as any);
       if (!updated) return res.status(404).json({ message: "Not found" });
       res.json(updated);
     } catch (err: any) {
@@ -3170,7 +3210,8 @@ Return JSON: {
 
   app.delete("/api/canned-responses/:id", async (req, res) => {
     try {
-      await storage.deleteCannedResponse(parseInt(req.params.id, 10));
+      const deleted = await storage.deleteCannedResponse(sessionUserId(req), parseInt(req.params.id, 10));
+      if (!deleted) return res.status(404).json({ message: "Canned response not found" });
       res.status(204).end();
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3179,7 +3220,7 @@ Return JSON: {
 
   app.post("/api/canned-responses/:id/use", async (req, res) => {
     try {
-      const row = await storage.incrementCannedResponseUsage(parseInt(req.params.id, 10));
+      const row = await storage.incrementCannedResponseUsage(sessionUserId(req), parseInt(req.params.id, 10));
       if (!row) return res.status(404).json({ message: "Not found" });
       res.json(row);
     } catch (err: any) {
@@ -3268,7 +3309,7 @@ Return only the refined post content, no explanation.` },
   app.get("/api/autopilot/status", async (req, res) => {
     try {
       const { runMorningBriefing: _mb, autofillCalendar: _af, ...ap } = await import("./autopilot");
-      const posts = await storage.getPosts();
+      const posts = await storage.getPosts(sessionUserId(req));
       const now = new Date();
       const today = posts.filter((p) => {
         if (!p.scheduledAt) return false;
@@ -3277,9 +3318,9 @@ Return only the refined post content, no explanation.` },
       });
       const failed = posts.filter((p) => p.status === "failed");
       const scheduled = posts.filter((p) => p.status === "scheduled" && new Date(p.scheduledAt as Date) > now);
-      const ideas = await storage.getDiscoveredIdeas();
+      const ideas = await storage.getDiscoveredIdeas(sessionUserId(req));
       const unusedIdeas = ideas.filter((i) => i.status === "new" || i.status === "briefing_drafted");
-      const pillars = await storage.getPillars();
+      const pillars = await storage.getPillars(sessionUserId(req));
 
       // Content gap: pillars not posted in 7+ days
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -3302,7 +3343,7 @@ Return only the refined post content, no explanation.` },
   });
 
   // GET /api/autopilot/market-pulse — today's breaking news + X algorithm context
-  app.get("/api/autopilot/market-pulse", async (_req, res) => {
+  app.get("/api/autopilot/market-pulse", async (req, res) => {
     try {
       const { getMarketPulse } = await import("./marketPulse");
       const pulse = await getMarketPulse();
@@ -3316,7 +3357,7 @@ Return only the refined post content, no explanation.` },
   app.post("/api/autopilot/morning-briefing", async (req, res) => {
     try {
       const { runMorningBriefing } = await import("./autopilot");
-      const result = await runMorningBriefing();
+      const result = await runMorningBriefing(sessionUserId(req));
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3328,7 +3369,7 @@ Return only the refined post content, no explanation.` },
     try {
       const { autofillCalendar } = await import("./autopilot");
       const days = Number(req.body?.days ?? 7);
-      const result = await autofillCalendar(Math.min(days, 14));
+      const result = await autofillCalendar(sessionUserId(req), Math.min(days, 14));
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3340,8 +3381,8 @@ Return only the refined post content, no explanation.` },
     try {
       const days = Number(req.query.days ?? 7);
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const posts = await storage.getPosts();
-      const pillars = await storage.getPillars();
+      const posts = await storage.getPosts(sessionUserId(req));
+      const pillars = await storage.getPillars(sessionUserId(req));
       const recentPillarIds = new Set(
         posts.filter((p) => p.postedAt && new Date(p.postedAt) > cutoff).map((p) => p.pillarId),
       );
@@ -3389,7 +3430,7 @@ Return only the refined post content, no explanation.` },
       }
 
       const { scheduleManualPost } = await import("./autopilot");
-      const result = await scheduleManualPost(Number(ideaId), scheduleTime, postType);
+      const result = await scheduleManualPost(Number(ideaId), scheduleTime, sessionUserId(req), postType);
       if (result.error) {
         return res.status(500).json({ message: result.error });
       }
@@ -3404,7 +3445,7 @@ Return only the refined post content, no explanation.` },
     try {
       const { runDailyAutoPost } = await import("./autopilot");
       console.log("[smoke-test] Triggering immediate auto-post pipeline...");
-      const result = await runDailyAutoPost();
+      const result = await runDailyAutoPost(sessionUserId(req));
       res.json({
         success: true,
         message: `Smoke test complete. Scheduled ${result.postsScheduled} posts for today.`,

@@ -22,10 +22,16 @@ function getLinkedInBaseUrl(): string {
   return (process.env.LINKEDIN_API_BASE_URL?.trim() || "https://api.linkedin.com").replace(/\/+$/, "");
 }
 
-async function getLinkedInConfig(): Promise<LinkedInConfig | null> {
-  const account = await storage.getConnectedAccount("linkedin");
-  const token = process.env.LINKEDIN_ACCESS_TOKEN?.trim() || account?.accessToken || null;
-  const authorUrn = process.env.LINKEDIN_AUTHOR_URN?.trim() || account?.username || null;
+async function getLinkedInConfig(ownerUserId?: number | null): Promise<LinkedInConfig | null> {
+  const account = ownerUserId == null
+    ? await storage.getConnectedAccount("linkedin")
+    : await storage.getConnectedAccountForOwner("linkedin", ownerUserId);
+  const token = ownerUserId == null
+    ? process.env.LINKEDIN_ACCESS_TOKEN?.trim() || account?.accessToken || null
+    : account?.accessToken?.trim() || null;
+  const authorUrn = ownerUserId == null
+    ? process.env.LINKEDIN_AUTHOR_URN?.trim() || account?.username || null
+    : account?.username?.trim() || null;
   if (!token || !authorUrn) return null;
   return { baseUrl: getLinkedInBaseUrl(), token, authorUrn };
 }
@@ -77,8 +83,8 @@ export class LinkedInPublishAmbiguousError extends Error {
 export type LinkedInPostResult = { postUrn: string; url: string | null };
 
 /** Post a single text update via LinkedIn's Posts API. Real REST contract, no thread-splitting needed. */
-export async function postTextToLinkedIn(text: string): Promise<LinkedInPostResult> {
-  const config = await getLinkedInConfig();
+export async function postTextToLinkedIn(text: string, ownerUserId?: number | null): Promise<LinkedInPostResult> {
+  const config = await getLinkedInConfig(ownerUserId);
   if (!config) throw new Error("LINKEDIN_CONFIG_MISSING");
 
   const body = {
@@ -133,8 +139,8 @@ export type LinkedInReconcileStatus =
 export async function reconcileLinkedInPost(hint: {
   commentary: string;
   attemptedAt: string;
-}): Promise<LinkedInReconcileStatus | null> {
-  const config = await getLinkedInConfig();
+}, ownerUserId?: number | null): Promise<LinkedInReconcileStatus | null> {
+  const config = await getLinkedInConfig(ownerUserId);
   if (!config) return null;
 
   const params = new URLSearchParams({ q: "author", author: config.authorUrn, count: "10" });

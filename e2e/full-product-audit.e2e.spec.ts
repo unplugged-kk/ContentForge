@@ -162,7 +162,7 @@ test.describe("Phase 28.2H: Full Product User Journeys", () => {
     await page.goto("/insights?view=performance");
     await expect(page.locator('[data-testid="page-header-insights"]')).toBeVisible();
     await expect(page.locator('[data-testid="tab-trigger-performance"]')).toBeVisible();
-    await expect(page.locator('[data-testid="text-published-count"]')).toBeVisible();
+    await expect(page.locator('[data-testid="text-published-count"], [data-testid="empty-performance-state"]')).toBeVisible();
   });
 
   test("Journey H: Insights Learning patterns -> Explore Topic handoff", async ({ page }) => {

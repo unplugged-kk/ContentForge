@@ -259,8 +259,9 @@ export async function generateDraftFromIdea(
   postType: string,
   tone: string,
   pillarId: number | null,
+  ownerUserId: number,
 ): Promise<AutopilotDraft | null> {
-  const [pillars, templates] = await Promise.all([storage.getPillars(), storage.getTemplates()]);
+  const [pillars, templates] = await Promise.all([storage.getPillars(ownerUserId), storage.getTemplates(ownerUserId)]);
   const pillar = pillars.find((p) => p.id === pillarId);
   const pillarName = pillar?.name || idea.category || "DevOps";
 
@@ -293,7 +294,7 @@ export async function generateDraftFromIdea(
       }
     } catch { /* non-critical */ }
 
-    const brand = await getBrandSystemPrompt(1, "x");
+    const brand = await getBrandSystemPrompt(ownerUserId, "x");
     const { content, usage, latency } = await aiCall(
       [
         { role: "system", content: `${brand}\n\n--- Autopilot drafting voice (always apply) ---\n${KISHORE_VOICE}` },
@@ -361,11 +362,12 @@ ${formatPrompt}`,
 export async function generateArticleDraftFromIdea(
   idea: DiscoveredIdea,
   pillarId: number | null,
+  ownerUserId: number,
 ): Promise<AutopilotArticleDraft | null> {
-  const pillars = await storage.getPillars();
+  const pillars = await storage.getPillars(ownerUserId);
   const pillar = pillars.find((p) => p.id === pillarId);
   const pillarName = pillar?.name || idea.category || "DevOps";
-  const brand = await getBrandSystemPrompt(1, "x");
+  const brand = await getBrandSystemPrompt(ownerUserId, "x");
 
   try {
     const { content, usage, latency } = await aiCall(
@@ -508,11 +510,11 @@ export type AutofillResult = {
  * Fill the next `days` days of the calendar with autopilot posts.
  * Only fills empty time slots — manual posts are never touched.
  */
-export async function autofillCalendar(days = 1): Promise<AutofillResult> {
+export async function autofillCalendar(ownerUserId: number, days = 1): Promise<AutofillResult> {
   const now = new Date();
   const slots = nextSlots(now, days * DAILY_SLOTS.length);
 
-  const existingPosts = await storage.getPosts();
+  const existingPosts = await storage.getPosts(ownerUserId);
   const scheduledTimes = new Set(
     existingPosts
       .filter((p) => p.status === "scheduled" && p.scheduledAt)
@@ -531,14 +533,14 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
 
   if (freeSlots.length === 0) return { draftsCreated: 0, slots: [], errors: [] };
 
-  const ideas = await storage.getDiscoveredIdeas();
-  const pillars = await storage.getPillars();
+  const ideas = await storage.getDiscoveredIdeas(ownerUserId);
+  const pillars = await storage.getPillars(ownerUserId);
   const ranked = rankIdeas(ideas.filter((i) => i.status !== "used"), pillars);
 
   if (ranked.length === 0) {
     try {
-      await runDiscoverRefresh();
-      return autofillCalendar(days);
+      await runDiscoverRefresh(ownerUserId);
+      return autofillCalendar(ownerUserId, days);
     } catch {
       return { draftsCreated: 0, slots: freeSlots, errors: ["No niche-relevant ideas available"] };
     }
@@ -559,13 +561,13 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
 
     try {
       if (postType === "article") {
-        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null);
+        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null, ownerUserId);
         if (!articleDraft) {
           errors.push(`Article draft failed: ${idea.title.substring(0, 60)}`);
           continue;
         }
         const wordCount = articleDraft.contentMarkdown.split(/\s+/).filter(Boolean).length;
-        await storage.createArticle({
+        await storage.createArticle(ownerUserId, {
           title: articleDraft.title,
           subtitle: articleDraft.subtitle,
           coverImageUrl: articleDraft.coverImageUrl,
@@ -578,14 +580,14 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
           estimatedReadMinutes: estimateReadMinutes(wordCount),
         } as any);
       } else {
-        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
+        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null, ownerUserId);
         if (!draft) {
           errors.push(`Draft gen failed: ${idea.title.substring(0, 60)}`);
           continue;
         }
         draft.scheduledAt = slot;
         await storage.createPost(
-          1,
+          ownerUserId,
           {
             pillarId: draft.pillarId,
             postType: draft.postType,
@@ -599,7 +601,7 @@ export async function autofillCalendar(days = 1): Promise<AutofillResult> {
           draft.tweets as any,
         );
       }
-      await storage.updateDiscoveredIdeaStatus(idea.id, "used");
+      await storage.updateDiscoveredIdeaStatus(ownerUserId, idea.id, "used");
       draftsCreated.push(idea.id);
     } catch (e: any) {
       errors.push(e?.message || String(e));
@@ -640,17 +642,17 @@ export type DailyAutoPostResult = {
  * 4. Generates drafts for today's 3 slots
  * 5. Schedules them with status="scheduled" for auto-publishing
  */
-export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
+export async function runDailyAutoPost(ownerUserId: number): Promise<DailyAutoPostResult> {
   const errors: string[] = [];
 
   // Run discover refresh and market pulse in parallel
   const [refreshResult, pulse] = await Promise.all([
-    runDiscoverRefresh(),
+    runDiscoverRefresh(ownerUserId),
     getMarketPulse(),
   ]);
 
-  const [pillars, templates] = await Promise.all([storage.getPillars(), storage.getTemplates()]);
-  const allIdeas = await storage.getDiscoveredIdeas(refreshResult.batchId);
+  const [pillars, templates] = await Promise.all([storage.getPillars(ownerUserId), storage.getTemplates(ownerUserId)]);
+  const allIdeas = await storage.getDiscoveredIdeas(ownerUserId, refreshResult.batchId);
   const ranked = rankIdeas(allIdeas, pillars, pulse);
 
   const topIdeas: DailyAutoPostResult["topIdeas"] = [];
@@ -687,13 +689,13 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
 
     try {
       if (postType === "article") {
-        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null);
+        const articleDraft = await generateArticleDraftFromIdea(idea, idea.pillarId ?? null, ownerUserId);
         if (!articleDraft) {
           errors.push(`Article draft failed: ${idea.title.substring(0, 50)}`);
           continue;
         }
         const wordCount = articleDraft.contentMarkdown.split(/\s+/).filter(Boolean).length;
-        await storage.createArticle({
+        await storage.createArticle(ownerUserId, {
           title: articleDraft.title,
           subtitle: articleDraft.subtitle,
           coverImageUrl: articleDraft.coverImageUrl,
@@ -706,14 +708,14 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
           estimatedReadMinutes: estimateReadMinutes(wordCount),
         } as any);
       } else {
-        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null);
+        const draft = await generateDraftFromIdea(idea, postType, slotDef.tone, idea.pillarId ?? null, ownerUserId);
         if (!draft) {
           errors.push(`Draft gen failed: ${idea.title.substring(0, 50)}`);
           continue;
         }
         draft.scheduledAt = todaySlots[i];
         await storage.createPost(
-          1,
+          ownerUserId,
           {
             pillarId: draft.pillarId,
             postType: draft.postType,
@@ -727,7 +729,7 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
           draft.tweets as any,
         );
       }
-      await storage.updateDiscoveredIdeaStatus(idea.id, "scheduled");
+      await storage.updateDiscoveredIdeaStatus(ownerUserId, idea.id, "scheduled");
       postsScheduled++;
     } catch (e: any) {
       errors.push(e?.message || String(e));
@@ -753,27 +755,28 @@ export async function runDailyAutoPost(): Promise<DailyAutoPostResult> {
 export async function scheduleManualPost(
   ideaId: number,
   scheduledAt: Date,
+  ownerUserId: number,
   postType?: string,
 ): Promise<{ postId: number | null; error?: string }> {
   try {
-    const ideas = await storage.getDiscoveredIdeas();
+    const ideas = await storage.getDiscoveredIdeas(ownerUserId);
     const idea = ideas.find((i) => i.id === ideaId);
     if (!idea) return { postId: null, error: "Idea not found" };
 
-    const pillars = await storage.getPillars();
+    const pillars = await storage.getPillars(ownerUserId);
     const pillar = pillars.find((p) => p.id === idea.pillarId);
     const pillarName = pillar?.name || idea.category || "DevOps";
 
     const actualPostType = postType || determineContentType(idea);
     const tone = actualPostType === "hot_take" ? "provocative" : "educational";
 
-    const draft = await generateDraftFromIdea(idea, actualPostType, tone, idea.pillarId ?? null);
+    const draft = await generateDraftFromIdea(idea, actualPostType, tone, idea.pillarId ?? null, ownerUserId);
     if (!draft) return { postId: null, error: "Draft generation failed" };
 
     draft.scheduledAt = scheduledAt;
 
     const post = await storage.createPost(
-      1,
+      ownerUserId,
       {
         pillarId: draft.pillarId,
         postType: draft.postType,
@@ -787,7 +790,7 @@ export async function scheduleManualPost(
       draft.tweets as any,
     );
 
-    await storage.updateDiscoveredIdeaStatus(idea.id, "scheduled");
+    await storage.updateDiscoveredIdeaStatus(ownerUserId, idea.id, "scheduled");
     return { postId: (post as any).id };
   } catch (e: any) {
     return { postId: null, error: e?.message || String(e) };
@@ -810,6 +813,7 @@ export type WeekendContentResult = {
 
 export async function generateWeekendContent(
   type: "article_thread" | "weekly_recap",
+  ownerUserId: number,
 ): Promise<WeekendContentResult> {
   const now = new Date();
   const istNow = toIST(now);
@@ -845,35 +849,35 @@ export async function generateWeekendContent(
       updatedAt: new Date(),
     } as any;
 
-    const draft = await generateDraftFromIdea(summaryIdea, "weekly_recap", "reflective", null);
+    const draft = await generateDraftFromIdea(summaryIdea, "weekly_recap", "reflective", null, ownerUserId);
     if (!draft) return { postType: type, postId: null, ideaTitle: summaryIdea.title, tweetCount: 0, scheduledAt, error: "Draft generation failed" };
 
     draft.scheduledAt = scheduledAt;
     const post = await storage.createPost(
-      1,
+      ownerUserId,
       { pillarId: null, postType: "weekly_recap", tone: "reflective", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
       draft.tweets as any,
     );
     return { postType: type, postId: (post as any)?.id ?? null, ideaTitle: summaryIdea.title, tweetCount: draft.tweets.length, scheduledAt };
   }
 
-  const ideas = await storage.getDiscoveredIdeas();
-  const pillars = await storage.getPillars();
+  const ideas = await storage.getDiscoveredIdeas(ownerUserId);
+  const pillars = await storage.getPillars(ownerUserId);
   const pulse = await getMarketPulse();
   const ranked = rankIdeas(ideas.filter((i) => i.status !== "used"), pillars, pulse);
 
   if (!ranked.length) return { postType: type, postId: null, ideaTitle: "(none)", tweetCount: 0, scheduledAt, error: "No ideas available" };
 
   const best = ranked[0];
-  const draft = await generateDraftFromIdea(best, "article_thread", "educational", best.pillarId ?? null);
+  const draft = await generateDraftFromIdea(best, "article_thread", "educational", best.pillarId ?? null, ownerUserId);
   if (!draft) return { postType: type, postId: null, ideaTitle: best.title, tweetCount: 0, scheduledAt, error: "Draft generation failed" };
 
   draft.scheduledAt = scheduledAt;
   const post = await storage.createPost(
-    1,
+    ownerUserId,
     { pillarId: best.pillarId, postType: "article_thread", tone: "educational", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
     draft.tweets as any,
   );
-  await storage.updateDiscoveredIdeaStatus(best.id, "used");
+  await storage.updateDiscoveredIdeaStatus(ownerUserId, best.id, "used");
   return { postType: type, postId: (post as any)?.id ?? null, ideaTitle: best.title, tweetCount: draft.tweets.length, scheduledAt };
 }

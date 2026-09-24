@@ -4,11 +4,9 @@ import { aiCall, logAiUsage } from "./ai/chat";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 
-const AUTOPOST_USER_ID = 1;
-
-export async function generateAutopostDraft(idea: DiscoveredIdea, source: RssSource): Promise<void> {
+export async function generateAutopostDraft(idea: DiscoveredIdea, source: RssSource, ownerUserId: number): Promise<void> {
   const plat = platformForAiPrompt(source.autopostPlatform || "x");
-  const systemPrompt = await getBrandSystemPrompt(AUTOPOST_USER_ID, plat);
+  const systemPrompt = await getBrandSystemPrompt(source.userId ?? ownerUserId, plat);
   const postType = source.autopostPostType || "thread";
   const { content, usage, latency } = await aiCall([
     { role: "system", content: systemPrompt },
@@ -35,7 +33,7 @@ Separate tweets with "---". Do NOT add numbering (system adds it).`,
   }));
 
   await storage.createPost(
-    1,
+    source.userId ?? ownerUserId,
     {
       pillarId: source.autopostPillarId ?? null,
       postType,
@@ -47,13 +45,13 @@ Separate tweets with "---". Do NOT add numbering (system adds it).`,
     tweetRows,
   );
 
-  await storage.updateDiscoveredIdeaStatus(idea.id, "auto-drafted");
+  await storage.updateDiscoveredIdeaStatus(idea.userId ?? ownerUserId, idea.id, "auto-drafted");
   console.log(`[autopost] Draft created from RSS: "${idea.title}"`);
 }
 
 /** After a discover batch saves ideas, create drafts for RSS sources with autopost enabled. */
-export async function runRssAutopostForBatch(saved: DiscoveredIdea[]): Promise<void> {
-  const autopostSources = await storage.getRssSourcesWithAutopost();
+export async function runRssAutopostForBatch(saved: DiscoveredIdea[], ownerUserId: number): Promise<void> {
+  const autopostSources = await storage.getRssSourcesWithAutopost(ownerUserId);
   if (!autopostSources.length || !saved.length) return;
 
   for (const source of autopostSources) {
@@ -72,7 +70,7 @@ export async function runRssAutopostForBatch(saved: DiscoveredIdea[]): Promise<v
       .slice(0, 2);
 
     for (const idea of candidates) {
-      await generateAutopostDraft(idea, source).catch((e) =>
+      await generateAutopostDraft(idea, source, ownerUserId).catch((e) =>
         console.error(`[autopost] Failed for idea ${idea.id}:`, e),
       );
     }

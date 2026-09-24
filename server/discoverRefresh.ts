@@ -19,11 +19,11 @@ export type DiscoverRefreshResult = {
 };
 
 /** Runs the full Discover pipeline (HN, Reddit, RSS, GitHub, ArXiv, Google Trends → AI ranking → DB). */
-export async function runDiscoverRefresh(): Promise<DiscoverRefreshResult> {
+export async function runDiscoverRefresh(ownerUserId: number): Promise<DiscoverRefreshResult> {
   const batchId = `batch_${Date.now()}`;
 
   // Dedupe: collect URLs and title prefixes already saved in the last 14 days
-  const recentIdeas = await storage.getDiscoveredIdeas();
+  const recentIdeas = await storage.getDiscoveredIdeas(ownerUserId);
   const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const seenUrls = new Set(
     recentIdeas
@@ -145,7 +145,7 @@ export async function runDiscoverRefresh(): Promise<DiscoverRefreshResult> {
     try {
       // Pull from up to 20 active feeds, rotating based on day-of-week so every
       // feed gets coverage over the week without hammering all 47 sources at once
-      const allFeeds = (await storage.getRssSources()).filter((f) => f.isActive);
+      const allFeeds = (await storage.getRssSources(ownerUserId)).filter((f) => f.isActive);
       const dayIndex = new Date().getDay(); // 0-6
       const chunkSize = 20;
       const start = (dayIndex * chunkSize) % Math.max(allFeeds.length, 1);
@@ -288,7 +288,7 @@ export async function runDiscoverRefresh(): Promise<DiscoverRefreshResult> {
     );
   }
 
-  const allPillars = await storage.getPillars();
+  const allPillars = await storage.getPillars(ownerUserId);
   const pillarNames = allPillars.map((p) => p.name).join(", ");
 
   const { content, usage, latency } = await aiCall(
@@ -348,8 +348,8 @@ Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technica
     };
   });
 
-  const saved = await storage.createDiscoveredIdeas(ideaRecords);
-  await runRssAutopostForBatch(saved).catch((e) => console.error("[discover] RSS autopost:", e));
+  const saved = await storage.createDiscoveredIdeas(ownerUserId, ideaRecords);
+  await runRssAutopostForBatch(saved, ownerUserId).catch((e) => console.error("[discover] RSS autopost:", e));
   return {
     batchId,
     ideas: saved,

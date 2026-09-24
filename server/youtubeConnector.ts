@@ -7,8 +7,6 @@ import type { YoutubeChannel } from "@shared/schema";
 
 const rssParser = new Parser();
 
-const CONNECTOR_USER_ID = 1;
-
 /** Resolve UC… channel id from a watch URL, /channel/, /@handle, or raw channel id. */
 export async function resolveYoutubeChannelId(channelUrl: string): Promise<{
   channelId: string;
@@ -61,6 +59,7 @@ function videoIdFromItem(item: { link?: string; id?: string }): string | null {
 }
 
 export async function checkYoutubeChannelRow(channel: YoutubeChannel): Promise<void> {
+  if (!channel.userId) return;
   const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.channelId}`;
   const feed = await rssParser.parseURL(feedUrl);
   const latestEntry = feed.items[0];
@@ -70,13 +69,13 @@ export async function checkYoutubeChannelRow(channel: YoutubeChannel): Promise<v
   if (!videoId || videoId === channel.lastVideoId) return;
 
   console.log(`[youtube-connector] New video: ${latestEntry.title} (${videoId})`);
-  await storage.updateYoutubeChannel(channel.id, {
+  await storage.updateYoutubeChannel(channel.userId, channel.id, {
     lastVideoId: videoId,
     lastCheckedAt: new Date(),
   });
 
   const plat = platformForAiPrompt(channel.autopostPlatform || "x");
-  const systemPrompt = await getBrandSystemPrompt(CONNECTOR_USER_ID, plat);
+  const systemPrompt = await getBrandSystemPrompt(channel.userId, plat);
   const postType = channel.autopostPostType || "thread";
 
   const { content, usage, latency } = await aiCall([
@@ -106,7 +105,7 @@ Separate tweets with "---". Do NOT add numbering.`,
       : null;
 
   await storage.createPost(
-    1,
+    channel.userId,
     {
       pillarId: channel.autopostPillarId ?? null,
       postType,
@@ -121,8 +120,10 @@ Separate tweets with "---". Do NOT add numbering.`,
   console.log(`[youtube-connector] Post saved for video ${videoId}`);
 }
 
-export async function checkYoutubeChannels(): Promise<void> {
-  const channels = await storage.getActiveYoutubeChannels();
+export async function checkYoutubeChannels(ownerUserId?: number): Promise<void> {
+  const channels = ownerUserId == null
+    ? await storage.getAllActiveYoutubeChannels()
+    : await storage.getActiveYoutubeChannels(ownerUserId);
   for (const channel of channels) {
     await checkYoutubeChannelRow(channel).catch((e) =>
       console.error(`[youtube-connector] Channel ${channel.channelId} failed:`, e),

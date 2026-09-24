@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { SchedulePicker } from "@/components/ui-shared/schedule-picker";
 import { PublishPreview } from "@/components/ui-shared/publish-preview";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getPublicationFeedback } from "@/lib/publication-feedback";
 import { useToast } from "@/hooks/use-toast";
 import { classifyAgentError } from "@shared/agent-ui";
 import { Link } from "wouter";
@@ -168,9 +169,9 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (response: { outcomes?: Array<{ status?: string | null; channel?: string | null; error?: string | null }> }) => {
       setPublishConfirmOpen(false);
-      toast({ title: "Published", description: `Sent to ${artifact?.channel ?? "the target channel"}.` });
+      toast(getPublicationFeedback(response, artifact?.channel ?? "the target channel"));
       invalidate();
     },
     onError,

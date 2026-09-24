@@ -40,7 +40,7 @@ export function translateXError(body: string): string {
 }
 
 /** Non-secret wiring status for Settings / debugging */
-export async function getXPostingConfigSummary(): Promise<{
+export async function getXPostingConfigSummary(ownerUserId: number): Promise<{
   provider: "xquick";
   hasXQuickBaseUrl: boolean;
   hasXQuickApiKey: boolean;
@@ -49,10 +49,10 @@ export async function getXPostingConfigSummary(): Promise<{
   canAttemptPost: boolean;
   postEndpoint: string;
 }> {
-  const acc = await storage.getConnectedAccount("x");
+  const acc = await storage.getConnectedAccountForOwner("x", ownerUserId);
   const hasXQuickBaseUrl = !!getXQuickBaseUrl();
-  const hasXQuickApiKey = !!getXQuickToken(acc?.accessToken ?? null);
-  const hasXQuickAccount = !!getXQuickAccount(acc?.username ?? null);
+  const hasXQuickApiKey = !!acc?.accessToken?.trim();
+  const hasXQuickAccount = !!acc?.username?.trim();
 
   return {
     provider: "xquick",
@@ -178,18 +178,26 @@ function buildXQuickHeaders(token: string): Record<string, string> {
   };
 }
 
-async function getXQuickApiConfig(): Promise<{ baseUrl: string; token: string } | null> {
-  const account = await storage.getConnectedAccount("x");
+async function getXQuickApiConfig(ownerUserId?: number | null): Promise<{ baseUrl: string; token: string } | null> {
+  const account = ownerUserId == null
+    ? await storage.getConnectedAccount("x")
+    : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const baseUrl = getXQuickBaseUrl();
-  const token = getXQuickToken(account?.accessToken ?? null);
+  const token = ownerUserId == null
+    ? getXQuickToken(account?.accessToken ?? null)
+    : account?.accessToken?.trim() || null;
   if (!baseUrl || !token) return null;
   return { baseUrl, token };
 }
 
-async function getXQuickClientConfig(): Promise<{ baseUrl: string; token: string; account: string } | null> {
-  const account = await storage.getConnectedAccount("x");
-  const apiConfig = await getXQuickApiConfig();
-  const xAccount = getXQuickAccount(account?.username ?? null);
+async function getXQuickClientConfig(ownerUserId?: number | null): Promise<{ baseUrl: string; token: string; account: string } | null> {
+  const account = ownerUserId == null
+    ? await storage.getConnectedAccount("x")
+    : await storage.getConnectedAccountForOwner("x", ownerUserId);
+  const apiConfig = await getXQuickApiConfig(ownerUserId);
+  const xAccount = ownerUserId == null
+    ? getXQuickAccount(account?.username ?? null)
+    : account?.username?.trim() || null;
   if (!apiConfig || !xAccount) return null;
   return { ...apiConfig, account: xAccount };
 }
@@ -340,8 +348,12 @@ async function pollXQuickWriteAction(
  * action has since resolved. Returns `null` only when there is no configured
  * client to ask (never as a stand-in for "not published").
  */
-export async function reconcileXQuickWriteAction(writeActionId: string): Promise<XWriteActionStatus | null> {
-  const config = await getXQuickApiConfig();
+export async function reconcileXQuickWriteAction(
+  writeActionId: string,
+  ownerUserId: number | null,
+): Promise<XWriteActionStatus | null> {
+  if (ownerUserId == null) return null;
+  const config = await getXQuickApiConfig(ownerUserId);
   if (!config) return null;
   return checkXQuickWriteAction(config, writeActionId);
 }
@@ -350,8 +362,12 @@ export async function reconcileXQuickWriteAction(writeActionId: string): Promise
  * Load one post by ID via X API v2 (tweet lookup) — never use HTML scraping of x.com.
  * Returns null if no client configured or the post is unavailable / private.
  */
-export async function fetchTweetTextByIdViaOfficialApi(tweetId: string): Promise<string | null> {
-  const config = await getXQuickApiConfig();
+export async function fetchTweetTextByIdViaOfficialApi(
+  tweetId: string,
+  ownerUserId: number | null,
+): Promise<string | null> {
+  if (ownerUserId == null) return null;
+  const config = await getXQuickApiConfig(ownerUserId);
   const endpoint = getXQuickReadEndpoint();
   if (!config || !endpoint) return null;
   try {
@@ -379,9 +395,9 @@ export async function fetchTweetTextByIdViaOfficialApi(tweetId: string): Promise
 /** Post a thread or single tweet to X through xQuick. Tweet texts must be non-empty, ≤280 chars each. */
 export async function postContentToX(
   texts: string[],
-  options: { mediaIds?: string[] } = {},
+  options: { mediaIds?: string[]; ownerUserId?: number | null } = {},
 ): Promise<XPublishResult> {
-  const config = await getXQuickClientConfig();
+  const config = await getXQuickClientConfig(options.ownerUserId);
   if (!config) {
     throw new Error(
       "XQUICK_CONFIG_MISSING",
@@ -455,8 +471,8 @@ export async function uploadMediaToX(media: {
   bytes: Buffer;
   mime: string;
   altText?: string | null;
-}): Promise<string> {
-  const config = await getXQuickClientConfig();
+}, ownerUserId?: number | null): Promise<string> {
+  const config = await getXQuickClientConfig(ownerUserId);
   if (!config) throw new Error("XQUICK_CONFIG_MISSING");
 
   const body: Record<string, unknown> = {
@@ -501,23 +517,29 @@ export async function uploadMediaToX(media: {
   return String(id);
 }
 
-export async function publishPostToX(post: Post & { tweets: Tweet[] }): Promise<XPublishResult> {
+export async function publishPostToX(
+  post: Post & { tweets: Tweet[] },
+  ownerUserId?: number | null,
+): Promise<XPublishResult> {
   const sorted = [...post.tweets].sort((a, b) => a.position - b.position);
   const texts = sorted.map((t) => t.content);
   const platform = post.targetPlatform || "both";
   if (platform === "threads") {
     throw new Error("This post is Threads-only; X publishing skipped.");
   }
-  return postContentToX(texts);
+  return postContentToX(texts, { ownerUserId });
 }
 
 /** Publish post to X and persist ids / posted status, or set failed + errorMessage. */
 export async function tryPublishPostById(
   postId: number,
-  options: { invokedBy?: XPublishInvoker } = {},
+  options: { invokedBy?: XPublishInvoker; ownerUserId?: number | null } = {},
 ): Promise<XPublishResult> {
   const invokedBy = options.invokedBy ?? "user";
-  const post = await storage.getPost(postId);
+  const ownerUserId = options.ownerUserId;
+  if (!ownerUserId) throw new Error("Post not found");
+
+  const post = await storage.getPost(ownerUserId, postId);
   if (!post) throw new Error("Post not found");
 
   assertEligibleForXPublish(
@@ -526,8 +548,8 @@ export async function tryPublishPostById(
   );
 
   try {
-    const result = await publishPostToX(post);
-    await storage.updatePost(1, postId, {
+    const result = await publishPostToX(post, ownerUserId);
+    await storage.updatePost(ownerUserId, postId, {
       status: "posted",
       postedAt: new Date(),
       externalIds: { ...(post.externalIds ?? {}), x: result.tweetIds },
@@ -535,13 +557,13 @@ export async function tryPublishPostById(
       errorMessage: null,
     });
     // Fire-and-forget analytics sync — don't block publish on it
-    syncPostAnalyticsFromX(postId).catch((e) =>
+    syncPostAnalyticsFromX(postId, ownerUserId).catch((e) =>
       console.error(`[x analytics] sync failed post=${postId}:`, e)
     );
     return result;
   } catch (e: any) {
     const friendly = translateXError(e?.message || String(e));
-    await storage.updatePost(1, postId, {
+    await storage.updatePost(ownerUserId, postId, {
       status: "failed",
       errorMessage: friendly,
     });
@@ -553,14 +575,14 @@ export async function tryPublishPostById(
 /**
  * Fetch public metrics from xQuick if an analytics endpoint is configured.
  */
-export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
-  const post = await storage.getPost(postId);
+export async function syncPostAnalyticsFromX(postId: number, ownerUserId: number): Promise<void> {
+  const post = await storage.getPost(ownerUserId, postId);
   if (!post) return;
 
   const tweetIds = (post.externalIds as any)?.x as string[] | undefined;
   if (!tweetIds || tweetIds.length === 0) return;
 
-  const config = await getXQuickApiConfig();
+  const config = await getXQuickApiConfig(ownerUserId);
   const endpoint = getXQuickAnalyticsEndpoint();
   if (!config || !endpoint) return;
 
@@ -577,6 +599,7 @@ export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
 
     // Log provider read call for budget tracking (1 read per post ID fetched)
     await storage.createAiUsageLog({
+      userId: ownerUserId,
       model: "xquick-api",
       feature: "x_analytics_sync",
       inputTokens: tweetIds.length,
@@ -613,8 +636,8 @@ export async function syncPostAnalyticsFromX(postId: number): Promise<void> {
  * Refresh analytics for all X-posted posts in the last N days.
  * Called by the daily analytics cron. Adapted from postiz-app analytics() flow.
  */
-export async function refreshXAnalytics(days = 30): Promise<void> {
-  const all = await storage.getPosts();
+export async function refreshXAnalytics(days: number, ownerUserId: number): Promise<void> {
+  const all = await storage.getPosts(ownerUserId);
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   const targets = all.filter(
@@ -626,7 +649,7 @@ export async function refreshXAnalytics(days = 30): Promise<void> {
   );
 
   for (const p of targets) {
-    await syncPostAnalyticsFromX(p.id).catch(() => null);
+    await syncPostAnalyticsFromX(p.id, ownerUserId).catch(() => null);
   }
   console.log(`[x analytics] refreshed ${targets.length} posts`);
 }
@@ -640,7 +663,10 @@ export async function refreshXAnalytics(days = 30): Promise<void> {
  * Does not write the legacy `analytics` table. Missing endpoint / config is
  * reported so the caller can record `not_available` rather than fabricate zeros.
  */
-export async function fetchXPublicMetrics(ids: string[]): Promise<
+export async function fetchXPublicMetrics(
+  ids: string[],
+  ownerUserId: number | null,
+): Promise<
   | { ok: true; rows: unknown[]; retrievedAt: Date }
   | { ok: false; status: number; message: string; retrievedAt: Date }
 > {
@@ -649,7 +675,10 @@ export async function fetchXPublicMetrics(ids: string[]): Promise<
   if (tweetIds.length === 0) {
     return { ok: false, status: 400, message: "no external ids", retrievedAt };
   }
-  const config = await getXQuickApiConfig();
+  if (ownerUserId == null) {
+    return { ok: false, status: 501, message: "x analytics owner not configured", retrievedAt };
+  }
+  const config = await getXQuickApiConfig(ownerUserId);
   const endpoint = getXQuickAnalyticsEndpoint();
   if (!config || !endpoint) {
     return { ok: false, status: 501, message: "x analytics endpoint not configured", retrievedAt };
@@ -681,8 +710,8 @@ export async function fetchXPublicMetrics(ids: string[]): Promise<
   }
 }
 
-export async function getXArticlePublishCapability(): Promise<XArticlePublishCapability> {
-  const status = await getXPostingConfigSummary();
+export async function getXArticlePublishCapability(ownerUserId: number): Promise<XArticlePublishCapability> {
+  const status = await getXPostingConfigSummary(ownerUserId);
   if (!status.canAttemptPost) {
     return {
       canPublish: false,

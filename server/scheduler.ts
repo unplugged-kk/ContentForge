@@ -1,4 +1,6 @@
 import cron from "node-cron";
+import { db } from "./db";
+import { users } from "@shared/schema";
 import { storage } from "./storage";
 import { tryPublishPostById, refreshXAnalytics } from "./social/x";
 import { runDiscoverRefresh } from "./discoverRefresh";
@@ -17,6 +19,11 @@ function minutesAgo(minutes: number): Date {
   return new Date(Date.now() - minutes * 60 * 1000);
 }
 
+async function listOwnerIds(): Promise<number[]> {
+  const rows = await db.select({ id: users.id }).from(users);
+  return rows.map((row) => row.id);
+}
+
 export function startSchedulers() {
   if (process.env.DISABLE_CRON === "1") {
     console.log("[scheduler] Crons disabled (DISABLE_CRON=1)");
@@ -30,44 +37,47 @@ export function startSchedulers() {
   cron.schedule(
     "* * * * *",
     async () => {
-      const all = await storage.getPosts();
+      for (const ownerId of await listOwnerIds()) {
+        const all = await storage.getPosts(ownerId);
 
-      for (const p of all) {
-        // Publish due scheduled posts
-        if (p.status === "scheduled" && isDue(p.scheduledAt as Date | null)) {
-          try {
-            await tryPublishPostById(p.id, { invokedBy: "scheduler" });
-          } catch (e) {
-            console.error(`[scheduler] Publish failed post=${p.id}:`, e);
-          }
-          continue;
-        }
-
-        // Retry failed posts with exponential backoff
-        if (p.status === "failed") {
-          if (process.env.XQUIK_ALLOW_WRITE_RETRIES !== "1") {
+        for (const p of all) {
+          if (p.userId !== ownerId) continue;
+          // Publish due scheduled posts
+          if (p.status === "scheduled" && isDue(p.scheduledAt as Date | null)) {
+            try {
+              await tryPublishPostById(p.id, { invokedBy: "scheduler", ownerUserId: ownerId });
+            } catch (e) {
+              console.error(`[scheduler] Publish failed post=${p.id}:`, e);
+            }
             continue;
           }
 
-          const retryCount = (p as any).retryCount ?? 0;
-          if (retryCount >= MAX_RETRIES) continue;
+          // Retry failed posts with exponential backoff
+          if (p.status === "failed") {
+            if (process.env.XQUIK_ALLOW_WRITE_RETRIES !== "1") {
+              continue;
+            }
 
-          const delayMinutes = RETRY_DELAYS_MINUTES[retryCount] ?? 120;
-          const lastRetry = (p as any).lastRetryAt ? new Date((p as any).lastRetryAt) : null;
-          const lastAttempt = lastRetry || new Date(p.updatedAt);
+            const retryCount = (p as any).retryCount ?? 0;
+            if (retryCount >= MAX_RETRIES) continue;
 
-          if (lastAttempt > minutesAgo(delayMinutes)) continue;
+            const delayMinutes = RETRY_DELAYS_MINUTES[retryCount] ?? 120;
+            const lastRetry = (p as any).lastRetryAt ? new Date((p as any).lastRetryAt) : null;
+            const lastAttempt = lastRetry || new Date(p.updatedAt);
 
-          console.log(`[scheduler] Retrying post=${p.id} attempt=${retryCount + 1}/${MAX_RETRIES}`);
-          try {
-            await storage.updatePost(1, p.id, {
-              status: "scheduled",
-              retryCount: retryCount + 1,
-              lastRetryAt: new Date(),
-            } as any);
-            await tryPublishPostById(p.id, { invokedBy: "scheduler" });
-          } catch (e) {
-            console.error(`[scheduler] Retry failed post=${p.id}:`, e);
+            if (lastAttempt > minutesAgo(delayMinutes)) continue;
+
+            console.log(`[scheduler] Retrying post=${p.id} attempt=${retryCount + 1}/${MAX_RETRIES}`);
+            try {
+              await storage.updatePost(ownerId, p.id, {
+                status: "scheduled",
+                retryCount: retryCount + 1,
+                lastRetryAt: new Date(),
+              } as any);
+              await tryPublishPostById(p.id, { invokedBy: "scheduler", ownerUserId: ownerId });
+            } catch (e) {
+              console.error(`[scheduler] Retry failed post=${p.id}:`, e);
+            }
           }
         }
       }
@@ -82,10 +92,12 @@ export function startSchedulers() {
       async () => {
         console.log("[scheduler] Daily auto-post starting...");
         try {
-          const result = await runMorningBriefing();
-          console.log(
-            `[scheduler] Daily auto-post done: ideas=${result.newIdeas} posts=${result.postsScheduled} errors=${result.errors.length}`,
-          );
+          for (const ownerId of await listOwnerIds()) {
+            const result = await runMorningBriefing(ownerId);
+            console.log(
+              `[scheduler] Daily auto-post done owner=${ownerId}: ideas=${result.newIdeas} posts=${result.postsScheduled} errors=${result.errors.length}`,
+            );
+          }
         } catch (e) {
           console.error("[scheduler] Daily auto-post failed:", e);
         }
@@ -101,8 +113,10 @@ export function startSchedulers() {
       async () => {
         console.log("[scheduler] Daily autofill starting...");
         try {
-          const r = await autofillCalendar(1);
-          console.log(`[scheduler] Daily autofill done: drafts=${r.draftsCreated} errors=${r.errors.length}`);
+          for (const ownerId of await listOwnerIds()) {
+            const r = await autofillCalendar(ownerId, 1);
+            console.log(`[scheduler] Daily autofill done owner=${ownerId}: drafts=${r.draftsCreated} errors=${r.errors.length}`);
+          }
         } catch (e) {
           console.error("[scheduler] Daily autofill failed:", e);
         }
@@ -118,8 +132,10 @@ export function startSchedulers() {
       discoverCron,
       async () => {
         try {
-          const r = await runDiscoverRefresh();
-          console.log(`[scheduler] Discover refresh OK batch=${r.batchId} ideas=${r.newIdeasCount}`);
+          for (const ownerId of await listOwnerIds()) {
+            const r = await runDiscoverRefresh(ownerId);
+            console.log(`[scheduler] Discover refresh OK owner=${ownerId} batch=${r.batchId} ideas=${r.newIdeasCount}`);
+          }
         } catch (e) {
           console.error("[scheduler] Discover refresh failed:", e);
         }
@@ -136,8 +152,10 @@ export function startSchedulers() {
       async () => {
         console.log("[scheduler] Saturday article thread generating...");
         try {
-          const r = await generateWeekendContent("article_thread");
-          console.log(`[scheduler] Sat article done: "${r.ideaTitle.substring(0, 60)}" tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+          for (const ownerId of await listOwnerIds()) {
+            const r = await generateWeekendContent("article_thread", ownerId);
+            console.log(`[scheduler] Sat article done owner=${ownerId}: "${r.ideaTitle.substring(0, 60)}" tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+          }
         } catch (e) {
           console.error("[scheduler] Saturday article failed:", e);
         }
@@ -151,8 +169,10 @@ export function startSchedulers() {
       async () => {
         console.log("[scheduler] Sunday weekly recap generating...");
         try {
-          const r = await generateWeekendContent("weekly_recap");
-          console.log(`[scheduler] Sun recap done: tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+          for (const ownerId of await listOwnerIds()) {
+            const r = await generateWeekendContent("weekly_recap", ownerId);
+            console.log(`[scheduler] Sun recap done owner=${ownerId}: tweets=${r.tweetCount}${r.error ? " err=" + r.error : ""}`);
+          }
         } catch (e) {
           console.error("[scheduler] Sunday recap failed:", e);
         }
@@ -183,7 +203,9 @@ export function startSchedulers() {
       "30 8 * * 0",
       async () => {
         try {
-          await refreshXAnalytics(14);
+          for (const ownerId of await listOwnerIds()) {
+            await refreshXAnalytics(14, ownerId);
+          }
         } catch (e) {
           console.error("[scheduler] X analytics refresh failed:", e);
         }

@@ -69,7 +69,7 @@ test.describe("HTTP API auth boundary", () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(Array.isArray(body)).toBeTruthy();
-    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((pillar: { userId: number | null }) => pillar.userId !== null)).toBeTruthy();
   });
 
   test("GET /api/posts returns posts array", async () => {
