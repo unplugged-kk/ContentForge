@@ -294,9 +294,9 @@ export async function getYouTubeConfig(
     }
   }
 
-  if (ownerUserId != null) return null;
-
-  // Ops / certification fallback: process env tokens.
+  // Ops / certification fallback: process env tokens. These are deployment-level
+  // operator credentials, not another tenant's row, so they stay a valid fallback
+  // behind the owner's own connected account.
   const envAccess = env.YOUTUBE_ACCESS_TOKEN?.trim() || null;
   const envRefresh = env.YOUTUBE_REFRESH_TOKEN?.trim() || null;
   if (envAccess || envRefresh) {
@@ -310,6 +310,8 @@ export async function getYouTubeConfig(
       uploadBase,
     };
   }
+
+  if (ownerUserId != null) return null;
 
   // Unscoped connected account (legacy single-tenant).
   if (ownerUserId == null) {

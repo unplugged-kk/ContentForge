@@ -183,9 +183,10 @@ async function getXQuickApiConfig(ownerUserId?: number | null): Promise<{ baseUr
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const baseUrl = getXQuickBaseUrl();
-  const token = ownerUserId == null
-    ? getXQuickToken(account?.accessToken ?? null)
-    : account?.accessToken?.trim() || null;
+  // Owner scoping forbids borrowing *another owner's* connected account; the
+  // deployment-level xQuick key/account pair is operator-wide configuration,
+  // not a tenant row, so it remains a valid fallback behind the owner's own.
+  const token = account?.accessToken?.trim() || getXQuickToken(null);
   if (!baseUrl || !token) return null;
   return { baseUrl, token };
 }
@@ -195,9 +196,7 @@ async function getXQuickClientConfig(ownerUserId?: number | null): Promise<{ bas
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const apiConfig = await getXQuickApiConfig(ownerUserId);
-  const xAccount = ownerUserId == null
-    ? getXQuickAccount(account?.username ?? null)
-    : account?.username?.trim() || null;
+  const xAccount = getXQuickAccount(account?.username ?? null);
   if (!apiConfig || !xAccount) return null;
   return { ...apiConfig, account: xAccount };
 }

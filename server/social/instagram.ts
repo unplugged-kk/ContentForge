@@ -344,21 +344,18 @@ export async function getInstagramConfigSummary(ownerUserId?: number | null): Pr
 }
 
 async function getInstagramConfig(ownerUserId?: number | null): Promise<InstagramConfig | null> {
-  const envToken = ownerUserId == null ? process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null : null;
-  const envUser = ownerUserId == null ? process.env.INSTAGRAM_USER_ID?.trim() || "me" : null;
-  if (envToken) {
-    return { graphBase: getInstagramGraphBaseUrl(), token: envToken, userId: envUser! };
-  }
+  const envToken = process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null;
+  const envUser = process.env.INSTAGRAM_USER_ID?.trim() || "me";
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("instagram", ownerUserId);
-    const token = owned?.accessToken?.trim() || null;
-    const userId = owned?.username?.trim() || "me";
+    const token = owned?.accessToken?.trim() || envToken;
+    const userId = owned?.username?.trim() || envUser;
     if (!token) return null;
     return { graphBase: getInstagramGraphBaseUrl(), token, userId };
   }
   const account = await storage.getConnectedAccount("instagram");
-  const token = account?.accessToken?.trim() || null;
-  const userId = account?.username?.trim() || "me";
+  const token = account?.accessToken?.trim() || envToken;
+  const userId = account?.username?.trim() || envUser;
   if (!token) return null;
   return { graphBase: getInstagramGraphBaseUrl(), token, userId };
 }

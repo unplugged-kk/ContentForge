@@ -16,6 +16,7 @@ import {
   users,
 } from "@shared/schema";
 import { storage } from "./storage";
+import { postTextToLinkedIn } from "./social/linkedin";
 import { checkYoutubeChannels } from "./youtubeConnector";
 import { runRssAutopostForBatch } from "./rssAutopost";
 import { and, eq } from "drizzle-orm";
@@ -246,5 +247,78 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
 
     const bReadA = await requestFor(ownerB, "GET", `/api/posts/${aOwn.body.id}`);
     assert.equal(bReadA.status, 404);
+  });
+
+  /**
+   * Phase 33.1 regression guard. Publication adapters resolve credentials as
+   * "the owner's own connected account, else the deployment-level env pair".
+   * The env fallback must never let one owner publish with another owner's
+   * stored connected-account token. Asserted on the real outbound
+   * Authorization header, not on internal state.
+   */
+  it("never sends a foreign owner's connected-account token to the provider", async () => {
+    const previousBaseUrl = process.env.LINKEDIN_API_BASE_URL;
+    const previousToken = process.env.LINKEDIN_ACCESS_TOKEN;
+    const previousUrn = process.env.LINKEDIN_AUTHOR_URN;
+
+    const seen: Array<{ authorization: string | null; author: string | null }> = [];
+    const provider = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => { raw += chunk; });
+      req.on("end", () => {
+        let author: string | null = null;
+        try { author = (JSON.parse(raw) as { author?: string }).author ?? null; } catch { /* non-JSON body */ }
+        seen.push({ authorization: req.headers.authorization ?? null, author });
+        res.writeHead(201, { "x-restli-id": `urn:li:share:${seen.length}` });
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
+    const providerPort = (provider.address() as { port: number }).port;
+
+    process.env.LINKEDIN_API_BASE_URL = `http://127.0.0.1:${providerPort}`;
+    process.env.LINKEDIN_ACCESS_TOKEN = "deployment-env-token";
+    process.env.LINKEDIN_AUTHOR_URN = "urn:li:person:deployment_default";
+
+    try {
+      const account = await storage.upsertConnectedAccount({
+        platform: "linkedin",
+        userId: ownerB,
+        username: "owner-b-linkedin-urn",
+        displayName: "Owner B LinkedIn",
+        accessToken: "owner-b-linkedin-token",
+        isActive: true,
+      });
+      const createdAccountId = account.id;
+
+      try {
+        // Owner A has no connected LinkedIn account: A must fall back to the
+        // deployment env pair, and specifically never to owner B's stored row.
+        await postTextToLinkedIn("Owner A publication attempt", ownerA);
+        assert.equal(seen.length, 1);
+        assert.equal(
+          seen[0].authorization,
+          "Bearer deployment-env-token",
+          "owner A must never publish with owner B's stored connected-account token",
+        );
+        assert.equal(seen[0].author, "urn:li:person:deployment_default");
+
+        // Owner B keeps their own credential, which outranks the env default.
+        await postTextToLinkedIn("Owner B publication attempt", ownerB);
+        assert.equal(seen.length, 2);
+        assert.equal(seen[1].authorization, "Bearer owner-b-linkedin-token");
+        assert.equal(seen[1].author, "owner-b-linkedin-urn");
+      } finally {
+        await storage.deleteConnectedAccount(ownerB, createdAccountId);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => provider.close((error) => error ? reject(error) : resolve()));
+      if (previousBaseUrl === undefined) delete process.env.LINKEDIN_API_BASE_URL;
+      else process.env.LINKEDIN_API_BASE_URL = previousBaseUrl;
+      if (previousToken === undefined) delete process.env.LINKEDIN_ACCESS_TOKEN;
+      else process.env.LINKEDIN_ACCESS_TOKEN = previousToken;
+      if (previousUrn === undefined) delete process.env.LINKEDIN_AUTHOR_URN;
+      else process.env.LINKEDIN_AUTHOR_URN = previousUrn;
+    }
   });
 });

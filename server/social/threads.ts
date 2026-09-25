@@ -219,21 +219,18 @@ export async function getThreadsConfigSummary(ownerUserId?: number | null): Prom
 }
 
 async function getThreadsConfig(ownerUserId?: number | null): Promise<ThreadsConfig | null> {
-  const envToken = ownerUserId == null ? process.env.THREADS_ACCESS_TOKEN?.trim() || null : null;
-  const envUser = ownerUserId == null ? process.env.THREADS_USER_ID?.trim() || "me" : null;
-  if (envToken) {
-    return { graphBase: getThreadsGraphBaseUrl(), token: envToken, userId: envUser! };
-  }
+  const envToken = process.env.THREADS_ACCESS_TOKEN?.trim() || null;
+  const envUser = process.env.THREADS_USER_ID?.trim() || "me";
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("threads", ownerUserId);
-    const token = owned?.accessToken?.trim() || null;
-    const userId = owned?.username?.trim() || "me";
+    const token = owned?.accessToken?.trim() || envToken;
+    const userId = owned?.username?.trim() || envUser;
     if (!token) return null;
     return { graphBase: getThreadsGraphBaseUrl(), token, userId };
   }
   const account = await storage.getConnectedAccount("threads");
-  const token = account?.accessToken?.trim() || null;
-  const userId = account?.username?.trim() || "me";
+  const token = account?.accessToken?.trim() || envToken;
+  const userId = account?.username?.trim() || envUser;
   if (!token) return null;
   return { graphBase: getThreadsGraphBaseUrl(), token, userId };
 }

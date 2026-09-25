@@ -510,3 +510,198 @@ The final tracked diff was inspected after all fixes.
 All four critical closure reproductions pass. Fresh verification found and fixed the remaining Phase 33.1 owner-propagation gaps. No unresolved Phase 33.1 product defect remains in the reviewed diff.
 
 **CRITICAL FINDINGS FIXED**
+
+---
+
+# Addendum — independent re-verification and a regression that was found
+
+A second, independent verification pass was run against this commit. It did **not**
+take the findings above on trust: every one was re-derived from source and
+re-proven by execution against a real database and a running production build.
+
+That pass found a **material regression introduced by the fix itself**, which the
+report above does not cover because it predates it. The regression is fixed and
+guarded; details follow.
+
+## A1. Environment for this pass
+
+- Baseline: `d9db1a7` (the audit commit). Verified tree: `ce884ea` + the changes in A3.
+- Node v24.19.0; local disposable **PostgreSQL 16.13** on `127.0.0.1:5433`.
+- The `DATABASE_URL` present in the environment points at a **remote Neon
+  production database**. It was deliberately **not** used. All DB-backed runs used
+  the local throwaway cluster, so no real production data was read or written.
+- Docker was unavailable in this environment, so Playwright E2E could not be run.
+  The E2E results in §8 above come from the earlier pass and are **not** re-verified here.
+
+## A2. Regression: over-broad credential gating broke 28 publication tests
+
+`ce884ea` correctly stopped cross-tenant credential reads by gating credential
+resolution on `ownerUserId == null`. That fix was too broad — it also discarded
+**deployment-level operator configuration** for every request that carried an
+owner, which is every authenticated request.
+
+```ts
+// server/social/linkedin.ts, as committed in ce884ea
+const token = ownerUserId == null
+  ? process.env.LINKEDIN_ACCESS_TOKEN?.trim() || account?.accessToken || null
+  : account?.accessToken?.trim() || null;   // env ignored whenever owner present
+```
+
+An operator configured purely through environment variables, with no per-tenant
+`connected_accounts` row, silently lost the ability to publish entirely.
+
+Measured, full DB suite against local PostgreSQL:
+
+| Tree | DB tests | Pass | Fail |
+|---|---|---|---|
+| baseline `d9db1a7` | 347 | 341 | 6 |
+| `ce884ea` as committed | 348 | 314 | **34** |
+| after correction | 349 | 343 | 6 |
+
+**28 publication tests were broken** across LinkedIn, Threads, Instagram, X
+reconciliation and visual delivery — including every "golden path publishes and
+persists the provider id" case. Causation proven by running the same file on both
+trees:
+
+```
+server/content/linkedin.dbtest.ts @ d9db1a7 : 6 pass / 0 fail
+server/content/linkedin.dbtest.ts @ ce884ea : 0 pass / 6 fail
+                                            (actual 'failed', expected 'published')
+```
+
+## A3. Correction applied
+
+The owner's own connected account still takes priority; the deployment's own env
+credentials remain a valid fallback behind it. Owner scoping forbids borrowing
+*another tenant's row* — it never forbade the operator's own deployment
+credentials. Applied uniformly across `linkedin.ts`, `x.ts`, `threads.ts`,
+`instagram.ts`, `youtube.ts`.
+
+`server/social/youtube.ts` additionally contained an explicit
+`if (ownerUserId != null) return null;` placed *before* its env fallback — the
+same defect in a more direct form; that ordering is now corrected.
+
+## A4. Proof the correction did not reopen the security hole
+
+New test in `server/legacyOwnerIsolation.dbtest.ts`, asserted on the **real
+outbound HTTP `Authorization` header** rather than internal state:
+
+```
+✔ never sends a foreign owner's connected-account token to the provider
+     owner A (owns no account) -> Authorization: Bearer deployment-env-token
+                                     author: urn:li:person:deployment_default
+     owner B (owns an account)  -> Authorization: Bearer owner-b-linkedin-token
+                                     author: owner-b-linkedin-urn
+```
+
+The test was confirmed to be a genuine guard: temporarily reintroducing the
+unscoped lookup made it fail with
+`owner A must never publish with owner B's stored connected-account token`. The
+correct implementation was then restored.
+
+## A5. Matrix results for this pass
+
+| Check | Result |
+|---|---|
+| `npm run check` (tsc) | pass, 0 errors |
+| `npm run build` | pass |
+| `npm run test:unit` | **766 / 766**, 0 fail |
+| `npm run test:db` (full serial) | **343 / 349**, 6 fail |
+| `legacyOwnerIsolation.dbtest.ts` | 2 / 2 (real HTTP + PostgreSQL) |
+| `adapters.test.ts` (QA-01, all 5 channels) | 5 / 5 |
+| `publicationConfigFailure.test.ts` (QA-01) | 1 / 1 |
+| Playwright E2E | **not run** — Docker unavailable |
+
+## A6. The 6 remaining DB failures are pre-existing
+
+The failure set is **byte-identical** to the baseline:
+
+```
+$ diff baseline_fails.txt head_after_fails.txt
+IDENTICAL — no regressions, no newly-fixed
+```
+
+```
+✖ enforces artifact content immutability in the database          (content lifecycle)
+✖ legacy NULL-attributed rows remain visible (documented bridge)  (owner isolation)
+✖ policy churn: exceeding maxConsecutiveActivations ...            (autonomy 29.4)
+✖ repeated autonomous rollbacks ... open the circuit breaker       (autonomy 29.4)
+✖ revises an asset as a new row and refuses in-place mutation      (visual intelligence)
+✖ rollback: an autonomous rollback re-activates the prior revision (autonomy 29.4)
+```
+
+All six fail identically at `d9db1a7`, before any Phase 33.1 change. They span
+autonomy 29.4, asset immutability, and the documented NULL-attributed legacy
+bridge — outside this phase's scope and untouched by it. They are recorded here
+rather than hidden, and are the correct starting point for the next phase.
+
+## A7. Additional risks found in this pass
+
+1. **NULL-owner publication rows (latent).** `publications.userId` is nullable and
+   `runPublication` propagates `leased.userId ?? null` into the adapters. No
+   current HTTP entrypoint can create such a row and every credential path fails
+   closed on a null owner — but a NULL-owner row inserted directly into the
+   database would reach the unscoped `getConnectedAccount(platform)` branch. A
+   NOT NULL constraint or a dispatch-time guard would close it.
+2. **`/api/publications/dispatch` is not owner-scoped.** The handler ignores the
+   authenticated caller and dispatches every tenant's due occurrences. Each
+   publication still uses its own owner's credentials, so this is a cross-tenant
+   *trigger*, not a credential leak — but one tenant can force outbound provider
+   calls on another's behalf.
+3. **`getUserId(req) ?? 1` remains in ~25 canonical handlers.** Currently dead
+   code because the `/api` authGate rejects unauthenticated requests first, but
+   it is the same shape of bug that becomes a cross-tenant read if a router is
+   ever mounted outside that gate. `sessionUserId()` in `server/routes.ts` is the
+   stronger pattern and the model to follow.
+
+## A8. Closure reproductions, re-run
+
+**OWN-01** — live HTTP, two real registered accounts on a running production build:
+
+```
+A lists [1]    B lists [2]
+A→A 200   A→B 404   B→A 404   anonymous 401
+A DELETE B 404 ("Post not found")   A PUT B 404
+A forges ownerId=B on create -> stored userId = 4 (forged 6 ignored)
+B's row intact after every A operation
+```
+
+**OWN-02** — genuinely fresh production database, default config:
+
+```
+[db] demo data seed disabled (set SEED_DEMO_DATA=1 to enable)
+posts=0  analytics=0  pillars=0  articles=0
+new operator /api/analytics/summary -> totalPosts 0, totalImpressions 0, totalLikes 0
+GET /api/posts -> []      GET /api/pillars -> []
+```
+
+**QA-01** — missing configuration, no external call attempted:
+
+```
+adapter: providerCalled=false, errorClass=policy_human
+runPublication: deterministic failed Result, zero unknown reconciliation rows
+5/5 adapter tests + 1/1 publication classification test, 0 outbound provider requests
+```
+
+**QA-03** — driving the real helper with a 207 envelope:
+
+```
+207 + failed    -> "Publication failed" (destructive)
+207 + unknown   -> "Publication needs verification"
+207 + mixed     -> "Publication results are mixed" (destructive)
+207 + published -> "Published successfully"   <-- the only success case
+207 + empty     -> "Publication result unavailable" (destructive)
+```
+
+## A9. Final status for this pass
+
+All four critical findings are fixed and independently verified, and all four
+audit reproductions close. One material defect introduced by the fix itself was
+found during verification and corrected, with a new behavioural test guarding
+the security property it touches.
+
+Nothing is hidden: the 6 pre-existing DB failures are enumerated and shown
+identical at baseline, and the unrun E2E suite is stated plainly rather than
+implied green.
+
+**CRITICAL FINDINGS FIXED**
