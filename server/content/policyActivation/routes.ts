@@ -9,7 +9,7 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { getUserId } from "../../middleware/userContext";
+import { requireOwnerId } from "../../middleware/userContext";
 import type { ContentDatabase } from "../storage";
 import {
   activatePolicyCandidate,
@@ -57,7 +57,7 @@ export function createPolicyActivationRouter(deps: PolicyActivationApiDeps): Rou
   // side useState so that browser reload / second tab sees correct state.
   router.get("/activated-ids", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const ids = await getActivatedCandidateIds(deps.database, ownerId);
       const actors = await getActivatedCandidateActors(deps.database, ownerId);
       return res.json({ activatedCandidateIds: ids, activatedCandidateActors: actors });
@@ -71,7 +71,7 @@ export function createPolicyActivationRouter(deps: PolicyActivationApiDeps): Rou
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid policy candidate id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = activateBodySchema.parse(req.body ?? {});
       const result = await activatePolicyCandidate(deps.database, id, ownerId, body.reason);
       return res.status(result.alreadyActivated ? 200 : 201).json(result);
@@ -91,7 +91,7 @@ export function createPolicyActivationRouter(deps: PolicyActivationApiDeps): Rou
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid policy candidate id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = activateBodySchema.parse(req.body ?? {});
       const result = await rollbackPolicyForCandidate(deps.database, id, ownerId, body.reason);
       return res.status(200).json(result);
@@ -130,7 +130,7 @@ export function createPolicyHistoryRouter(deps: PolicyActivationApiDeps): Router
   // GET /api/policies/history?policyKey=pol:x_post:x
   router.get("/history", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const policyKey = resolveQueryPolicyKey(req.query);
       if (!policyKey) {
         return res.status(400).json({ message: "policyKey (or format + channel) is required" });

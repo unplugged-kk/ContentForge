@@ -112,6 +112,37 @@ describe("authGate (HTTP boundary)", () => {
     assert.equal(res.status, 200);
     assert.equal(handlerRan, 1);
   });
+
+  /**
+   * Regression: the gate compared `req.path.startsWith("/api")`
+   * case-sensitively while Express routes case-insensitively. A single
+   * capital letter therefore reached the same handler with the gate stepped
+   * aside — anonymous read *and write* of owner 1's data, and anonymous
+   * access to paid AI endpoints. Found by the independent final audit.
+   */
+  it("does not let a case-variant path bypass the gate", async () => {
+    handlerRan = 0;
+    for (const path of ["/API/protected", "/Api/protected", "/aPi/protected", "/API/PROTECTED"]) {
+      const res = await fetch(`${baseUrl}${path}`);
+      assert.equal(res.status, 401, `${path} must not bypass authentication`);
+      assert.deepEqual(await res.json(), { message: "Unauthorized" });
+    }
+    const post = await fetch(`${baseUrl}/API/protected`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ownerId: 1, userId: 1 }),
+    });
+    assert.equal(post.status, 401);
+    assert.equal(handlerRan, 0, "no handler may run for an unauthenticated case-variant path");
+  });
+
+  it("still admits an authenticated case-variant path", async () => {
+    // The gate must not over-correct into rejecting paths the router serves.
+    const res = await fetch(`${baseUrl}/API/protected`, {
+      headers: { Cookie: "testsess=valid" },
+    });
+    assert.equal(res.status, 200);
+  });
 });
 
 describe("authGate wiring (static pins)", () => {

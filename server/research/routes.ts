@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import type { ResearchJob, ResearchEvidence, ResearchSource } from "@shared/schema";
-import { getUserId } from "../middleware/userContext";
+import { getUserId, requireOwnerId } from "../middleware/userContext";
 import { hasProvider, listProviders } from "./registry";
 import type { ClaimJobInput, ClaimJobResult } from "./storage";
 import { RESEARCH_LIMITS, resolveTimeWindow, depthBudget, expandQueries } from "./intelligence";
@@ -124,7 +124,7 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
       });
     }
 
-    const userId = getUserId(req) ?? 1;
+    const userId = requireOwnerId(req);
     const correlationId = randomUUID();
     const idempotencyKey = body.idempotencyKey ?? `research:${body.kind}:${randomUUID()}`;
     const window = resolveTimeWindow({
@@ -202,7 +202,7 @@ export function createResearchRouter(deps: ResearchApiDeps): Router {
   router.get("/jobs", async (req, res) => {
     const requested = Number(req.query.limit ?? 50);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
-    const userId = getUserId(req) ?? 1;
+    const userId = requireOwnerId(req);
     const jobs = await deps.storage.listJobs(userId, limit);
     return res.json(jobs.map((job) => serializeJob(job)));
   });
@@ -320,7 +320,7 @@ async function loadOwnedJob(
   }
   // Same default-user convention as job creation (single-operator today), so
   // anonymous/legacy access keeps working while distinct users stay isolated.
-  const userId = getUserId(req) ?? 1;
+  const userId = requireOwnerId(req);
   if (job.userId !== null && job.userId !== userId) {
     res.status(404).json({ message: "Research job not found" });
     return undefined;

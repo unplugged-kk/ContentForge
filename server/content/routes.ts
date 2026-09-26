@@ -26,7 +26,7 @@ import type {
   VideoRepurposingOutput,
   Voice,
 } from "@shared/schema";
-import { getUserId } from "../middleware/userContext";
+import { getUserId, requireOwnerId } from "../middleware/userContext";
 import type { ContentStoragePort } from "./storage";
 import {
   createOpportunityFromStory,
@@ -561,7 +561,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         storyId,
         body,
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
 
       for (const outcome of result.outcomes) {
@@ -629,7 +629,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const view = await inspectRepurposingPlan(
         id,
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       return res.json({
         id: view.plan.id,
@@ -664,7 +664,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const view = await inspectRepurposingPlan(
         id,
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       return res.json(
         view.outcomes
@@ -684,7 +684,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const plan = await cancelRepurposingPlan(
         id,
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       return res.json({ id: plan.id, status: plan.status, storyId: plan.storyId });
     } catch (error) {
@@ -700,7 +700,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const view = await inspectRepurposingPlan(
         id,
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       const snapshot = view.plan.snapshot as { targets?: unknown };
       const targets = Array.isArray(snapshot.targets) ? snapshot.targets : [];
@@ -708,7 +708,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         view.plan.storyId,
         { requestKey: view.plan.requestKey, targets: targets as Array<{ format: string; channel: string }> },
         planDeps(deps),
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       for (const outcome of result.outcomes) {
         if (outcome.job && outcome.job.status === "queued") {
@@ -838,7 +838,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       }
       const artifact = await createArtifact(
         {
-          userId: getUserId(req) ?? 1,
+          userId: requireOwnerId(req),
           generationJobId: null,
           opportunityId: opportunity.id,
           format: opportunity.format,
@@ -931,7 +931,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   /** Owner-wide artifact list (Phase 28.2F Today/Attention + Recent Activity) — no giant aggregate, one filtered resource list. */
   router.get("/artifacts", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const readiness = typeof req.query.readiness === "string" ? req.query.readiness : undefined;
       const limit = Number(req.query.limit ?? 20);
       const rows = await deps.content.listArtifactsByOwner(ownerId, {
@@ -1051,7 +1051,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
           content: deps.content,
           enqueuePublication: deps.enqueuePublication,
         },
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
       );
       return res.status(207).json({
         artifactId: result.artifactId,
@@ -1077,7 +1077,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const artifact = await deps.content.getArtifactForOwner(id, ownerId);
       if (!artifact) return res.status(404).json({ message: "Artifact not found" });
       const rows = await deps.content.listPublicationsByArtifact(id);
@@ -1110,7 +1110,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   /** Owner-scoped occurrences due within [from, to] (Phase 28.2F Today's Schedule / Publications tab). */
   router.get("/schedule-occurrences", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const now = new Date();
       const from = typeof req.query.from === "string" ? new Date(req.query.from) : now;
       const to =
@@ -1188,7 +1188,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   /** Owner-scoped publication list, optionally filtered by state (Phase 28.2F Attention/Publications tab). */
   router.get("/publications", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const state = typeof req.query.state === "string" ? req.query.state : undefined;
       const limit = Number(req.query.limit ?? 20);
       const rows = await deps.content.listPublicationsByOwner(ownerId, {
@@ -1207,7 +1207,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
       if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
@@ -1244,7 +1244,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/voices", async (req, res, next) => {
     try {
       const body = createVoiceBody.parse(req.body ?? {});
-      const voice = await createVoice(getUserId(req) ?? 1, body, { content: deps.content });
+      const voice = await createVoice(requireOwnerId(req), body, { content: deps.content });
       return res.status(201).json(serializeVoice(voice));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
@@ -1316,7 +1316,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/templates", async (req, res, next) => {
     try {
       const body = createTemplateBody.parse(req.body ?? {});
-      const template = await createTemplate(getUserId(req) ?? 1, body, { content: deps.content });
+      const template = await createTemplate(requireOwnerId(req), body, { content: deps.content });
       return res.status(201).json(serializeTemplate(template));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
@@ -1411,7 +1411,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   // ── Chat-to-post ────────────────────────────────────────────────────────────
   router.post("/generation/chat", async (req, res, next) => {
     try {
-      const result = await handleChatRequest(getUserId(req) ?? 1, req.body ?? {}, deps.chat);
+      const result = await handleChatRequest(requireOwnerId(req), req.body ?? {}, deps.chat);
       if (result.generationJobId !== null) {
         const job = await deps.content.getGenerationJob(result.generationJobId);
         if (job && job.status === "queued") {
@@ -1453,7 +1453,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/visual-generations", async (req, res, next) => {
     try {
       const { generation, created } = await createVisualGeneration(
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
         req.body ?? {},
         { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
       );
@@ -1485,7 +1485,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid visual generation id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const generation = await deps.content.getVisualGeneration(id);
       if (!generation || (generation.userId !== null && generation.userId !== ownerId)) {
         return res.status(404).json({ message: "Visual generation not found" });
@@ -1506,7 +1506,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const source = await deps.content.getVisualAsset(id);
       if (!source || (source.userId !== null && source.userId !== ownerId)) {
         return res.status(404).json({ message: "Visual asset not found" });
@@ -1576,7 +1576,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const requested = Number(req.query.limit ?? 50);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
     try {
-      const assets = await deps.content.listVisualAssets(getUserId(req) ?? 1, limit);
+      const assets = await deps.content.listVisualAssets(requireOwnerId(req), limit);
       return res.json(assets.map(serializeVisualAsset));
     } catch (error) {
       return next(error);
@@ -1589,7 +1589,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
     try {
       const asset = await deps.content.getVisualAsset(id);
-      if (!asset || asset.userId !== null && asset.userId !== (getUserId(req) ?? 1)) {
+      if (!asset || asset.userId !== null && asset.userId !== (requireOwnerId(req))) {
         return res.status(404).json({ message: "Visual asset not found" });
       }
       return res.json(serializeVisualAsset(asset));
@@ -1602,7 +1602,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/video-generations", async (req, res, next) => {
     try {
       const { generation, created } = await createVisualGeneration(
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
         { ...(req.body ?? {}), kind: "video" },
         { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
       );
@@ -1634,7 +1634,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid video generation id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const generation = await deps.content.getVisualGeneration(id);
       if (
         !generation ||
@@ -1659,7 +1659,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid video asset id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const source = await deps.content.getVisualAsset(id);
       if (
         !source ||
@@ -1718,7 +1718,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     rawBody({ type: ["video/mp4", "application/octet-stream"], limit: "80mb" }),
     async (req, res, next) => {
       try {
-        const ownerId = getUserId(req) ?? 1;
+        const ownerId = requireOwnerId(req);
         const parsed = importOwnedVideoQuery.safeParse(req.query);
         if (!parsed.success) {
           return res.status(400).json({ message: "durationMs, width, and height are required" });
@@ -1772,7 +1772,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (
         !asset ||
         asset.kind !== "video" ||
-        (asset.userId !== null && asset.userId !== (getUserId(req) ?? 1))
+        (asset.userId !== null && asset.userId !== (requireOwnerId(req)))
       ) {
         return res.status(404).json({ message: "Video asset not found" });
       }
@@ -1823,7 +1823,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.post("/audio/generations", async (req, res, next) => {
     try {
       const { generation, created } = await createVisualGeneration(
-        getUserId(req) ?? 1,
+        requireOwnerId(req),
         { ...(req.body ?? {}), kind: "audio", capability: "generate_audio" },
         { content: deps.content, storage: deps.visualStorage, contextReader: deps.generation.contextReader },
       );
@@ -1855,7 +1855,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid audio generation id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const generation = await deps.content.getVisualGeneration(id);
       if (
         !generation
@@ -1880,7 +1880,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid audio asset id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const asset = await deps.content.getVisualAsset(id);
       if (!asset || asset.kind !== "audio" || (asset.userId !== null && asset.userId !== ownerId)) {
         return res.status(404).json({ message: "Audio asset not found" });
@@ -1893,7 +1893,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
   router.post("/video/repurposing", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       if (!deps.content.claimVideoRepurposingJob) {
         return res.status(503).json({ message: "Video repurposing storage is not configured" });
       }
@@ -1940,7 +1940,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid video repurposing id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const job = deps.content.getVideoRepurposingJobForOwner
         ? await deps.content.getVideoRepurposingJobForOwner(id, ownerId)
         : undefined;
@@ -1962,7 +1962,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid video repurposing id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const job = deps.content.getVideoRepurposingJobForOwner
         ? await deps.content.getVideoRepurposingJobForOwner(id, ownerId)
         : undefined;
@@ -2001,7 +2001,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
       const body = attachVisualBody.parse(req.body ?? {});
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const [artifact, asset] = await Promise.all([
         deps.content.getArtifact(id),
         deps.content.getVisualAsset(body.visualAssetId),
@@ -2053,7 +2053,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
    */
   router.get("/context", async (req, res, next) => {
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       if (!deps.generation.contextReader) return res.json({ sources: [], contextHash: "no-context" });
       const assembly = await assembleContext(userId, deps.generation.contextReader);
       return res.json({
@@ -2081,7 +2081,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
       const body = createReferenceBody.parse(req.body ?? {});
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const reference = await deps.style.storage.insertReference({
         userId,
         rawContent: body.text,
@@ -2101,7 +2101,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.get("/style/references", async (req, res, next) => {
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const rows = await deps.style.storage.listOwnedReferences(userId);
       return res.json({ references: rows.map(publicReference) });
     } catch (error) {
@@ -2126,7 +2126,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
     try {
       const body = requestStyleAnalysisBody.parse(req.body ?? {});
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const { analysis, created } = await requestStyleAnalysis(userId, { referenceId: id, regenerate: body.regenerate }, deps.style);
       if (analysis.status === "requested") {
         try {
@@ -2153,7 +2153,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid style analysis id" });
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const analysis = await deps.style.storage.getStyleAnalysis(id);
       if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
         return res.status(404).json({ message: "Style analysis not found" });
@@ -2178,7 +2178,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid style analysis id" });
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const analysis = await deps.style.storage.getStyleAnalysis(id);
       if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
         return res.status(404).json({ message: "Style analysis not found" });
@@ -2206,7 +2206,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
     try {
       const body = requestCorpusAnalysisBody.parse(req.body ?? {});
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const { analysis, created } = await requestStyleAnalysis(
         userId,
         { referenceIds: body.referenceIds, regenerate: body.regenerate },
@@ -2235,7 +2235,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   router.get("/style/profiles", async (req, res, next) => {
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const rows = await deps.style.storage.listStyleProfiles(userId);
       return res.json({ profiles: rows.map(publicStyleProfile) });
     } catch (error) {
@@ -2248,7 +2248,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid style profile id" });
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const profile = await activateStyleProfile(userId, id, deps.style);
       return res.json(publicStyleProfile(profile));
     } catch (error) {
@@ -2262,7 +2262,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid style profile id" });
     if (!deps.style) return res.status(503).json({ message: "Style analysis is not configured" });
     try {
-      const userId = getUserId(req) ?? 1;
+      const userId = requireOwnerId(req);
       const profile = await deps.style.storage.getStyleProfile(id);
       if (!profile || (profile.userId !== null && profile.userId !== userId)) {
         return res.status(404).json({ message: "Style profile not found" });

@@ -13,7 +13,7 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { getUserId } from "../../middleware/userContext";
+import { requireOwnerId } from "../../middleware/userContext";
 import type { ContentDatabase } from "../storage";
 import type { ExperimentStoragePort } from "./store";
 import { experimentIdentityKey } from "./identity";
@@ -103,7 +103,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
   // 1. List experiments for owner
   router.get("/", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const status =
         typeof req.query.status === "string" && req.query.status.trim()
@@ -133,7 +133,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
   // 2. Create experiment with control and variants
   router.post("/", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = createExperimentBodySchema.parse(req.body);
 
       // Verify at least one control variant
@@ -197,7 +197,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
       return res.json(experiment);
@@ -211,7 +211,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -230,7 +230,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -248,7 +248,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -267,7 +267,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -283,7 +283,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -299,7 +299,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = assignBodySchema.parse(req.body);
 
       // Load opportunity
@@ -330,7 +330,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -346,7 +346,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
       if (!experiment) return res.status(404).json({ message: "Experiment not found" });
 
@@ -365,7 +365,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = decideBodySchema.parse(req.body);
 
       const experiment = await deps.store.getExperimentForOwner(id, ownerId);
@@ -392,7 +392,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = createPolicyCandidateBodySchema.parse(req.body);
 
       const candidate = await createPolicyCandidateFromExperiment(
@@ -418,7 +418,7 @@ export function createExperimentRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid experiment id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const candidates = await deps.store.listPolicyCandidatesForOwner(ownerId, 50, {
         experimentId: id,
       });
@@ -437,7 +437,7 @@ export function createPolicyCandidateRouter(deps: ExperimentApiDeps): Router {
   // List all policy candidates for owner
   router.get("/", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const status =
         typeof req.query.status === "string" && req.query.status.trim()
@@ -456,7 +456,7 @@ export function createPolicyCandidateRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid candidate id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const candidate = await deps.store.getPolicyCandidateForOwner(id, ownerId);
       if (!candidate) return res.status(404).json({ message: "Policy candidate not found" });
       return res.json(candidate);
@@ -470,7 +470,7 @@ export function createPolicyCandidateRouter(deps: ExperimentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid candidate id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = reviewPolicyCandidateBodySchema.parse(req.body);
 
       const candidate = await deps.store.getPolicyCandidateForOwner(id, ownerId);

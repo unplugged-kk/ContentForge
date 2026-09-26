@@ -7,7 +7,7 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { getUserId } from "../../middleware/userContext";
+import { requireOwnerId } from "../../middleware/userContext";
 import { JobFailure } from "../../jobs/failures";
 import type { ContentStoragePort, ContentDatabase } from "../storage";
 import { CANONICAL_METRICS } from "./constants";
@@ -51,7 +51,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
 
   router.get("/signals", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 200);
       const publicationId = parseId(req.query.publicationId);
       const artifactId = parseId(req.query.artifactId);
@@ -74,7 +74,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid signal id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const row = await deps.learning.getLearningSignalForOwner(id, ownerId);
       if (!row) return res.status(404).json({ message: "Learning signal not found" });
       const lineage = await resolveLineage(deps.database, {
@@ -92,7 +92,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
       if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
@@ -108,7 +108,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
       if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
@@ -137,7 +137,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid publication id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
       if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
@@ -166,7 +166,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
 
   router.get("/summary", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const summary = await computeAnalyticsSummary(deps.database, ownerId);
       return res.json(summary);
     } catch (error) {
@@ -176,7 +176,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
 
   router.get("/proposals", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const status =
         typeof req.query.status === "string" && req.query.status.trim()
@@ -200,7 +200,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
       if (!row) return res.status(404).json({ message: "Proposal not found" });
       return res.json(row);
@@ -213,7 +213,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
       if (!row) return res.status(404).json({ message: "Proposal not found" });
       const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : undefined;
@@ -228,7 +228,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid proposal id" });
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const row = await deps.learning.getLearningProposalForOwner(id, ownerId);
       if (!row) return res.status(404).json({ message: "Proposal not found" });
       const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : undefined;
@@ -241,7 +241,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
 
   router.get("/observations", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const dimension =
         typeof req.query.dimension === "string" && req.query.dimension.trim()
@@ -263,7 +263,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
 
   router.post("/extract", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const result = await extractObservationsAndProposals(deps.database, deps.learning, ownerId);
       return res.json(result);
     } catch (error) {

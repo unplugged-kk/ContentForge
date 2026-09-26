@@ -32,7 +32,16 @@ export const authGate: RequestHandler = (req, res, next) => {
   // NOTE: mounted globally (app.use(authGate)), so req.path is the full
   // path. Do NOT mount on a sub-path: Express strips the mount point from
   // req.path inside the middleware, which would break allowlist matching.
-  if (!req.path.startsWith("/api")) return next();
-  if (isPublicApiPath(req.path)) return next();
+  //
+  // Case folding is required, not cosmetic. Express routing is
+  // case-insensitive by default, so `/API/research/jobs` reaches the same
+  // handler as `/api/research/jobs` — but a case-sensitive comparison here
+  // did not match, and the gate stepped aside. That made every protected
+  // route reachable unauthenticated with a single capital letter, which in
+  // turn reached the `getUserId(req) ?? 1` fallbacks and served (and wrote)
+  // owner 1's data. The comparison must match the router's behaviour.
+  const path = req.path.toLowerCase();
+  if (!path.startsWith("/api")) return next();
+  if (isPublicApiPath(path)) return next();
   requireAuthMiddleware(req, res, next);
 };
