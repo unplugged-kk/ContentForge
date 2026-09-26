@@ -121,7 +121,7 @@ export function CreateStoryDialog({
           </DialogDescription>
           {researchJobId && (
             <div className="pt-1">
-              <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              <Badge variant="outline" className="text-xs text-muted-foreground">
                 Provenance: Researched (Job #{researchJobId})
               </Badge>
             </div>

@@ -15,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -155,6 +156,10 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
   });
 
   const isLoading = vaultQuery.isLoading || ideasQuery.isLoading || referencesQuery.isLoading;
+  // Any failed read must be told apart from a true empty result. A count shown as
+  // "0" when its query errored is the same lie as an empty state on a failure.
+  const savedLoadError = vaultQuery.isError || ideasQuery.isError || referencesQuery.isError;
+  const countOf = (errored: boolean, length: number | undefined) => (errored ? "—" : length ?? 0);
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6" data-testid="container-saved-tab">
@@ -187,7 +192,7 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
             onClick={() => setFilter("all")}
             data-testid="filter-saved-all"
           >
-            All ({unifiedItems.length})
+            All ({savedLoadError ? "—" : unifiedItems.length})
           </Button>
           <Button
             size="sm"
@@ -196,7 +201,7 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
             onClick={() => setFilter("references")}
             data-testid="filter-saved-references"
           >
-            References ({referencesQuery.data?.length ?? 0})
+            References ({countOf(referencesQuery.isError, referencesQuery.data?.length)})
           </Button>
           <Button
             size="sm"
@@ -205,7 +210,7 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
             onClick={() => setFilter("ideas")}
             data-testid="filter-saved-ideas"
           >
-            Ideas ({ideasQuery.data?.length ?? 0})
+            Ideas ({countOf(ideasQuery.isError, ideasQuery.data?.length)})
           </Button>
           <Button
             size="sm"
@@ -214,13 +219,23 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
             onClick={() => setFilter("vault")}
             data-testid="filter-saved-vault"
           >
-            Vault ({vaultQuery.data?.length ?? 0})
+            Vault ({countOf(vaultQuery.isError, vaultQuery.data?.length)})
           </Button>
         </div>
       </div>
 
       {/* Item List */}
-      {filteredItems.length > 0 ? (
+      {savedLoadError ? (
+        <ErrorState
+          title="Couldn't load your saved items"
+          description="Your knowledge base could not be retrieved. This is a read failure, not an empty library."
+          onRetry={() => {
+            void vaultQuery.refetch();
+            void ideasQuery.refetch();
+            void referencesQuery.refetch();
+          }}
+        />
+      ) : filteredItems.length > 0 ? (
         <div className="space-y-3" data-testid="list-saved-items">
           {filteredItems.map((item) => {
             const cleanContent = sanitizeUntrustedText(item.content);
@@ -230,7 +245,7 @@ export function SavedTab({ initialFilter = "all" }: SavedTabProps) {
                 <CardHeader className="pb-2 space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
-                      <Badge variant={item.entityType === "idea" ? "secondary" : "outline"} className="text-[11px] capitalize">
+                      <Badge variant={item.entityType === "idea" ? "secondary" : "outline"} className="text-xs capitalize">
                         {item.entityType === "vault" ? "Vault Note" : item.entityType}
                       </Badge>
                       <span className="text-xs text-muted-foreground">

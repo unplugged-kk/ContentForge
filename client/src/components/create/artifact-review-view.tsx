@@ -350,6 +350,18 @@ export function ArtifactReviewView({
             v{currentVersion}
           </Badge>
           <StatusBadge status={artifact.readiness} data-testid="badge-artifact-status" />
+          {historyQuery.isError && (
+            <span className="text-xs text-warning" data-testid="text-history-error">
+              Version history unavailable —{" "}
+              <button
+                type="button"
+                className="underline hover:text-foreground"
+                onClick={() => void historyQuery.refetch()}
+              >
+                retry
+              </button>
+            </span>
+          )}
         </div>
       </div>
 
@@ -365,7 +377,7 @@ export function ArtifactReviewView({
                 <span className="text-muted-foreground">·</span>
                 <span className="capitalize">{artifact.format.replace(/_/g, " ")}</span>
               </div>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {text.length} characters
               </span>
             </CardHeader>
@@ -417,7 +429,7 @@ export function ArtifactReviewView({
           {/* Compatibility Warning if unsupported */}
           {!compatibility.canPublish && (
             <div
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2"
+              className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning flex items-start gap-2"
               data-testid="banner-publish-incompatible"
             >
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -546,7 +558,9 @@ export function ArtifactReviewView({
                         disabled={approveMutation.isPending}
                         data-testid="button-review-approve"
                       >
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        {/* Sits on the primary Approve fill, so it uses --primary-foreground, not --success
+                            (a --success glyph would fall below 3:1 on the primary surface). */}
+                        <CheckCircle2 className="h-4 w-4 text-primary-foreground" />
                         Approve Content
                       </Button>
                       {isInReview && (
