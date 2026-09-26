@@ -429,7 +429,7 @@ export function CreateStudio({
 
       {/* 3. Content Setup Form */}
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold text-foreground">Content Setup</h3>
+        <h2 className="text-sm font-semibold text-foreground">Content Setup</h2>
 
         {/* Channel selector */}
         <div className="space-y-1.5">
@@ -633,9 +633,9 @@ export function CreateStudio({
 
       {/* 5. Generation Summary Box */}
       <Card className="p-4 bg-muted/30 border-muted" data-testid="card-generation-summary">
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
           Generation Summary
-        </h4>
+        </h3>
         <div className="text-xs space-y-1 text-foreground">
           <p>
             <span className="text-muted-foreground">Target: </span>

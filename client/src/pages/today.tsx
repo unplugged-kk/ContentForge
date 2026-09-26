@@ -96,9 +96,25 @@ export default function TodayPage() {
     (artifact) => (artifact as ArtifactLike & { readiness?: string }).readiness === "in_review",
   );
   const failedPublications = failedPublicationsQuery.data ?? [];
+  // An unconfirmed publication is stored as `state: "failed"` with
+  // `result.outcome: "unknown"` (server/content/publication.ts outcome classification),
+  // so the state-only failure read returns it while the outcome read lists it too — the
+  // same row, twice. Partition by publication id, using isSetupRequiredPublication as the
+  // model, so it renders exactly once as unknown: never as a failure, never dropped.
+  // Unknowns are collected from both reads so a row past the outcome window is not lost.
+  const unknownById = new Map<number, PublicationLike>();
+  for (const publication of publicationsQuery.data ?? []) {
+    if (publication.result?.outcome === "unknown") unknownById.set(publication.id, publication);
+  }
+  for (const publication of failedPublications) {
+    if (publication.result?.outcome === "unknown") unknownById.set(publication.id, publication);
+  }
+  const unknownPublications = Array.from(unknownById.values());
+  const unknownPublicationIds = new Set(unknownPublications.map((publication) => publication.id));
   const setupRequiredPublications = failedPublications.filter(isSetupRequiredPublication);
-  const publicationFailures = failedPublications.filter((publication) => !isSetupRequiredPublication(publication));
-  const unknownPublications = (publicationsQuery.data ?? []).filter((p) => p.result?.outcome === "unknown");
+  const publicationFailures = failedPublications.filter(
+    (publication) => !unknownPublicationIds.has(publication.id) && !isSetupRequiredPublication(publication),
+  );
   const runsNeedingApproval = (runsQuery.data?.runs ?? []).filter((r) => r.needsApproval);
   // Honest window disclosure: the failure read is capped by the server limit.
   const publicationsWindowTruncated = failedPublications.length >= 50;
