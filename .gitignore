@@ -4,7 +4,19 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+# Environment files. Everything except the committed examples is ignored.
+#
+# This was previously the single pattern `.env`, which matched only that exact
+# filename — so a backup like `.env.orig-backup` was silently committable. That
+# gap is what let real credentials into a local branch. The family is ignored
+# now, with the templates explicitly re-included so they stay tracked.
 .env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+*.env.local
+*.env.*.local
 
 # IDE / AI tooling
 .claude/
