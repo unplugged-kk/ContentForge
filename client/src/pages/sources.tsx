@@ -99,14 +99,12 @@ export default function SourcesPage() {
         }
       />
 
-      {/* Sources Views Navigation Bar */}
-      <div
-        className="border-b bg-muted/30 px-4 py-2 flex items-center justify-between gap-3 overflow-x-auto"
-        data-testid="nav-sources-views"
-      >
-        {/* Core Primary Navigation: Discover / Saved / Research */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+      {/* Sources Views Navigation Bar. One primary band above one subordinate band.
+          The compatibility row is preserved — its consolidation is a deferred nav change. */}
+      <div className="border-b bg-muted/30" data-testid="nav-sources-views">
+        {/* Primary views: Discover / Saved / Research */}
+        <div className="px-4 pt-2 flex items-center gap-1.5 overflow-x-auto">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mr-1 shrink-0">
             View:
           </span>
 
@@ -134,7 +132,7 @@ export default function SourcesPage() {
             data-testid="tab-sources-view-saved"
             className={cn(
               "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors shrink-0",
-              activeView === "saved" && savedFilter === "all"
+              activeView === "saved"
                 ? "bg-background text-foreground shadow-xs border"
                 : "text-muted-foreground hover:text-foreground hover:bg-background/50"
             )}
@@ -159,8 +157,12 @@ export default function SourcesPage() {
           </button>
         </div>
 
-        {/* Compatibility Views for Legacy Tests & Direct Navigation */}
-        <div className="flex items-center gap-1 shrink-0 border-l pl-3">
+        {/* Secondary / compatibility views, subordinate to the primary band. Kept as-is
+            for legacy tests & direct navigation; consolidating them is deferred. */}
+        <div className="px-4 pb-2 pt-1 flex items-center gap-1 overflow-x-auto">
+          <span className="text-xs font-medium text-muted-foreground/70 mr-1 shrink-0">
+            More:
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -169,7 +171,7 @@ export default function SourcesPage() {
             }}
             data-testid="tab-sources-view-ideas"
             className={cn(
-              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors shrink-0",
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
               activeView === "saved" && savedFilter === "ideas"
                 ? "bg-background text-foreground shadow-xs border"
                 : "text-muted-foreground hover:text-foreground"
@@ -187,7 +189,7 @@ export default function SourcesPage() {
             }}
             data-testid="tab-sources-view-vault"
             className={cn(
-              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors shrink-0",
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
               activeView === "saved" && savedFilter === "vault"
                 ? "bg-background text-foreground shadow-xs border"
                 : "text-muted-foreground hover:text-foreground"
@@ -205,7 +207,7 @@ export default function SourcesPage() {
             }}
             data-testid="tab-sources-view-references"
             className={cn(
-              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors shrink-0",
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
               activeView === "saved" && savedFilter === "references"
                 ? "bg-background text-foreground shadow-xs border"
                 : "text-muted-foreground hover:text-foreground"
@@ -220,7 +222,7 @@ export default function SourcesPage() {
             onClick={() => setActiveView("ingest")}
             data-testid="tab-sources-view-ingest"
             className={cn(
-              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors shrink-0",
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
               activeView === "ingest"
                 ? "bg-background text-foreground shadow-xs border"
                 : "text-muted-foreground hover:text-foreground"

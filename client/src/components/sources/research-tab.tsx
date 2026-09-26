@@ -4,6 +4,7 @@ import { History, RefreshCw, Compass, ArrowRight, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
@@ -71,7 +72,13 @@ export function ResearchTab({ onSelectJob }: ResearchTabProps) {
       </div>
 
       {/* History List */}
-      {jobs.length > 0 ? (
+      {jobsQuery.isError ? (
+        <ErrorState
+          title="Couldn't load research history"
+          description="Your research sessions could not be retrieved. This is a read failure, not an empty history."
+          onRetry={() => void jobsQuery.refetch()}
+        />
+      ) : jobs.length > 0 ? (
         <div className="space-y-3" data-testid="list-research-history">
           {jobs.map((job) => {
             const status = resolveResearchStatus({
@@ -99,7 +106,7 @@ export function ResearchTab({ onSelectJob }: ResearchTabProps) {
                             ? "destructive"
                             : "outline"
                         }
-                        className="text-[11px]"
+                        className="text-xs"
                       >
                         {status.label}
                       </Badge>

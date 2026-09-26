@@ -106,12 +106,8 @@ export function DiscoverTab() {
     queryKey: ["/api/research/jobs", activeJobId, "analysis"],
     enabled: activeJobId != null && (jobQuery.data?.status === "complete" || jobQuery.data?.status === "completed"),
     queryFn: async () => {
-      try {
-        const res = await apiRequest("GET", `/api/research/jobs/${activeJobId}/analysis`);
-        return res.json();
-      } catch {
-        return null;
-      }
+      const res = await apiRequest("GET", `/api/research/jobs/${activeJobId}/analysis`);
+      return res.json();
     },
   });
 
@@ -217,6 +213,10 @@ export function DiscoverTab() {
     errorMessage: job?.errorMessage || researchMutation.error?.message,
   });
 
+  // Read failures must be told apart from true empty results (brief truthfulness rule 5).
+  const sourcesLoadFailed = sourcesQuery.isError;
+  const evidenceLoadFailed = evidenceQuery.isError;
+
   const sources = sourcesQuery.data ?? [];
   const evidence = evidenceQuery.data ?? [];
   const analysisSnapshot = analysisQuery.data?.snapshot;
@@ -245,12 +245,12 @@ export function DiscoverTab() {
             <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <span>Research Provider Notice</span>
           </div>
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-xs">
             Some intelligence integrations are currently unavailable:
           </p>
           <div className="flex flex-wrap gap-2 pt-0.5">
             {limitations.map((lim) => (
-              <Badge key={lim.providerId} variant="outline" className="text-[10px] font-normal">
+              <Badge key={lim.providerId} variant="outline" className="text-xs font-normal">
                 {lim.userMessage}
               </Badge>
             ))}
@@ -297,7 +297,7 @@ export function DiscoverTab() {
               </button>
 
               {showUrlInput && (
-                <span className="text-[11px] text-muted-foreground italic">
+                <span className="text-xs text-muted-foreground italic">
                   Protected with SSRF safety guards
                 </span>
               )}
@@ -319,7 +319,7 @@ export function DiscoverTab() {
             {/* Research Controls: Window, Depth, SEO */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t text-xs">
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground">Time Window</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Time Window</Label>
                 <Select value={windowPreset} onValueChange={setWindowPreset} disabled={isPending}>
                   <SelectTrigger className="h-8 text-xs" data-testid="select-time-window" aria-label="Time window">
                     <SelectValue placeholder="Select window" />
@@ -334,7 +334,7 @@ export function DiscoverTab() {
               </div>
 
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground">Research Depth</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Research Depth</Label>
                 <Select value={depth} onValueChange={setDepth} disabled={isPending}>
                   <SelectTrigger className="h-8 text-xs" data-testid="select-research-depth" aria-label="Research depth">
                     <SelectValue placeholder="Select depth" />
@@ -348,7 +348,7 @@ export function DiscoverTab() {
               </div>
 
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground">SEO Enhancement</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">SEO Enhancement</Label>
                 <div className="flex items-center justify-between rounded-md border h-8 px-2.5 bg-muted/20">
                   <span className="text-xs text-muted-foreground">
                     {capabilitiesQuery.data?.openseo?.available ? "OpenSEO enabled" : "SEO unavailable"}
@@ -406,7 +406,7 @@ export function DiscoverTab() {
           <div className="rounded-lg border bg-card p-4 space-y-2 shadow-xs" data-testid="panel-research-summary">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <CheckCircle2 className="h-4 w-4 text-success" />
                 <h3 className="text-sm font-bold text-foreground">
                   {statusResolution.label}
                 </h3>
@@ -424,24 +424,43 @@ export function DiscoverTab() {
               </div>
             </div>
 
-            {/* Real Metrics Row */}
+            {/* Real Metrics Row. A failed read must never render as a zero count. */}
             <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted-foreground border-t">
-              <span><strong>{sources.length}</strong> sources reviewed</span>
+              {sourcesLoadFailed ? (
+                <span className="text-warning font-medium">Source count unavailable</span>
+              ) : (
+                <span><strong>{sources.length}</strong> sources reviewed</span>
+              )}
               <span>·</span>
-              <span><strong>{evidence.length}</strong> key findings</span>
+              {evidenceLoadFailed ? (
+                <span className="text-warning font-medium">Finding count unavailable</span>
+              ) : (
+                <span><strong>{evidence.length}</strong> key findings</span>
+              )}
               {conflicts.length > 0 && (
                 <>
                   <span>·</span>
-                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                  <span className="text-warning font-medium">
                     <strong>{conflicts.length}</strong> competing viewpoints
                   </span>
                 </>
               )}
             </div>
+            {(sourcesLoadFailed || evidenceLoadFailed || analysisQuery.isError) && (
+              <p className="text-xs text-muted-foreground">
+                Some results couldn't be loaded — this summary may be incomplete.
+              </p>
+            )}
           </div>
 
           {/* Source Result Cards */}
-          {sources.length > 0 ? (
+          {sourcesQuery.isError ? (
+            <ErrorState
+              title="Couldn't load sources"
+              description="The research run finished, but its sources could not be retrieved. This is a read failure, not a topic with no matches."
+              onRetry={() => void sourcesQuery.refetch()}
+            />
+          ) : sources.length > 0 ? (
             <div className="space-y-3" data-testid="list-research-results">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -495,6 +514,7 @@ export function DiscoverTab() {
             if (!open) setSelectedSource(null);
           }}
           source={selectedSource}
+          evidenceError={evidenceQuery.isError}
           evidenceList={evidence.filter(
             (e) => e.sourceId === selectedSource.id || e.canonicalUrl === selectedSource.canonicalUrl,
           )}

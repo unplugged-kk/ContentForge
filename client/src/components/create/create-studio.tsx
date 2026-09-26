@@ -28,6 +28,7 @@ import {
   Loader2,
   AlertCircle,
   Check,
+  ExternalLink,
 } from "lucide-react";
 
 export interface CreateStudioProps {
@@ -35,6 +36,10 @@ export interface CreateStudioProps {
   initialType?: ContentType;
   initialStoryId?: number;
   initialIdeaId?: number;
+  /** Handed off from Sources: the topic carried in `?topic=`. */
+  initialConcept?: string;
+  /** Handed off from Sources: the source carried in `?sourceUrl=`. */
+  initialSourceUrl?: string;
 }
 
 type StartWithSource = "story" | "idea" | "source" | "blank";
@@ -73,6 +78,8 @@ export function CreateStudio({
   initialType = "post",
   initialStoryId,
   initialIdeaId,
+  initialConcept,
+  initialSourceUrl,
 }: CreateStudioProps) {
   const { toast } = useToast();
 
@@ -104,7 +111,7 @@ export function CreateStudio({
   // State
   const [contentType, setContentType] = useState<ContentType>(initialType);
   const [startWith, setStartWith] = useState<StartWithSource>(
-    initialStoryId ? "story" : initialIdeaId ? "idea" : "blank",
+    initialStoryId ? "story" : initialIdeaId ? "idea" : initialSourceUrl ? "source" : "blank",
   );
 
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(initialStoryId ?? null);
@@ -113,7 +120,7 @@ export function CreateStudio({
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
 
   const [channel, setChannel] = useState<string>("x");
-  const [concept, setConcept] = useState<string>("");
+  const [concept, setConcept] = useState<string>(initialConcept ?? "");
   const [objective, setObjective] = useState<string>("Educate and share a concrete insight");
   const [audience, setAudience] = useState<string>("Platform & software engineers");
   const [angle, setAngle] = useState<string>("");
@@ -269,7 +276,7 @@ export function CreateStudio({
         {/* Notice for unsupported types like Audio */}
         {!activeTypeDesc.supported && (
           <div
-            className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2 mt-2"
+            className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning flex items-start gap-2 mt-2"
             data-testid="banner-type-unsupported"
           >
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -317,7 +324,13 @@ export function CreateStudio({
         {startWith === "story" && (
           <Card className="p-3 bg-muted/20 border-dashed space-y-2" data-testid="card-picker-story">
             <span className="text-xs font-medium text-muted-foreground">Select an existing Story:</span>
-            {storiesQuery.data && storiesQuery.data.length > 0 ? (
+            {storiesQuery.isError ? (
+              <ErrorState
+                title="Couldn't load stories"
+                description="Your stories could not be retrieved. This is a read failure, not an empty library."
+                onRetry={() => void storiesQuery.refetch()}
+              />
+            ) : storiesQuery.data && storiesQuery.data.length > 0 ? (
               <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
                 {storiesQuery.data.map((story) => (
                   <div
@@ -346,7 +359,13 @@ export function CreateStudio({
         {startWith === "idea" && (
           <Card className="p-3 bg-muted/20 border-dashed space-y-2" data-testid="card-picker-idea">
             <span className="text-xs font-medium text-muted-foreground">Select from your Ideas Bank:</span>
-            {ideasQuery.data && ideasQuery.data.length > 0 ? (
+            {ideasQuery.isError ? (
+              <ErrorState
+                title="Couldn't load ideas"
+                description="Your Ideas Bank could not be retrieved. This is a read failure, not an empty bank."
+                onRetry={() => void ideasQuery.refetch()}
+              />
+            ) : ideasQuery.data && ideasQuery.data.length > 0 ? (
               <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
                 {ideasQuery.data.map((idea) => (
                   <div
@@ -367,6 +386,39 @@ export function CreateStudio({
             ) : (
               <p className="text-xs text-muted-foreground italic py-2">
                 Ideas Bank is empty. You can write your idea directly below.
+              </p>
+            )}
+          </Card>
+        )}
+
+        {startWith === "source" && (
+          <Card className="p-3 bg-muted/20 border-dashed space-y-2" data-testid="card-picker-source">
+            <span className="text-xs font-medium text-muted-foreground">Creating from a source:</span>
+            {initialSourceUrl ? (
+              <>
+                {initialConcept && (
+                  <p className="text-xs font-semibold text-foreground break-words">{initialConcept}</p>
+                )}
+                {/^https?:\/\//i.test(initialSourceUrl) ? (
+                  <a
+                    href={initialSourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline break-all"
+                  >
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                    <span className="break-all">{initialSourceUrl}</span>
+                  </a>
+                ) : (
+                  <span className="text-xs text-muted-foreground break-all">{initialSourceUrl}</span>
+                )}
+                <p className="text-xs text-muted-foreground italic">
+                  The topic above was carried over from this source. Edit it before generating.
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground italic py-2">
+                No source context was carried over. Type your topic below.
               </p>
             )}
           </Card>
@@ -436,7 +488,7 @@ export function CreateStudio({
                 <button
                   type="button"
                   key={p}
-                  className="text-[10px] text-muted-foreground hover:text-foreground bg-muted/50 px-1.5 py-0.5 rounded"
+                  className="text-xs text-muted-foreground hover:text-foreground bg-muted/50 px-1.5 py-0.5 rounded"
                   onClick={() => setObjective(p)}
                 >
                   {p}
@@ -462,7 +514,7 @@ export function CreateStudio({
                 <button
                   type="button"
                   key={p}
-                  className="text-[10px] text-muted-foreground hover:text-foreground bg-muted/50 px-1.5 py-0.5 rounded"
+                  className="text-xs text-muted-foreground hover:text-foreground bg-muted/50 px-1.5 py-0.5 rounded"
                   onClick={() => setAudience(p)}
                 >
                   {p}

@@ -40,6 +40,8 @@ export interface SourceDetailModalProps {
     confidence?: string | number;
     corroborationCount?: number;
   }>;
+  /** True when the parent's evidence read failed — an absence of claims is then unknown, not empty. */
+  evidenceError?: boolean;
   conflicts?: Array<{
     claimA?: string;
     claimB?: string;
@@ -63,6 +65,7 @@ export function SourceDetailModal({
   onOpenChange,
   source,
   evidenceList = [],
+  evidenceError = false,
   conflicts = [],
   researchContext,
   isSaved = false,
@@ -122,18 +125,18 @@ export function SourceDetailModal({
           {/* Conflicting Evidence Notice */}
           {hasConflicts && (
             <div
-              className="rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-3 space-y-2 text-xs"
+              className="rounded-md border border-warning/30 bg-warning/10 p-3 space-y-2 text-xs"
               data-testid="panel-source-conflicts"
             >
-              <div className="flex items-center gap-1.5 font-semibold text-amber-900 dark:text-amber-200">
-                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="flex items-center gap-1.5 font-semibold text-warning">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
                 <span>Possible disagreement in evidence</span>
               </div>
-              <p className="text-amber-800 dark:text-amber-300">
+              <p className="text-warning">
                 Independent sources report competing findings on this topic. Review all evidence before using this claim in published content.
               </p>
               {conflicts.map((c, i) => (
-                <div key={i} className="pl-3 border-l-2 border-amber-400 dark:border-amber-700 space-y-1 my-1">
+                <div key={i} className="pl-3 border-l-2 border-warning/40 space-y-1 my-1">
                   {c.claimA && <p><span className="font-semibold">Source A:</span> {c.claimA}</p>}
                   {c.claimB && <p><span className="font-semibold">Source B:</span> {c.claimB}</p>}
                 </div>
@@ -157,12 +160,16 @@ export function SourceDetailModal({
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Extracted Evidence ({evidenceList.length})
               </h4>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {cred.description}
               </span>
             </div>
 
-            {evidenceList.length > 0 ? (
+            {evidenceError ? (
+              <p className="text-xs text-warning">
+                Evidence for this source couldn't be loaded — the claim list may be incomplete.
+              </p>
+            ) : evidenceList.length > 0 ? (
               <div className="space-y-2">
                 {evidenceList.map((item, idx) => (
                   <div key={item.id || idx} className="rounded-md border p-3 bg-card space-y-1 text-xs">
@@ -170,7 +177,7 @@ export function SourceDetailModal({
                       "{item.claim || item.excerpt}"
                     </p>
                     {item.corroborationCount && item.corroborationCount > 1 && (
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                      <span className="text-xs text-success">
                         Supported by {item.corroborationCount} sources
                       </span>
                     )}
@@ -187,7 +194,7 @@ export function SourceDetailModal({
           {/* Research Context */}
           {researchContext && (
             <section className="space-y-1 text-xs border-t pt-3">
-              <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Research Context
               </h4>
               <div className="flex flex-wrap items-center gap-3 text-muted-foreground">

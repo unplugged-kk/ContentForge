@@ -51,15 +51,15 @@ export function SourceCard({
       <CardHeader className="pb-2 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <Badge variant="outline" className="text-[11px] uppercase tracking-wider font-semibold">
+            <Badge variant="outline" className="text-xs uppercase tracking-wider font-semibold">
               {source.provider}
             </Badge>
-            <Badge variant={cred.variant} className="text-[11px]" data-testid="badge-source-credibility">
+            <Badge variant={cred.variant} className="text-xs" data-testid="badge-source-credibility">
               {hasConflicts && <AlertTriangle className="h-3 w-3 mr-1 shrink-0" />}
               {cred.label}
             </Badge>
             {corroborationCount > 1 && (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {corroborationCount} sources
               </span>
             )}
@@ -74,7 +74,7 @@ export function SourceCard({
           <button
             type="button"
             onClick={onOpen}
-            className="text-left hover:text-primary transition-colors focus:outline-none"
+            className="text-left rounded-sm hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             data-testid={`button-source-title-${source.id}`}
           >
             {title}

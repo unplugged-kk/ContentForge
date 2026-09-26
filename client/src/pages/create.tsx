@@ -125,6 +125,15 @@ export default function CreatePage() {
   };
 
   const currentSearch = search || window.location.search;
+
+  // Handoff context from Sources (`getCreateFromSourceUrl` emits ?topic=&sourceUrl=).
+  // Parsed during render, not in the effect above: CreateStudio seeds its state on
+  // mount and an effect runs after the first paint, so a state-seeded value would
+  // arrive one render too late and be dropped.
+  const handoffParams = new URLSearchParams(currentSearch);
+  const handoffConcept = handoffParams.get("topic") ?? undefined;
+  const handoffSourceUrl = handoffParams.get("sourceUrl") ?? undefined;
+
   const ActiveModeComponent = activeMode ? CREATE_MODE_COMPONENTS[activeMode] : null;
 
   return (
@@ -155,7 +164,7 @@ export default function CreatePage() {
         className="border-b bg-muted/40 px-4 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0"
         data-testid="nav-create-modes"
       >
-        <span className="text-[11px] font-medium text-muted-foreground mr-1 shrink-0">Mode:</span>
+        <span className="text-xs font-medium text-muted-foreground mr-1 shrink-0">Mode:</span>
         {CREATE_MODES.map((mode) => {
           const isActive = mode.key === "post-thread" ? activeMode === null : activeMode === mode.key;
           return (
@@ -179,12 +188,11 @@ export default function CreatePage() {
         <Link
           href="/youtube"
           data-testid="link-youtube-deferred"
-          aria-label="YouTube, legacy capability with canonical placement deferred"
-          title="YouTube remains available on its legacy route until its canonical home is decided"
+          title="Open YouTube ingest"
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background/50 shrink-0"
         >
           <Youtube className="h-3.5 w-3.5" />
-          <span>YouTube (deferred)</span>
+          <span>YouTube</span>
         </Link>
       </div>
 
@@ -229,6 +237,8 @@ export default function CreatePage() {
             initialType={contentType}
             initialStoryId={initialStoryId}
             initialIdeaId={initialIdeaId}
+            initialConcept={handoffConcept}
+            initialSourceUrl={handoffSourceUrl}
           />
         )}
       </div>
