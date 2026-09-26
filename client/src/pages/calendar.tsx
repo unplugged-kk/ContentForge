@@ -281,10 +281,26 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                   <div
                     key={day.toISOString()}
                     className={`min-h-[90px] rounded-md p-1.5 border transition-colors ${
-                      isCurrentMonth ? "bg-card" : "bg-background opacity-40"
+                      isCurrentMonth ? "bg-card" : "bg-background"
                     } ${isToday ? "border-primary/40" : "border-transparent"}`}
                   >
-                    <div className={`text-xs mb-1 ${isToday ? "text-primary font-semibold" : "text-muted-foreground"}`}>
+                    {/* De-emphasis is carried by colour, never by `opacity`: an
+                        `opacity-40` cell dimmed its own day number (and any post
+                        pills) below 4.5:1 in BOTH themes. In-month days now use
+                        full `text-foreground`; adjacent-month days stay on
+                        `text-muted-foreground`, which is the AA-compliant floor. */}
+                    <div
+                      className={`text-xs mb-1 ${
+                        isToday
+                          ? "text-foreground font-semibold"
+                          : isCurrentMonth
+                            ? "text-foreground"
+                            : "text-muted-foreground"
+                      }`}
+                      data-testid="text-calendar-day"
+                      data-day-current-month={isCurrentMonth ? "true" : "false"}
+                      data-day-today={isToday ? "true" : "false"}
+                    >
                       {format(day, "d")}
                     </div>
                     <div className="space-y-0.5">
