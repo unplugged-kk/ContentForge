@@ -24,7 +24,10 @@ export const globalLimiter: RateLimitRequestHandler = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skip: (req) => {
-    const p = req.path;
+    // Case-folded for the same reason the auth gate is: Express routes
+    // case-insensitively, so a case-sensitive check here let `/API/...`
+    // bypass the limiter entirely.
+    const p = req.path.toLowerCase();
     // Only rate-limit /api routes. Vite HMR, static assets, and uploads bypass.
     if (!p.startsWith("/api")) return true;
     return (

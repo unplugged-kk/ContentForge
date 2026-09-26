@@ -12,7 +12,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
-import { getUserId } from "../../middleware/userContext";
+import { requireOwnerId } from "../../middleware/userContext";
 import type { ContentDatabase } from "../storage";
 import { autonomyDecisions, type AutonomyMode } from "@shared/schema";
 import {
@@ -70,7 +70,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.get("/", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const config = await getOrCreateAutonomyConfig(deps.database, ownerId);
       res.json(config);
     } catch (error) {
@@ -80,7 +80,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.get("/status", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const config = await getOrCreateAutonomyConfig(deps.database, ownerId);
       res.json({
         enabled: config.enabled,
@@ -101,7 +101,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.post("/enable", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = configPatchSchema.parse(req.body ?? {});
       const patch: AutonomyConfigPatch = { ...body, enabled: true };
       if (!patch.mode) patch.mode = "observe_only";
@@ -114,7 +114,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.post("/disable", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const config = await disableAutonomy(deps.database, ownerId, ownerId);
       res.json(config);
     } catch (error) {
@@ -124,7 +124,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.post("/pause", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const config = await pauseAutonomy(deps.database, ownerId, ownerId);
       res.json(config);
     } catch (error) {
@@ -134,7 +134,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.post("/circuit-breaker/reset", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const config = await resetCircuitBreaker(deps.database, ownerId, ownerId);
       res.json(config);
     } catch (error) {
@@ -144,7 +144,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.get("/decisions", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const rows = await deps.database
         .select()
@@ -160,7 +160,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
 
   router.get("/decisions/:id", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const id = parseId(req.params.id);
       if (!id) return res.status(400).json({ error: "Invalid decision id" });
       const [row] = await deps.database.select().from(autonomyDecisions).where(eq(autonomyDecisions.id, id));
@@ -176,7 +176,7 @@ export function createAutonomyRouter(deps: AutonomyApiDeps): Router {
   // only a candidateId, which the controller re-derives everything from.
   router.post("/run", async (req, res, next) => {
     try {
-      const ownerId = getUserId(req) ?? 1;
+      const ownerId = requireOwnerId(req);
       const body = runSchema.parse(req.body ?? {});
       if (body.action === "rollback") {
         if (!body.rollbackTrigger) {

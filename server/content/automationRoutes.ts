@@ -17,7 +17,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { AutomationPolicy, AutomationRun } from "@shared/schema";
-import { getUserId } from "../middleware/userContext";
+import { requireOwnerId } from "../middleware/userContext";
 import {
   createAutomationPolicy,
   dispatchAutomationDueRuns,
@@ -137,7 +137,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
   router.post("/policies", async (req, res, next) => {
     try {
       const body = createPolicyBody.parse(req.body ?? {});
-      const policy = await createAutomationPolicy(getUserId(req) ?? 1, body, deps);
+      const policy = await createAutomationPolicy(requireOwnerId(req), body, deps);
       return res.status(201).json(serializePolicy(policy));
     } catch (error) {
       if (writeError(error, res)) return;
@@ -149,7 +149,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     const requested = Number(req.query.limit ?? 50);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
     try {
-      const policies = await deps.automation.listAutomationPoliciesForOwner(getUserId(req) ?? 1, limit);
+      const policies = await deps.automation.listAutomationPoliciesForOwner(requireOwnerId(req), limit);
       return res.json(policies.map(serializePolicy));
     } catch (error) {
       return next(error);
@@ -160,7 +160,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid automation policy id" });
     try {
-      const policy = await deps.automation.getAutomationPolicyForOwner(id, getUserId(req) ?? 1);
+      const policy = await deps.automation.getAutomationPolicyForOwner(id, requireOwnerId(req));
       if (!policy) return res.status(404).json({ message: "Automation policy not found" });
       const runs = await deps.automation.listAutomationRunsForPolicy(policy.id, 10);
       return res.json({
@@ -182,7 +182,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid automation policy id" });
     try {
       const body = updatePolicyBody.parse(req.body ?? {});
-      const policy = await updateAutomationPolicy(id, getUserId(req) ?? 1, body, deps);
+      const policy = await updateAutomationPolicy(id, requireOwnerId(req), body, deps);
       return res.json(serializePolicy(policy));
     } catch (error) {
       if (writeError(error, res)) return;
@@ -200,7 +200,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid automation policy id" });
     try {
       const body = triggerBody.parse(req.body ?? {});
-      const result = await triggerAutomationPolicy(id, getUserId(req) ?? 1, body, deps);
+      const result = await triggerAutomationPolicy(id, requireOwnerId(req), body, deps);
       return res.status(result.created ? 202 : 200).json({
         runId: result.run.id,
         policyId: result.run.policyId,
@@ -222,7 +222,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     const requested = Number(req.query.limit ?? 50);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
     try {
-      const runs = await deps.automation.listAutomationRunsForOwner(getUserId(req) ?? 1, limit);
+      const runs = await deps.automation.listAutomationRunsForOwner(requireOwnerId(req), limit);
       return res.json(runs.map(serializeRun));
     } catch (error) {
       return next(error);
@@ -240,7 +240,7 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid automation run id" });
     try {
-      const run = await deps.automation.getAutomationRunForOwner(id, getUserId(req) ?? 1);
+      const run = await deps.automation.getAutomationRunForOwner(id, requireOwnerId(req));
       if (!run) return res.status(404).json({ message: "Automation run not found" });
       const summary = await summarizeAutomationRun(run, deps);
       return res.json({ ...serializeRun(run), summary });

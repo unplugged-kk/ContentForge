@@ -87,6 +87,29 @@ export function getUserId(req: Request): number | undefined {
 }
 
 /**
+ * Owner id for an authenticated request, failing closed by throwing.
+ *
+ * Replaces the `getUserId(req) ?? 1` pattern used across the content and
+ * research routers. That pattern silently attributed an unauthenticated
+ * request to owner 1, so anything that got past the auth gate — a routing
+ * case difference was one — became anonymous read and write of owner 1's data.
+ *
+ * Distinct from `requireUserId(req, res)` above, which writes a 401 response
+ * and returns null; this one is for call sites whose surrounding code already
+ * assumes an authenticated owner and just needs the id.
+ *
+ * The auth gate guarantees a session before any handler runs, so this is
+ * unreachable on a protected route. If it is ever reached, throwing is the
+ * correct outcome: an error is recoverable, serving the wrong owner's data
+ * is not.
+ */
+export function requireOwnerId(req: Request): number {
+  const id = req.userId ?? req.session?.userId;
+  if (!id) throw new Error("requireOwnerId requires an authenticated session");
+  return id;
+}
+
+/**
  * Query fragment that scopes any per-user table to the given userId.
  * Use with Drizzle's `.where()`:
  *
