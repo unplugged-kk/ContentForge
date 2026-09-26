@@ -31,7 +31,7 @@ interface PostWithTweets extends Post {
 function PlatformBadge({ platform }: { platform: string | null }) {
   const channel = platform ?? "both";
   return (
-    <Badge variant="secondary" className="text-[10px] gap-1">
+    <Badge variant="secondary" className="text-xs gap-1">
       <ChannelIcon channel={channel} decorative />
       <span className="capitalize">{platform ?? "X + Threads"}</span>
     </Badge>
@@ -69,11 +69,11 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
     queryKey: ["/api/posts/queue/today"],
   });
 
-  const { data: analyticsSummary } = useQuery({
+  const { data: analyticsSummary, isError: analyticsError } = useQuery({
     queryKey: ["/api/analytics/summary"],
   });
 
-  const { data: xUsage } = useQuery<{
+  const { data: xUsage, isError: xUsageError } = useQuery<{
     readsThisMonth: number;
     monthlyLimit: number;
     percentUsed: number;
@@ -219,7 +219,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
       const res = await apiRequest("POST", `/api/posts/${postId}/publish`, {});
       const data = await res.json();
       if (data.tweetUrl) {
-        toast({ title: "Posted to X!", description: `Live: ${data.tweetUrl}` });
+        toast({ title: "Posted to X", description: `Live: ${data.tweetUrl}` });
       } else {
         toast({ title: "Posted" });
       }
@@ -310,7 +310,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
               <PlatformBadge platform={post.targetPlatform} />
             </div>
           </div>
-          <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground mt-1">
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground mt-1">
             {pillar && <span>{pillar}</span>}
             {post.scheduledAt && (
               <span className="flex items-center gap-1">
@@ -340,7 +340,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
                 <>
                   {editTweets.map((t, i) => (
                     <div key={t.id} className="space-y-1">
-                      <p className="text-[10px] text-muted-foreground">Tweet {i + 1} / {editTweets.length}</p>
+                      <p className="text-xs text-muted-foreground">Tweet {i + 1} / {editTweets.length}</p>
                       <Textarea
                         value={t.content}
                         onChange={(e) => {
@@ -349,7 +349,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
                         }}
                         className="text-xs min-h-[60px]"
                       />
-                      <p className="text-[10px] text-right text-muted-foreground">{t.content.length}/280</p>
+                      <p className="text-xs text-right text-muted-foreground">{t.content.length}/280</p>
                     </div>
                   ))}
                   <div className="flex gap-2">
@@ -364,7 +364,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
               ) : (
                 sorted.map((t, i) => (
                   <div key={t.id} className="space-y-0.5">
-                    <p className="text-[10px] text-muted-foreground">Tweet {i + 1}</p>
+                    <p className="text-xs text-muted-foreground">Tweet {i + 1}</p>
                     <p className="text-xs">{t.content}</p>
                   </div>
                 ))
@@ -384,9 +384,9 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
                 : <><ChevronDown className="h-3 w-3 mr-1" />{sorted.length} tweet{sorted.length !== 1 ? "s" : ""}</>}
             </Button>
 
-            {/* Edit */}
+            {/* Edit (tertiary — the forward action is Post to X) */}
             {!isEditing && (
-              <Button size="sm" variant="outline" onClick={() => startEdit(post)}>
+              <Button size="sm" variant="ghost" onClick={() => startEdit(post)}>
                 <Pencil className="h-3 w-3 mr-1" />Edit
               </Button>
             )}
@@ -454,6 +454,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
               onClick={() => setPendingDeleteId(post.id)}
               data-testid={`button-delete-post-${post.id}`}
               aria-label="Delete post"
+              className="ml-auto text-muted-foreground hover:text-destructive"
             >
               {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
             </Button>
@@ -491,7 +492,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
         </Alert>
 
         {xUsage?.nearLimit && (
-          <div className="mt-2 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400" data-testid="alert-x-api-budget">
+          <div className="mt-2 flex items-center gap-2 text-xs text-warning" data-testid="alert-x-api-budget">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             X API reads this month: {xUsage.readsThisMonth.toLocaleString()} / {xUsage.monthlyLimit.toLocaleString()} ({xUsage.percentUsed}%). Stats sync paused near limit.
           </div>
@@ -503,9 +504,14 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
             <RefreshCw className={`h-3 w-3 ${syncingStats ? "animate-spin" : ""}`} />
             Refresh stats
           </Button>
-          {xUsage && (
+          {xUsage && !xUsageError && (
             <span className="text-xs text-muted-foreground" data-testid="text-x-api-reads">
               {xUsage.readsThisMonth} / {xUsage.monthlyLimit} X reads this month
+            </span>
+          )}
+          {(analyticsError || xUsageError) && (
+            <span className="text-xs text-destructive" data-testid="text-stats-error">
+              Engagement stats couldn't be loaded.
             </span>
           )}
         </div>
@@ -582,7 +588,7 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
       </Dialog>
 
       <Dialog open={!!schedulePost} onOpenChange={() => setSchedulePost(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Schedule Post</DialogTitle>
           </DialogHeader>
@@ -592,6 +598,11 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
                 ? "Change the scheduled date/time or remove it from calendar."
                 : "Choose exact date and time for publishing."}
             </p>
+            {/* Make the target explicit before anything ships (WT-08). */}
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Target</span>
+              <PlatformBadge platform={schedulePost?.targetPlatform ?? null} />
+            </div>
             <div className="flex gap-2">
               <Input
                 type="date"

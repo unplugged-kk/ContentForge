@@ -43,9 +43,9 @@ interface OccurrenceRow {
 }
 
 function PlatformBadge({ platform }: { platform?: string | null }) {
-  if (!platform) return <span className="text-[11px] font-medium text-muted-foreground">—</span>;
+  if (!platform) return <span className="text-xs font-medium text-muted-foreground">—</span>;
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
       <ChannelIcon channel={platform} decorative />
       <span className="capitalize">{platform}</span>
     </span>
@@ -62,9 +62,20 @@ function endOfToday(): Date {
 }
 
 export default function TodayPage() {
-  const reviewQuery = useQuery<ArtifactLike[]>({ queryKey: ["/api/artifacts?readiness=in_review&limit=10"] });
+  // One artifacts query. Today previously fetched /api/artifacts twice under two
+  // different react-query keys on a single mount (D1 duplicate keys); the review
+  // subset is derived from the same window instead of a second request.
+  const artifactsQuery = useQuery<ArtifactLike[]>({ queryKey: ["/api/artifacts?limit=30"] });
   const runsQuery = useQuery<{ runs: RunLike[] }>({ queryKey: ["/api/agent/runs?limit=10"] });
-  const publicationsQuery = useQuery<PublicationLike[]>({ queryKey: ["/api/publications?limit=20"] });
+  // One publications key, shared in intent with publications-view (D1 duplicate keys).
+  const publicationsQuery = useQuery<PublicationLike[]>({ queryKey: ["/api/publications?limit=30"] });
+  // Failures are deliberately NOT limited to the newest window: the server already
+  // supports ?state= (server/content/routes.ts:1192). Without this a failure older
+  // than the newest 20 was silently dropped from the one surface that promises
+  // "what needs your attention right now" (D1 HIGH).
+  const failedPublicationsQuery = useQuery<PublicationLike[]>({
+    queryKey: ["/api/publications?state=failed&limit=50"],
+  });
 
   const from = startOfToday().toISOString();
   const to = endOfToday().toISOString();
@@ -72,18 +83,28 @@ export default function TodayPage() {
     queryKey: [`/api/schedule-occurrences?from=${from}&to=${to}&limit=50`],
   });
   const queuePostsQuery = useQuery<PostWithTweets[]>({ queryKey: ["/api/posts/queue/today"] });
-  const recentArtifactsQuery = useQuery<ArtifactLike[]>({ queryKey: ["/api/artifacts?limit=5"] });
 
-  const attentionSourcesErrored = [reviewQuery.isError, runsQuery.isError, publicationsQuery.isError].some(Boolean);
-  const attentionLoading = reviewQuery.isLoading || runsQuery.isLoading || publicationsQuery.isLoading;
-  const failedPublications = (publicationsQuery.data ?? []).filter((p) => p.state === "failed");
+  const attentionSourcesErrored = [
+    artifactsQuery.isError,
+    runsQuery.isError,
+    publicationsQuery.isError,
+    failedPublicationsQuery.isError,
+  ].some(Boolean);
+  const attentionLoading =
+    artifactsQuery.isLoading || runsQuery.isLoading || publicationsQuery.isLoading || failedPublicationsQuery.isLoading;
+  const reviewArtifacts = (artifactsQuery.data ?? []).filter(
+    (artifact) => (artifact as ArtifactLike & { readiness?: string }).readiness === "in_review",
+  );
+  const failedPublications = failedPublicationsQuery.data ?? [];
   const setupRequiredPublications = failedPublications.filter(isSetupRequiredPublication);
   const publicationFailures = failedPublications.filter((publication) => !isSetupRequiredPublication(publication));
   const unknownPublications = (publicationsQuery.data ?? []).filter((p) => p.result?.outcome === "unknown");
   const runsNeedingApproval = (runsQuery.data?.runs ?? []).filter((r) => r.needsApproval);
+  // Honest window disclosure: the failure read is capped by the server limit.
+  const publicationsWindowTruncated = failedPublications.length >= 50;
 
   const attentionItems = deriveAttentionItems({
-    artifactsNeedingReview: reviewQuery.data ?? [],
+    artifactsNeedingReview: reviewArtifacts,
     runsNeedingApproval,
     failedPublications: [...publicationFailures, ...setupRequiredPublications],
     unknownPublications,
@@ -101,15 +122,21 @@ export default function TodayPage() {
       (occurrence): ScheduleRow => ({ source: "occurrence", time: occurrence.occurrenceTime, occurrence }),
     ),
   ].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+  // A single failing leg leaves the other leg's rows in place, so the combined
+  // section is disclosed as possibly incomplete rather than shown as whole (D1).
+  const scheduleSectionErrored = queuePostsQuery.isError || occurrencesQuery.isError;
   const scheduleSectionError = queuePostsQuery.isError && occurrencesQuery.isError;
 
-  // Recent activity: bounded, composed from existing timestamped rows — no invented event feed.
-  type ActivityRow = { id: string; time: string; label: string };
+  // Recent activity: bounded, composed from existing timestamped rows — no invented
+  // event feed. Failures are separated from routine work so an hour-old failure is
+  // not crowded out of the cap by routine generation (WT-08).
+  type ActivityRow = { id: string; time: string; label: string; isFailure: boolean };
   const activityRows: ActivityRow[] = [
-    ...(recentArtifactsQuery.data ?? []).map((a): ActivityRow => ({
+    ...(artifactsQuery.data ?? []).map((a): ActivityRow => ({
       id: `artifact-${a.id}`,
       time: a.createdAt,
       label: `Generated a ${a.channel} draft`,
+      isFailure: false,
     })),
     ...(publicationsQuery.data ?? []).slice(0, 5).map((p): ActivityRow => ({
       id: `publication-${p.id}`,
@@ -119,12 +146,17 @@ export default function TodayPage() {
           ? `Published to ${p.channel}`
           : p.state === "failed"
             ? `${p.channel} publication failed`
-            : `${p.channel} publication ${p.state}`,
+            : p.result?.outcome === "unknown"
+              ? `${p.channel} publication needs verification`
+              : `${p.channel} publication ${p.state}`,
+      isFailure: p.state === "failed" || p.result?.outcome === "unknown",
     })),
-  ]
-    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-    .slice(0, 8);
-  const activityError = recentArtifactsQuery.isError && publicationsQuery.isError;
+  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+
+  const activityFailures = activityRows.filter((row) => row.isFailure).slice(0, 8);
+  const activityRoutine = activityRows.filter((row) => !row.isFailure).slice(0, Math.max(0, 8 - activityFailures.length));
+  const activityRendered = activityFailures.length + activityRoutine.length;
+  const activityError = artifactsQuery.isError && publicationsQuery.isError;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto" data-testid="page-today">
@@ -154,9 +186,10 @@ export default function TodayPage() {
               title="Couldn't load attention status"
               description="Some server-backed attention sources could not be checked. No clean status is being inferred."
               onRetry={() => {
-                void reviewQuery.refetch();
+                void artifactsQuery.refetch();
                 void runsQuery.refetch();
                 void publicationsQuery.refetch();
+                void failedPublicationsQuery.refetch();
               }}
             />
           ) : attentionItems.length === 0 ? (
@@ -184,7 +217,7 @@ export default function TodayPage() {
                 >
                   <div className="flex items-start gap-3 min-w-0">
                     <AlertTriangle
-                      className={`h-4 w-4 mt-0.5 shrink-0 ${item.severity === "action_required" ? "text-primary" : "text-amber-600 dark:text-amber-400"}`}
+                      className={`h-4 w-4 mt-0.5 shrink-0 ${item.severity === "action_required" ? "text-primary" : "text-warning"}`}
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{item.title}</p>
@@ -196,8 +229,12 @@ export default function TodayPage() {
                   </Button>
                 </Card>
               ))}
-              {attentionSourcesErrored && (
-                <p className="text-[11px] text-muted-foreground">Some attention sources couldn't be checked — this list may be incomplete.</p>
+              {(attentionSourcesErrored || publicationsWindowTruncated) && (
+                <p className="text-xs text-muted-foreground">
+                  {attentionSourcesErrored ? "Some attention sources couldn't be checked — this list may be incomplete." : ""}
+                  {attentionSourcesErrored && publicationsWindowTruncated ? " " : ""}
+                  {publicationsWindowTruncated ? "Showing the 50 most recent failures; older ones may not be listed." : ""}
+                </p>
               )}
             </div>
           )}
@@ -248,7 +285,7 @@ export default function TodayPage() {
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono text-muted-foreground">{formatTimeOfDay(row.time)}</span>
-                          <span className="text-[11px] font-medium text-muted-foreground capitalize">{row.occurrence.channel}</span>
+                          <span className="text-xs font-medium text-muted-foreground capitalize">{row.occurrence.channel}</span>
                           <StatusBadge status={row.occurrence.status} />
                         </div>
                         <p className="text-sm text-foreground line-clamp-1">{previewArtifactPayload(row.occurrence.artifact.payload) || "(empty)"}</p>
@@ -259,6 +296,11 @@ export default function TodayPage() {
                     </Card>
                   ),
                 )}
+                {scheduleSectionErrored && (
+                  <p className="text-xs text-muted-foreground">
+                    Some of today's schedule couldn't be checked — this list may be incomplete.
+                  </p>
+                )}
               </div>
             )}
           </section>
@@ -266,27 +308,49 @@ export default function TodayPage() {
           {/* Recent Activity */}
           <section className="space-y-3" data-testid="section-recent-activity">
             <h2 className="text-base font-medium tracking-tight">Recent Activity</h2>
-            {recentArtifactsQuery.isLoading && publicationsQuery.isLoading ? (
+            {artifactsQuery.isLoading && publicationsQuery.isLoading ? (
               <Skeleton className="h-16 w-full" />
             ) : activityError ? (
               <ErrorState
                 title="Couldn't load recent activity"
                 description="Something went wrong while loading what ContentForge has been doing."
                 onRetry={() => {
-                  void recentArtifactsQuery.refetch();
+                  void artifactsQuery.refetch();
                   void publicationsQuery.refetch();
                 }}
               />
             ) : activityRows.length === 0 ? (
               <EmptyState icon={Sparkle} title="Nothing yet" description="Activity will show up here as you create and publish content." />
             ) : (
-              <div className="space-y-1.5">
-                {activityRows.map((row) => (
-                  <div key={row.id} className="flex items-center gap-2 text-xs py-1.5 border-b last:border-0">
-                    <span className="text-muted-foreground shrink-0 w-14">{formatRelativeTime(row.time)}</span>
-                    <span className="text-foreground truncate">{row.label}</span>
+              <div className="space-y-3">
+                {activityFailures.length > 0 && (
+                  <div className="space-y-1.5" data-testid="list-activity-failures">
+                    <p className="text-xs font-medium text-warning">Failures</p>
+                    {activityFailures.map((row) => (
+                      <div key={row.id} className="flex items-center gap-2 text-xs py-1.5 border-b last:border-0">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+                        <span className="text-muted-foreground shrink-0 w-14">{formatRelativeTime(row.time)}</span>
+                        <span className="text-foreground truncate">{row.label}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+                {activityRoutine.length > 0 && (
+                  <div className="space-y-1.5" data-testid="list-activity-routine">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {activityFailures.length > 0 ? "Routine" : "Recent"}
+                    </p>
+                    {activityRoutine.map((row) => (
+                      <div key={row.id} className="flex items-center gap-2 text-xs py-1.5 border-b last:border-0">
+                        <span className="text-muted-foreground shrink-0 w-14">{formatRelativeTime(row.time)}</span>
+                        <span className="text-foreground truncate">{row.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {activityRows.length > activityRendered && (
+                  <p className="text-xs text-muted-foreground">Showing the {activityRendered} most recent updates.</p>
+                )}
               </div>
             )}
           </section>

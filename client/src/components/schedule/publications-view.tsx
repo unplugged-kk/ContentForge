@@ -17,8 +17,10 @@ import type { PublicationLike } from "@/lib/today-schedule-state";
  * this tab is where agent/create-studio-originated publications become
  * visible for the first time (previously invisible anywhere in the UI).
  */
+const PUBLICATION_WINDOW = 30;
+
 export function PublicationsView() {
-  const query = useQuery<PublicationLike[]>({ queryKey: ["/api/publications?limit=30"] });
+  const query = useQuery<PublicationLike[]>({ queryKey: [`/api/publications?limit=${PUBLICATION_WINDOW}`] });
 
   if (query.isLoading) {
     return (
@@ -55,8 +57,17 @@ export function PublicationsView() {
     );
   }
 
+  // The read is capped by the server limit and returns no total, so when the
+  // window is full the history is disclosed rather than shown as if complete (D1).
+  const truncated = rows.length >= PUBLICATION_WINDOW;
+
   return (
     <div className="p-4 space-y-2 overflow-y-auto" data-testid="list-publications">
+      {truncated && (
+        <p className="text-xs text-muted-foreground" data-testid="text-publications-truncated">
+          Showing the {PUBLICATION_WINDOW} most recent publications. Older history is not listed here.
+        </p>
+      )}
       {rows.map((pub) => {
         const isUnknown = pub.result?.outcome === "unknown";
         const isFailed = pub.state === "failed";
@@ -64,9 +75,9 @@ export function PublicationsView() {
           <Card key={pub.id} className="p-3 flex items-center justify-between gap-3" data-testid={`card-publication-${pub.id}`}>
             <div className="min-w-0 flex-1 space-y-0.5">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-medium text-muted-foreground capitalize">{pub.channel}</span>
+                <span className="text-xs font-medium text-muted-foreground capitalize">{pub.channel}</span>
                 <StatusBadge status={isUnknown ? "unknown" : pub.state} />
-                <span className="text-[11px] text-muted-foreground">{formatRelativeTime(pub.createdAt)}</span>
+                <span className="text-xs text-muted-foreground">{formatRelativeTime(pub.createdAt)}</span>
               </div>
               {(isFailed || isUnknown) && (
                 <p className="text-xs text-muted-foreground line-clamp-1">
