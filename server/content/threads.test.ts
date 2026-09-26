@@ -28,8 +28,23 @@ import {
   registerBuiltinChannelAdapters,
 } from "./adapters";
 import { formatChannelError } from "./opportunity";
+import {
+  pinTestEncryptionKey,
+  purgeStaleConnectedAccounts,
+} from "../testing/testIsolation";
 
 registerBuiltinChannelAdapters();
+
+// Phase 33.7 — account resolution below goes through the shared `storage`
+// singleton (`server/social/threads.ts#getThreadsConfig`). Pin one encryption key
+// for the run and purge any Threads `connected_accounts` row left by an earlier
+// run, so a stale row encrypted under a rotated key cannot make the first
+// account lookup throw "Failed to decrypt stored accessToken" before the
+// env-token fallback is reached.
+pinTestEncryptionKey();
+before(async () => {
+  await purgeStaleConnectedAccounts({ platform: "threads" });
+});
 
 function startThreadsDouble() {
   const containers = new Map<string, { text: string; status: string }>();
