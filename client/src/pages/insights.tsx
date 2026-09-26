@@ -13,7 +13,14 @@ export type InsightsView = "performance" | "learning" | "ai-usage";
 export default function InsightsPage() {
   const [location] = useLocation();
   const searchString = useSearch();
-  const [activeTab, setActiveTab] = useState<InsightsView>("performance");
+
+  // Initialise straight from the URL. Previously the default was "performance",
+  // so opening /insights?view=learning mounted (and fetched) the Performance
+  // view first, then discarded it — three wasted GETs on every load. The effect
+  // below still keeps the tab in sync with later navigation.
+  const [activeTab, setActiveTab] = useState<InsightsView>(() =>
+    resolveInsightsTab(new URLSearchParams(searchString || "").get("view")),
+  );
 
   // Sync with search param or legacy location
   useEffect(() => {
@@ -51,35 +58,39 @@ export default function InsightsPage() {
         description="Performance analytics, observed learning patterns, and AI usage"
         testId="page-header-insights"
         titleTestId="text-page-title"
-        action={
-          <TabsList className="h-8" data-testid="tabs-insights-views">
-            <TabsTrigger
-              value="performance"
-              className="text-xs gap-1.5 px-3 h-7"
-              data-testid="tab-trigger-performance"
-            >
-              <BarChart3 className="h-3.5 w-3.5" />
-              <span data-testid="tab-trigger-analytics">Performance</span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="learning"
-              className="text-xs gap-1.5 px-3 h-7"
-              data-testid="tab-trigger-learning"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Learning
-            </TabsTrigger>
-            <TabsTrigger
-              value="ai-usage"
-              className="text-xs gap-1.5 px-3 h-7"
-              data-testid="tab-trigger-ai-usage"
-            >
-              <Bot className="h-3.5 w-3.5" />
-              AI Usage & Cost
-            </TabsTrigger>
-          </TabsList>
-        }
       />
+
+      {/* View tabs belong to the page body, not the header's primary-action slot
+          (which is reserved for an action — /insights has none). overflow-x-auto
+          keeps the strip reachable at narrow viewports. */}
+      <div className="flex shrink-0 border-b bg-background px-4 py-2">
+        <TabsList className="h-8 w-full justify-start overflow-x-auto" data-testid="tabs-insights-views">
+          <TabsTrigger
+            value="performance"
+            className="text-xs gap-1.5 px-3 h-7"
+            data-testid="tab-trigger-performance"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            <span data-testid="tab-trigger-analytics">Performance</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value="learning"
+            className="text-xs gap-1.5 px-3 h-7"
+            data-testid="tab-trigger-learning"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            Learning
+          </TabsTrigger>
+          <TabsTrigger
+            value="ai-usage"
+            className="text-xs gap-1.5 px-3 h-7"
+            data-testid="tab-trigger-ai-usage"
+          >
+            <Bot className="h-3.5 w-3.5" />
+            AI Usage & Cost
+          </TabsTrigger>
+        </TabsList>
+      </div>
 
       <div className="flex-1 overflow-hidden">
         <TabsContent

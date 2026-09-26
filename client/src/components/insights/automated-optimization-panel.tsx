@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ErrorState } from "@/components/ui-shared/error-state";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Bot, ShieldAlert } from "lucide-react";
@@ -78,10 +79,10 @@ export function AutomatedOptimizationPanel() {
   const queryClient = useQueryClient();
   const [showAllDecisions, setShowAllDecisions] = useState(false);
 
-  const { data: status, isLoading } = useQuery<AutonomyStatus>({
+  const { data: status, isLoading, isError: statusError, refetch: refetchStatus } = useQuery<AutonomyStatus>({
     queryKey: ["/api/autonomy/status"],
   });
-  const { data: decisions } = useQuery<AutonomyDecision[]>({
+  const { data: decisions, isError: decisionsError, refetch: refetchDecisions } = useQuery<AutonomyDecision[]>({
     queryKey: ["/api/autonomy/decisions"],
   });
 
@@ -121,6 +122,18 @@ export function AutomatedOptimizationPanel() {
     );
   }
 
+  if (statusError) {
+    return (
+      <Card className="p-4" data-testid="section-automated-optimization">
+        <ErrorState
+          title="Couldn't load automated optimization"
+          description="The autonomy status could not be read, so no enabled/disabled state is being inferred."
+          onRetry={() => refetchStatus()}
+        />
+      </Card>
+    );
+  }
+
   const visibleDecisions = showAllDecisions ? decisions ?? [] : (decisions ?? []).slice(0, 5);
 
   return (
@@ -152,7 +165,7 @@ export function AutomatedOptimizationPanel() {
         </div>
 
         {status?.circuitBreakerState === "open" && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          <div className="flex items-start gap-2 border-l-2 border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
             <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium">Circuit breaker is open -- no autonomous activation can occur.</p>
@@ -213,14 +226,20 @@ export function AutomatedOptimizationPanel() {
 
         <div>
           <h4 className="text-xs font-semibold text-foreground mb-2">Recent Decisions</h4>
-          {!decisions || decisions.length === 0 ? (
+          {decisionsError ? (
+            <ErrorState
+              title="Couldn't load autonomous decisions"
+              description="The decision log could not be read. This is a read failure, not an empty log."
+              onRetry={() => refetchDecisions()}
+            />
+          ) : !decisions || decisions.length === 0 ? (
             <p className="text-xs text-muted-foreground">No autonomous decisions recorded yet.</p>
           ) : (
-            <ul className="space-y-1.5" data-testid="list-autonomy-decisions">
+            <ul className="divide-y divide-border/40" data-testid="list-autonomy-decisions">
               {visibleDecisions.map((d) => (
-                <li key={d.id} className="text-xs border rounded-md p-2 flex items-start justify-between gap-2">
+                <li key={d.id} className="text-xs py-2 flex items-start justify-between gap-2">
                   <div>
-                    <span className={d.outcome === "allowed" ? "text-emerald-700 font-medium" : "text-muted-foreground font-medium"}>
+                    <span className={d.outcome === "allowed" ? "text-success font-medium" : "text-muted-foreground font-medium"}>
                       {d.outcome === "allowed" ? "Allowed" : "Denied"}
                     </span>{" "}
                     <span className="text-muted-foreground">

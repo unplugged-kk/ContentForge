@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -49,6 +49,7 @@ import {
   Play,
   Pause,
   FileText,
+  type LucideIcon,
 } from "lucide-react";
 
 interface StyleProfileItem {
@@ -231,6 +232,88 @@ function formatDecisionBadge(decision: string | null): { label: string; variant:
   }
 }
 
+// ── Tier identity ────────────────────────────────────────────────────────────
+// Five sections used to render one byte-identical header (icon + text-lg h2 +
+// an outline badge carrying the tier word). The tier now lives in the eyebrow
+// label and the icon, and the heading weight separates the two action queues
+// (Tier 1 / 1.5) from the reference/measurement lanes (Tier 2 / 3).
+type SectionTier = "queue" | "learn" | "measure";
+
+const TIER_HEADER_CLASS: Record<SectionTier, string> = {
+  queue: "text-base font-semibold",
+  learn: "text-sm font-semibold",
+  measure: "text-sm font-medium",
+};
+
+const TIER_ICON_CLASS: Record<SectionTier, string> = {
+  queue: "text-primary",
+  learn: "text-muted-foreground",
+  measure: "text-muted-foreground",
+};
+
+function SectionHeader({
+  icon: Icon,
+  tier,
+  label,
+  title,
+  description,
+  action,
+}: {
+  icon: LucideIcon;
+  tier: SectionTier;
+  label: string;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 pb-3 border-b">
+      <div className="space-y-1 min-w-0">
+        <span className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+          <Icon className={`h-3.5 w-3.5 shrink-0 ${TIER_ICON_CLASS[tier]}`} aria-hidden="true" />
+          {label}
+        </span>
+        <h2 className={TIER_HEADER_CLASS[tier]}>{title}</h2>
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      </div>
+      {action ? <div className="shrink-0 self-start sm:self-auto">{action}</div> : null}
+    </div>
+  );
+}
+
+// ── Observed delta ───────────────────────────────────────────────────────────
+// Sign and colour are derived from the value, never hardcoded. The previous
+// Observed Delta tile hardcoded emerald and prefixed a literal "+", so a
+// regression rendered green and a negative value rendered as "+-12%".
+function deltaTone(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "text-muted-foreground";
+  const n = Number(value);
+  if (isNaN(n) || n === 0) return "text-muted-foreground";
+  return n > 0 ? "text-success" : "text-destructive";
+}
+
+function MetricDelta({
+  value,
+  className = "",
+}: {
+  value: string | number | null | undefined;
+  className?: string;
+}) {
+  if (value === null || value === undefined || value === "") {
+    return <span className={`text-muted-foreground ${className}`}>—</span>;
+  }
+  const n = Number(value);
+  if (isNaN(n)) {
+    return <span className={`text-muted-foreground ${className}`}>—</span>;
+  }
+  return (
+    <span className={`font-semibold ${deltaTone(value)} ${className}`}>
+      {n > 0 ? "+" : ""}
+      {value}%
+    </span>
+  );
+}
+
 export function LearningView() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -271,6 +354,8 @@ export function LearningView() {
   const {
     data: observationsData,
     isLoading: isObservationsLoading,
+    error: observationsError,
+    refetch: refetchObservations,
   } = useQuery<LearningObservationItem[]>({
     queryKey: ["/api/learning/observations"],
   });
@@ -552,7 +637,11 @@ export function LearningView() {
   // Server-derived activation state: which candidate IDs have been activated
   // and not subsequently rolled back. Survives browser reload, second tab,
   // and app restart -- authoritative truth comes from policyActivations table.
-  const { data: activatedIdsData } = useQuery<{
+  const {
+    data: activatedIdsData,
+    isError: activatedIdsError,
+    refetch: refetchActivatedIds,
+  } = useQuery<{
     activatedCandidateIds: number[];
     activatedCandidateActors: Record<number, "human" | "autonomous_controller">;
   }>({
@@ -640,31 +729,26 @@ export function LearningView() {
 
       {/* ── TIER 1: PROPOSED (OPTIMIZATION CANDIDATES) ── */}
       <div className="space-y-4" data-testid="section-learning-proposals">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Lightbulb className="h-5 w-5 text-amber-500" />
-              <h2 className="text-lg font-semibold text-foreground">Optimization Proposals</h2>
-              <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/30">
-                Proposed
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Candidate optimizations grounded in empirical observations. All proposals are human-reviewable; production policies remain unchanged.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs h-8 gap-1.5 shrink-0 self-start sm:self-auto"
-            onClick={() => extractMutation.mutate()}
-            disabled={extractMutation.isPending}
-            data-testid="button-run-extraction"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${extractMutation.isPending ? "animate-spin" : ""}`} />
-            Analyze Signals
-          </Button>
-        </div>
+        <SectionHeader
+          icon={Lightbulb}
+          tier="queue"
+          label="Action queue"
+          title="Optimization Proposals"
+          description="Candidate optimizations grounded in empirical observations. All proposals are human-reviewable; production policies remain unchanged."
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-8 gap-1.5"
+              onClick={() => extractMutation.mutate()}
+              disabled={extractMutation.isPending}
+              data-testid="button-run-extraction"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${extractMutation.isPending ? "animate-spin" : ""}`} />
+              Analyze Signals
+            </Button>
+          }
+        />
 
         {isProposalsLoading ? (
           <div className="space-y-3">
@@ -715,10 +799,10 @@ export function LearningView() {
                       <div className="space-y-1.5 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-foreground">{prop.title}</span>
-                          <Badge variant="outline" className="text-[10px] uppercase font-medium">
+                          <Badge variant="outline" className="text-xs uppercase font-medium">
                             {formatProposalType(prop.proposalType)}
                           </Badge>
-                          <Badge variant={quality.variant as any} className="text-[10px]">
+                          <Badge variant={quality.variant as any} className="text-xs">
                             {quality.label} ({quality.sampleDescription})
                           </Badge>
                         </div>
@@ -734,7 +818,7 @@ export function LearningView() {
                             <Button
                               size="sm"
                               variant="default"
-                              className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
+                              className="h-7 text-xs gap-1 bg-success hover:bg-success/90 text-success-foreground"
                               onClick={() => acceptMutation.mutate(prop.id)}
                               disabled={acceptMutation.isPending || rejectMutation.isPending}
                               data-testid={`button-accept-proposal-${prop.id}`}
@@ -755,7 +839,7 @@ export function LearningView() {
                             </Button>
                           </>
                         ) : prop.status === "accepted" ? (
-                          <Badge variant="default" className="text-xs bg-emerald-700 gap-1 py-1" data-testid={`badge-status-accepted-${prop.id}`}>
+                          <Badge variant="default" className="text-xs bg-success text-success-foreground gap-1 py-1" data-testid={`badge-status-accepted-${prop.id}`}>
                             <Check className="h-3 w-3" />
                             Accepted (Human Reviewed)
                           </Badge>
@@ -782,14 +866,14 @@ export function LearningView() {
                   <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
                     <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           <strong>Hypothesis:</strong> {prop.expectedImpactHypothesis}
                         </span>
                       </div>
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground self-start sm:self-auto gap-1"
+                        className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground self-start sm:self-auto gap-1"
                         onClick={() => toggleEvidence(prop.id)}
                         data-testid={`button-toggle-evidence-${prop.id}`}
                       >
@@ -799,40 +883,40 @@ export function LearningView() {
                       </Button>
                     </div>
 
-                    {/* Expandable Evidence Drawer */}
+                    {/* Expandable Evidence Drawer — a definition list on one rule, no nested boxes */}
                     {isExpanded && (
                       <div
-                        className="p-3 rounded-md bg-muted/40 border text-[11px] space-y-2 mt-2"
+                        className="pt-3 mt-2 border-t border-border/40 text-xs space-y-2"
                         data-testid={`drawer-evidence-${prop.id}`}
                       >
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                          <div className="p-2 rounded bg-background/60 border">
-                            <span className="text-muted-foreground block text-[10px]">Verified Samples</span>
-                            <span className="font-semibold text-foreground text-xs" data-testid="text-evidence-sample-count">
+                        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+                          <div className="space-y-0.5">
+                            <dt className="text-xs text-muted-foreground">Verified Samples</dt>
+                            <dd className="font-semibold text-foreground text-xs" data-testid="text-evidence-sample-count">
                               {prop.evidenceSummary?.sampleCount ?? "—"} publications
-                            </span>
+                            </dd>
                           </div>
-                          <div className="p-2 rounded bg-background/60 border">
-                            <span className="text-muted-foreground block text-[10px]">Candidate Avg</span>
-                            <span className="font-semibold text-foreground text-xs">
+                          <div className="space-y-0.5">
+                            <dt className="text-xs text-muted-foreground">Candidate Avg</dt>
+                            <dd className="font-semibold text-foreground text-xs">
                               {prop.evidenceSummary?.candidateValue ?? "—"}
-                            </span>
+                            </dd>
                           </div>
-                          <div className="p-2 rounded bg-background/60 border">
-                            <span className="text-muted-foreground block text-[10px]">Comparison Baseline</span>
-                            <span className="font-semibold text-foreground text-xs">
+                          <div className="space-y-0.5">
+                            <dt className="text-xs text-muted-foreground">Comparison Baseline</dt>
+                            <dd className="font-semibold text-foreground text-xs">
                               {prop.evidenceSummary?.baselineValue ?? "—"}
-                            </span>
+                            </dd>
                           </div>
-                          <div className="p-2 rounded bg-background/60 border">
-                            <span className="text-muted-foreground block text-[10px]">Observed Delta</span>
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400 text-xs">
-                              +{prop.evidenceSummary?.differencePercentage}%
-                            </span>
+                          <div className="space-y-0.5">
+                            <dt className="text-xs text-muted-foreground">Observed Delta</dt>
+                            <dd className="text-xs">
+                              <MetricDelta value={prop.evidenceSummary?.differencePercentage} />
+                            </dd>
                           </div>
-                        </div>
+                        </dl>
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground pt-1">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           <span><strong>Scope:</strong> {humanizeScope(prop.targetScope)}</span>
                           {prop.evidenceSummary?.publicationIds && (
                             <span>
@@ -857,31 +941,26 @@ export function LearningView() {
 
       {/* ── TIER 1.5: CONTROLLED EXPERIMENTS (HYPOTHESIZE → EXPERIMENT → MEASURE → DECIDE) ── */}
       <div className="space-y-4" data-testid="section-controlled-experiments">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <FlaskConical className="h-5 w-5 text-blue-500" />
-              <h2 className="text-lg font-semibold text-foreground">Controlled Experiments</h2>
-              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30">
-                Optimization Engine
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Hypothesize → Experiment → Measure → Decide. Controlled 50/50 variant testing with guardrails. Zero automated production mutation.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs h-8 gap-1.5 shrink-0 self-start sm:self-auto"
-            onClick={() => refetchExperiments()}
-            disabled={isExperimentsLoading}
-            data-testid="button-refresh-experiments"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isExperimentsLoading ? "animate-spin" : ""}`} />
-            Refresh Experiments
-          </Button>
-        </div>
+        <SectionHeader
+          icon={FlaskConical}
+          tier="queue"
+          label="Action queue"
+          title="Controlled Experiments"
+          description="Hypothesize → Experiment → Measure → Decide. Controlled 50/50 variant testing with guardrails. Zero automated production mutation."
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-8 gap-1.5"
+              onClick={() => refetchExperiments()}
+              disabled={isExperimentsLoading}
+              data-testid="button-refresh-experiments"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isExperimentsLoading ? "animate-spin" : ""}`} />
+              Refresh Experiments
+            </Button>
+          }
+        />
 
         {isExperimentsLoading ? (
           <div className="space-y-3">
@@ -931,20 +1010,20 @@ export function LearningView() {
                           >
                             {exp.name}
                           </span>
-                          <Badge variant="outline" className="text-[10px] uppercase font-medium">
+                          <Badge variant="outline" className="text-xs uppercase font-medium">
                             {formatProposalType(exp.experimentType)}
                           </Badge>
                           <Badge
                             variant={isRunning ? "default" : isCompleted ? "secondary" : "outline"}
-                            className={`text-[10px] capitalize ${
-                              isRunning ? "bg-blue-600 text-white" : isCompleted ? "bg-emerald-700 text-white" : ""
+                            className={`text-xs capitalize ${
+                              isRunning ? "bg-info text-info-foreground" : isCompleted ? "bg-success text-success-foreground" : ""
                             }`}
                             data-testid={`badge-experiment-status-${exp.id}`}
                           >
                             {exp.status}
                           </Badge>
                           {exp.decision && exp.decision !== "pending" && (
-                            <Badge variant={decBadge.variant} className="text-[10px]" data-testid={`badge-experiment-decision-${exp.id}`}>
+                            <Badge variant={decBadge.variant} className="text-xs" data-testid={`badge-experiment-decision-${exp.id}`}>
                               {decBadge.label}
                             </Badge>
                           )}
@@ -987,7 +1066,7 @@ export function LearningView() {
                   <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
                     {/* Metadata strip */}
                     <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                         <span><strong>Scope:</strong> {humanizeScope(exp.targetScope)}</span>
                         <span><strong>Primary Metric:</strong> <span className="capitalize">{exp.primaryMetric}</span></span>
                         <span><strong>Guardrails:</strong> {exp.guardrailMetrics && exp.guardrailMetrics.length > 0 ? exp.guardrailMetrics.join(", ") : "None"}</span>
@@ -996,7 +1075,7 @@ export function LearningView() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground self-start sm:self-auto gap-1"
+                        className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground self-start sm:self-auto gap-1"
                         onClick={() => toggleExperiment(exp.id)}
                         data-testid={`button-toggle-experiment-details-${exp.id}`}
                       >
@@ -1008,20 +1087,20 @@ export function LearningView() {
 
                     {/* Variants preview bar */}
                     {exp.variants && exp.variants.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                      <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
                         <span className="text-muted-foreground">Variants:</span>
                         {exp.variants.map((v) => (
                           <span
                             key={v.id}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 border text-[11px]"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-muted/30 text-xs"
                           >
                             <span className="font-semibold text-foreground">{v.name}</span>
                             {v.isControl ? (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1">Control</Badge>
+                              <Badge variant="outline" className="text-xs py-0 px-1">Control</Badge>
                             ) : (
-                              <Badge variant="secondary" className="text-[9px] py-0 px-1">Variant</Badge>
+                              <Badge variant="secondary" className="text-xs py-0 px-1">Variant</Badge>
                             )}
-                            <span className="text-muted-foreground text-[10px]">({v.trafficWeight}%)</span>
+                            <span className="text-muted-foreground text-xs">({v.trafficWeight}%)</span>
                           </span>
                         ))}
                       </div>
@@ -1030,7 +1109,7 @@ export function LearningView() {
                     {/* Expandable Evaluation & Decision Drawer */}
                     {isExpanded && (
                       <div
-                        className="p-3.5 rounded-md bg-muted/40 border text-[11px] space-y-3 mt-2"
+                        className="pt-3.5 mt-2 border-t border-border/40 text-xs space-y-3"
                         data-testid={`drawer-experiment-details-${exp.id}`}
                       >
                         {evalData ? (
@@ -1040,7 +1119,7 @@ export function LearningView() {
                                 <span className="font-semibold text-foreground text-xs">Empirical Evaluation</span>
                                 <Badge
                                   variant="outline"
-                                  className="text-[10px]"
+                                  className="text-xs"
                                   data-testid="badge-experiment-evidence-quality"
                                 >
                                   {evalData.evidenceQuality.replace(/_/g, " ")} evidence
@@ -1053,68 +1132,55 @@ export function LearningView() {
                                       ? "destructive"
                                       : "outline"
                                   }
-                                  className="text-[10px]"
+                                  className="text-xs"
                                   data-testid="badge-recommended-decision"
                                 >
                                   Recommendation: {evalData.recommendedDecision.replace(/_/g, " ")}
                                 </Badge>
                               </div>
-                              <span className="text-muted-foreground text-[10px]">
+                              <span className="text-muted-foreground text-xs">
                                 Evaluated {new Date(evalData.evaluatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                               </span>
                             </div>
 
                             {/* Non-causal narrative */}
-                            <p className="text-foreground/90 bg-background/60 p-2.5 rounded border text-xs leading-relaxed italic">
+                            <p className="text-foreground/90 border-l-2 border-border/60 pl-3 text-xs leading-relaxed italic">
                               {evalData.summary}
                             </p>
 
-                            {/* Metric comparisons */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              <div className="p-2 rounded bg-background/60 border">
-                                <span className="text-muted-foreground block text-[10px]">Control Mean</span>
-                                <span className="font-semibold text-foreground text-xs">
+                            {/* Metric comparisons — definition rows, no nested boxes */}
+                            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+                              <div className="space-y-0.5">
+                                <dt className="text-xs text-muted-foreground">Control Mean</dt>
+                                <dd className="font-semibold text-foreground text-xs">
                                   {evalData.controlMetrics.mean}
-                                </span>
-                                <span className="text-muted-foreground block text-[9px]">
+                                </dd>
+                                <dd className="text-xs text-muted-foreground">
                                   {evalData.controlMetrics.sampleCount} samples
-                                </span>
+                                </dd>
                               </div>
                               {evalData.variantMetrics.map((vm) => (
-                                <div key={vm.variantId} className="p-2 rounded bg-background/60 border col-span-1 sm:col-span-3">
-                                  <span className="text-muted-foreground block text-[10px]">
+                                <div key={vm.variantId} className="space-y-0.5 sm:col-span-3">
+                                  <dt className="text-xs text-muted-foreground">
                                     Variant ({vm.variantKey}) Mean & Delta
-                                  </span>
-                                  <div className="flex items-baseline gap-2">
+                                  </dt>
+                                  <dd className="flex items-baseline gap-2">
                                     <span className="font-semibold text-foreground text-xs">{vm.mean}</span>
-                                    {vm.differencePercentage && (
-                                      <span
-                                        className={`font-semibold text-xs ${
-                                          Number(vm.differencePercentage) > 0
-                                            ? "text-emerald-600 dark:text-emerald-400"
-                                            : Number(vm.differencePercentage) < 0
-                                            ? "text-rose-600"
-                                            : "text-muted-foreground"
-                                        }`}
-                                      >
-                                        {Number(vm.differencePercentage) > 0 ? "+" : ""}
-                                        {vm.differencePercentage}%
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="text-muted-foreground block text-[9px]">
+                                    <MetricDelta value={vm.differencePercentage} className="text-xs" />
+                                  </dd>
+                                  <dd className="text-xs text-muted-foreground">
                                     {vm.sampleCount} samples (diff: {vm.difference ?? "0.00"})
-                                  </span>
+                                  </dd>
                                 </div>
                               ))}
-                            </div>
+                            </dl>
 
                             {/* Guardrails table */}
                             {evalData.guardrailResults && evalData.guardrailResults.length > 0 && (
                               <div className="space-y-1">
-                                <span className="font-semibold text-foreground text-[11px]">Guardrail Safety Checks</span>
-                                <div className="rounded border bg-background/60 overflow-hidden">
-                                  <table className="w-full text-[10px] text-left">
+                                <span className="font-semibold text-foreground text-xs">Guardrail Safety Checks</span>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs text-left">
                                     <thead className="border-b bg-muted/30 text-muted-foreground">
                                       <tr>
                                         <th className="p-1.5 font-medium">Metric</th>
@@ -1133,7 +1199,7 @@ export function LearningView() {
                                           <td className="p-1.5">
                                             <Badge
                                               variant={g.status === "passed" ? "default" : g.status === "regressed" ? "destructive" : "secondary"}
-                                              className="text-[9px] py-0 px-1"
+                                              className="text-xs py-0 px-1"
                                             >
                                               {g.status === "passed" ? "Passed" : g.status === "regressed" ? "Regressed" : "Not Available"}
                                             </Badge>
@@ -1151,7 +1217,7 @@ export function LearningView() {
                             <div className="pt-2 border-t border-border/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                               <div className="space-y-0.5">
                                 <span className="font-semibold text-foreground text-xs block">Human Decision Gate</span>
-                                <span className="text-muted-foreground text-[10px]">
+                                <span className="text-muted-foreground text-xs">
                                   Decide based on observed evidence. Acceptance promotes the variant to a policy candidate without touching production.
                                 </span>
                               </div>
@@ -1162,7 +1228,7 @@ export function LearningView() {
                                     <Button
                                       size="sm"
                                       variant="default"
-                                      className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
+                                      className="h-7 text-xs gap-1 bg-success hover:bg-success/90 text-success-foreground"
                                       onClick={() =>
                                         decideExperimentMutation.mutate({
                                           id: exp.id,
@@ -1218,7 +1284,7 @@ export function LearningView() {
                                       <Button
                                         size="sm"
                                         variant="default"
-                                        className="h-7 text-xs gap-1 bg-blue-600 hover:bg-blue-700 text-white"
+                                        className="h-7 text-xs gap-1 bg-info hover:bg-info/90 text-info-foreground"
                                         onClick={() => {
                                           const nonControl = exp.variants?.find((v) => !v.isControl);
                                           if (nonControl) {
@@ -1269,13 +1335,12 @@ export function LearningView() {
 
       {/* ── TIER 2: LEARNED (INFERRED PATTERNS & VOICE) ── */}
       <div className="space-y-4" data-testid="section-learning-inferences">
-        <div className="flex items-center gap-2 pb-2 border-b">
-          <BookOpen className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold text-foreground">Inferred Patterns & Voice</h2>
-          <Badge variant="outline" className="text-xs">
-            Learned
-          </Badge>
-        </div>
+        <SectionHeader
+          icon={BookOpen}
+          tier="learn"
+          label="Learned patterns"
+          title="Inferred Patterns & Voice"
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Section 1: Writing Style & Voice */}
@@ -1283,10 +1348,10 @@ export function LearningView() {
             <CardHeader className="pb-3 border-b">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <PenTool className="h-4 w-4 text-primary" />
+                  <PenTool className="h-4 w-4 text-muted-foreground" />
                   <CardTitle className="text-base font-semibold">Writing Style Patterns</CardTitle>
                 </div>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="text-xs">
                   Style Profiles
                 </Badge>
               </div>
@@ -1299,7 +1364,7 @@ export function LearningView() {
                 </div>
               ) : isStyleUnconfigured ? (
                 <div className="py-6 text-center text-xs text-muted-foreground space-y-2">
-                  <AlertCircle className="h-6 w-6 mx-auto text-amber-500" />
+                  <AlertCircle className="h-6 w-6 mx-auto text-warning" />
                   <p className="font-medium text-foreground">Style Intelligence Not Configured</p>
                   <p>Style reference analysis is currently unavailable in this deployment.</p>
                 </div>
@@ -1322,34 +1387,34 @@ export function LearningView() {
                   testId="empty-learning-style"
                 />
               ) : (
-                <div className="space-y-3" data-testid="list-learning-style-profiles">
+                <div className="divide-y divide-border/40" data-testid="list-learning-style-profiles">
                   {profiles.map((p) => {
                     const conf = humanizeConfidence(p.confidence);
                     return (
                       <div
                         key={p.id}
-                        className="p-3 border rounded-md bg-card/50 space-y-2 text-xs"
+                        className="py-3 space-y-2 text-xs"
                         data-testid={`card-style-profile-${p.id}`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-foreground text-sm">{p.name}</span>
                           <div className="flex items-center gap-1.5">
                             {p.isActive && (
-                              <Badge variant="default" className="text-[10px] bg-emerald-700">
+                              <Badge variant="default" className="text-xs bg-success text-success-foreground">
                                 Active
                               </Badge>
                             )}
-                            <Badge variant={conf.variant as any} className="text-[10px]" data-testid="badge-confidence">
+                            <Badge variant={conf.variant as any} className="text-xs" data-testid="badge-confidence">
                               {conf.label}
                             </Badge>
                           </div>
                         </div>
-                        <p className="text-muted-foreground text-[11px]">
+                        <p className="text-muted-foreground text-xs">
                           {formatStyleProvenance(p.sampleCount)}
                           {p.channel ? ` · Channel: ${formatChannelName(p.channel)}` : ""}
                         </p>
                         {p.stylePromptSnippet && (
-                          <p className="text-muted-foreground line-clamp-2 bg-muted/30 p-2 rounded text-[11px] font-mono">
+                          <p className="text-muted-foreground line-clamp-2 bg-muted/30 p-2 text-xs font-mono">
                             {p.stylePromptSnippet}
                           </p>
                         )}
@@ -1366,10 +1431,10 @@ export function LearningView() {
             <CardHeader className="pb-3 border-b">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
                   <CardTitle className="text-base font-semibold">Empirical Observations</CardTitle>
                 </div>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="text-xs">
                   Pattern Inferences
                 </Badge>
               </div>
@@ -1380,6 +1445,12 @@ export function LearningView() {
                   <Skeleton className="h-16 w-full" />
                   <Skeleton className="h-16 w-full" />
                 </div>
+              ) : observationsError ? (
+                <ErrorState
+                  title="Couldn't load inferred patterns"
+                  description="Failed to fetch empirical observations. This is a read failure, not an empty result."
+                  onRetry={() => refetchObservations()}
+                />
               ) : observations.length === 0 ? (
                 <EmptyState
                   icon={Sparkles}
@@ -1393,34 +1464,32 @@ export function LearningView() {
                   testId="empty-learning-observations"
                 />
               ) : (
-                <div className="space-y-3" data-testid="list-learning-observations">
+                <div className="divide-y divide-border/40" data-testid="list-learning-observations">
                   {observations.map((obs) => {
                     const quality = formatEvidenceQuality(obs.evidenceQuality);
                     return (
                       <div
                         key={obs.id}
-                        className="p-3 border rounded-md bg-card/50 space-y-1.5 text-xs"
+                        className="py-3 space-y-1.5 text-xs"
                         data-testid={`card-observation-${obs.id}`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-foreground capitalize">
                             {obs.observationType.replace(/_/g, " ")}
                           </span>
-                          <Badge variant={quality.variant as any} className="text-[10px]">
+                          <Badge variant={quality.variant as any} className="text-xs">
                             {quality.label}
                           </Badge>
                         </div>
-                        <p className="text-muted-foreground text-[11px]">
+                        <p className="text-muted-foreground text-xs">
                           Scope: {humanizeScope(obs.targetScope)}
                         </p>
-                        <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-border/40">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
                           <span>
                             Candidate: <strong>{obs.candidateValue ?? "—"}</strong> vs Baseline: <strong>{obs.comparisonValue ?? "—"}</strong>
                           </span>
-                          {obs.differencePercentage && Number(obs.differencePercentage) !== 0 && (
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                              {Number(obs.differencePercentage) > 0 ? "+" : ""}{obs.differencePercentage}%
-                            </span>
+                          {obs.differencePercentage !== null && Number(obs.differencePercentage) !== 0 && (
+                            <MetricDelta value={obs.differencePercentage} className="text-xs" />
                           )}
                         </div>
                       </div>
@@ -1435,13 +1504,12 @@ export function LearningView() {
 
       {/* ── TIER 3: OBSERVED (MEASURED FACTS & COVERAGE) ── */}
       <div className="space-y-4" data-testid="section-learning-observed">
-        <div className="flex items-center gap-2 pb-2 border-b">
-          <Eye className="h-5 w-5 text-blue-500" />
-          <h2 className="text-lg font-semibold text-foreground">Measured Production Signals</h2>
-          <Badge variant="outline" className="text-xs">
-            Observed
-          </Badge>
-        </div>
+        <SectionHeader
+          icon={Eye}
+          tier="measure"
+          label="Measurement"
+          title="Measured Production Signals"
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Section 1: Production Lifecycle & Approval Signals */}
@@ -1449,10 +1517,10 @@ export function LearningView() {
             <CardHeader className="pb-3 border-b">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
                   <CardTitle className="text-base font-semibold">Workflow & Approval Signals</CardTitle>
                 </div>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="text-xs">
                   Production Signals
                 </Badge>
               </div>
@@ -1483,22 +1551,22 @@ export function LearningView() {
                 />
               ) : (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-3 border rounded-md bg-muted/20">
-                      <div className="text-xs text-muted-foreground">Draft Approval Rate</div>
-                      <div className="text-xl font-semibold tabular-nums mt-1" data-testid="text-approval-rate">
+                  <dl className="grid grid-cols-2 gap-x-4">
+                    <div className="space-y-0.5">
+                      <dt className="text-xs text-muted-foreground">Draft Approval Rate</dt>
+                      <dd className="text-xl font-semibold tabular-nums mt-1" data-testid="text-approval-rate">
                         {formatMetricRate(learningSummary.approvalRate)}
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Approved vs rejected drafts</p>
+                      </dd>
+                      <dd className="text-xs text-muted-foreground mt-0.5">Approved vs rejected drafts</dd>
                     </div>
-                    <div className="p-3 border rounded-md bg-muted/20">
-                      <div className="text-xs text-muted-foreground">Publication Delivery Rate</div>
-                      <div className="text-xl font-semibold tabular-nums mt-1" data-testid="text-success-rate">
+                    <div className="space-y-0.5">
+                      <dt className="text-xs text-muted-foreground">Publication Delivery Rate</dt>
+                      <dd className="text-xl font-semibold tabular-nums mt-1" data-testid="text-success-rate">
                         {formatMetricRate(learningSummary.successRate)}
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Successful dispatch rate</p>
+                      </dd>
+                      <dd className="text-xs text-muted-foreground mt-0.5">Successful dispatch rate</dd>
                     </div>
-                  </div>
+                  </dl>
 
                   {/* Content formats breakdown */}
                   {learningSummary.byFormat.length > 0 && (
@@ -1529,10 +1597,10 @@ export function LearningView() {
             <CardHeader className="pb-3 border-b">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <BarChart2 className="h-4 w-4 text-blue-500" />
+                  <BarChart2 className="h-4 w-4 text-muted-foreground" />
                   <CardTitle className="text-base font-semibold">Channel Performance Signals</CardTitle>
                 </div>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="text-xs">
                   Platform Ingestion
                 </Badge>
               </div>
@@ -1590,7 +1658,7 @@ export function LearningView() {
                               <td className="py-2.5 px-3">
                                 <Badge
                                   variant={hasObserved ? "outline" : "secondary"}
-                                  className="text-[10px]"
+                                  className="text-xs"
                                 >
                                   {hasObserved ? "Observed data" : "Not measured"}
                                 </Badge>
@@ -1601,7 +1669,7 @@ export function LearningView() {
                       </tbody>
                     </table>
                   </div>
-                  <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                     <HelpCircle className="h-3.5 w-3.5 shrink-0" />
                     Unavailable platform metrics are left as unmeasured rather than coerced to zero.
                   </p>
@@ -1614,31 +1682,26 @@ export function LearningView() {
 
       {/* ── TIER 4: POLICY CANDIDATES (HUMAN GOVERNANCE REQUIRED) ── */}
       <div className="space-y-4" data-testid="section-policy-candidates">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-600" />
-              <h2 className="text-lg font-semibold text-foreground">Policy Candidates</h2>
-                  <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
-                Human Review Required
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Candidate generation and distribution policies promoted from validated experiments. Explicit human review is required before any future production rollout. Live production policies remain completely unmutated.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs h-8 gap-1.5 shrink-0 self-start sm:self-auto"
-            onClick={() => refetchCandidates()}
-            disabled={isCandidatesLoading}
-            data-testid="button-refresh-candidates"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isCandidatesLoading ? "animate-spin" : ""}`} />
-            Refresh Candidates
-          </Button>
-        </div>
+        <SectionHeader
+          icon={ShieldCheck}
+          tier="queue"
+          label="Governance queue"
+          title="Policy Candidates"
+          description="Candidate generation and distribution policies promoted from validated experiments. Explicit human review is required before any future production rollout. Live production policies remain completely unmutated."
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-8 gap-1.5"
+              onClick={() => refetchCandidates()}
+              disabled={isCandidatesLoading}
+              data-testid="button-refresh-candidates"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isCandidatesLoading ? "animate-spin" : ""}`} />
+              Refresh Candidates
+            </Button>
+          }
+        />
 
         {isCandidatesLoading ? (
           <div className="space-y-3">
@@ -1680,16 +1743,16 @@ export function LearningView() {
                       <div className="space-y-1.5 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-foreground">{candidate.title}</span>
-                          <Badge variant="outline" className="text-[10px] uppercase font-medium">
+                          <Badge variant="outline" className="text-xs uppercase font-medium">
                             {humanizeScope(candidate.targetScope)}
                           </Badge>
                           <Badge
                             variant={isApproved ? "default" : isRejected ? "destructive" : "secondary"}
-                            className={`text-[10px] ${
+                            className={`text-xs ${
                               isApproved
-                                ? "bg-emerald-700 text-white"
+                                ? "bg-success text-success-foreground"
                                 : isUnderReview
-                                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                                ? "bg-warning/10 text-warning border-warning/30"
                                 : ""
                             }`}
                             data-testid={`badge-candidate-status-${candidate.id}`}
@@ -1713,7 +1776,7 @@ export function LearningView() {
                             <Button
                               size="sm"
                               variant="default"
-                              className="h-7 text-xs gap-1 bg-emerald-700 hover:bg-emerald-800 text-white"
+                              className="h-7 text-xs gap-1 bg-success hover:bg-success/90 text-success-foreground"
                               onClick={() =>
                                 reviewCandidateMutation.mutate({
                                   candidateId: candidate.id,
@@ -1747,11 +1810,19 @@ export function LearningView() {
                           </>
                         ) : isApproved ? (
                           <div className="flex flex-col items-end gap-1.5">
-                            <Badge variant="default" className="text-xs bg-emerald-700 gap-1 py-1">
+                            <Badge variant="default" className="text-xs bg-success text-success-foreground gap-1 py-1">
                               <Check className="h-3 w-3" />
                               Approved by Human Reviewer
                             </Badge>
-                            {activatedCandidateIds.has(candidate.id) ? (
+                            {activatedIdsError ? (
+                              <div className="w-full max-w-xs">
+                                <ErrorState
+                                  title="Couldn't load activation state"
+                                  description="We couldn't confirm which policies are live, so activation controls are hidden. This is not a clean, un-activated list."
+                                  onRetry={() => refetchActivatedIds()}
+                                />
+                              </div>
+                            ) : activatedCandidateIds.has(candidate.id) ? (
                               <>
                                 <ActorBadge
                                   kind={
@@ -1776,7 +1847,7 @@ export function LearningView() {
                               <Button
                                 size="sm"
                                 variant="default"
-                                className="h-7 text-xs gap-1 bg-blue-600 hover:bg-blue-700 text-white"
+                                className="h-7 text-xs gap-1 bg-info hover:bg-info/90 text-info-foreground"
                                 onClick={() => setActivateCandidateId(candidate.id)}
                                 data-testid={`button-activate-candidate-${candidate.id}`}
                               >
@@ -1795,7 +1866,7 @@ export function LearningView() {
                   </CardHeader>
 
                   <CardContent className="pt-0 pb-3.5 px-4 sm:px-6 space-y-2.5 text-xs text-muted-foreground border-t border-border/40 mt-1">
-                    <div className="pt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                    <div className="pt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                       <span><strong>Scope:</strong> {humanizeScope(candidate.targetScope)}</span>
                       {candidate.experimentId && (
                         <span><strong>Source Experiment:</strong> #{candidate.experimentId}</span>
@@ -1808,10 +1879,10 @@ export function LearningView() {
 
                     {candidate.proposedConfiguration && Object.keys(candidate.proposedConfiguration).length > 0 && (
                       <div className="pt-1">
-                        <span className="text-[10px] text-muted-foreground font-semibold block mb-1">
+                        <span className="text-xs text-muted-foreground font-semibold block mb-1">
                           Candidate Policy Snapshot (Pre-Production):
                         </span>
-                        <pre className="text-[10px] bg-muted/40 p-2 rounded font-mono overflow-x-auto border border-border/40 max-h-32">
+                        <pre className="text-xs bg-muted/40 p-2 font-mono overflow-x-auto max-h-32">
                           {JSON.stringify(candidate.proposedConfiguration, null, 2)}
                         </pre>
                       </div>
