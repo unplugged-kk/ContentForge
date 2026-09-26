@@ -46,7 +46,7 @@ export default function AuthPage() {
     onSuccess: (data) => {
       queryClient.setQueryData(["/api/auth/me"], data);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Account created!", description: `Welcome to ContentForge, ${data.name}!` });
+      toast({ title: "Account created", description: `Welcome to ContentForge, ${data.name}` });
     },
     onError: (err: any) => {
       toast({ title: "Registration failed", description: err.message, variant: "destructive" });

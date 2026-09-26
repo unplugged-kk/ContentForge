@@ -209,11 +209,11 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
       if (data?._type === "article") {
-        toast({ title: "Article draft saved!", description: "Opening article editor…" });
+        toast({ title: "Article draft saved", description: "Opening article editor…" });
         navigate(`/articles`);
       } else {
         toast({
-          title: "Draft saved!",
+          title: "Draft saved",
           description: "Your draft appears in the Saved Drafts section below and on the Calendar page.",
         });
       }
@@ -292,7 +292,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
               </div>
               <div className="flex flex-wrap gap-1">
                 {["Reddit", "GitHub", "ArXiv", "Substack", "Medium", "Dev.to", "YouTube", "Blogs"].map((s) => (
-                  <Badge key={s} variant="outline" className="text-[10px]">{s}</Badge>
+                  <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
                 ))}
               </div>
             </TabsContent>
@@ -359,7 +359,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
               <CardTitle className="text-sm">{selectedRef.title || "Analysis Results"}</CardTitle>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <Badge variant="secondary">{SOURCE_TYPE_LABELS[selectedRef.sourceType || ""] || selectedRef.sourceType}</Badge>
-                {selectedRef.sourcePlatform && <Badge variant="outline" className="text-[10px]">{selectedRef.sourcePlatform}</Badge>}
+                {selectedRef.sourcePlatform && <Badge variant="outline" className="text-xs">{selectedRef.sourcePlatform}</Badge>}
                 {selectedRef.sourceAuthorUsername && <span className="text-xs text-muted-foreground">by @{selectedRef.sourceAuthorUsername}</span>}
               </div>
               {selectedRef.sourceUrl && (
@@ -413,7 +413,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                 <div className="space-y-1">
                   {(analysis.common_pain_points || []).map((p: string, i: number) => (
                     <div key={i} className="flex items-start gap-2 text-sm">
-                      <Badge variant="destructive" className="text-[10px] shrink-0">Pain</Badge>
+                      <Badge variant="destructive" className="text-xs shrink-0">Pain</Badge>
                       <span>{p}</span>
                     </div>
                   ))}
@@ -427,7 +427,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                 <div className="space-y-1">
                   {(analysis.questions_asked || []).map((q: string, i: number) => (
                     <div key={i} className="flex items-start gap-2 text-sm">
-                      <Badge variant="secondary" className="text-[10px] shrink-0">Q</Badge>
+                      <Badge variant="secondary" className="text-xs shrink-0">Q</Badge>
                       <span>{q}</span>
                     </div>
                   ))}
@@ -441,7 +441,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                 <div className="space-y-1">
                   {(analysis.controversial_takes || []).map((t: string, i: number) => (
                     <div key={i} className="flex items-start gap-2 text-sm">
-                      <Swords className="h-3 w-3 mt-1 text-orange-500 shrink-0" />
+                      <Swords className="h-3 w-3 mt-1 text-warning shrink-0" />
                       <span>{t}</span>
                     </div>
                   ))}
@@ -469,7 +469,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                 <div className="grid gap-2 md:grid-cols-2">
                   {analysis.lessons_for_kishore.techniques_to_adopt && (
                     <div>
-                      <p className="text-xs text-green-600 dark:text-green-400 font-medium mb-1">Adopt</p>
+                      <p className="text-xs text-success font-medium mb-1">Adopt</p>
                       <ul className="text-xs space-y-0.5">
                         {(analysis.lessons_for_kishore.techniques_to_adopt || []).map((t: string, i: number) => <li key={i}>+ {t}</li>)}
                       </ul>
@@ -477,7 +477,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                   )}
                   {analysis.lessons_for_kishore.techniques_to_skip && (
                     <div>
-                      <p className="text-xs text-red-600 dark:text-red-400 font-medium mb-1">Skip</p>
+                      <p className="text-xs text-destructive font-medium mb-1">Skip</p>
                       <ul className="text-xs space-y-0.5">
                         {(analysis.lessons_for_kishore.techniques_to_skip || []).map((t: string, i: number) => <li key={i}>- {t}</li>)}
                       </ul>
@@ -500,8 +500,8 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                           <p className="font-medium">{item.idea}</p>
                           {item.hook && <p className="text-xs text-muted-foreground mt-0.5">Hook: "{item.hook}"</p>}
                           <div className="flex items-center gap-1 mt-1">
-                            {item.format && <Badge variant="outline" className="text-[10px]">{item.format}</Badge>}
-                            {item.angle && <span className="text-[10px] text-muted-foreground">{item.angle}</span>}
+                            {item.format && <Badge variant="outline" className="text-xs">{item.format}</Badge>}
+                            {item.angle && <span className="text-xs text-muted-foreground">{item.angle}</span>}
                           </div>
                         </>
                       )}
@@ -557,7 +557,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                       <Icon className="h-3 w-3" />
                     )}
                     <span className="text-xs font-medium mt-0.5">{label}</span>
-                    <span className="text-[10px] text-muted-foreground">{description}</span>
+                    <span className="text-xs text-muted-foreground">{description}</span>
                   </Button>
                 ))}
               </div>
@@ -586,7 +586,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                       className="text-sm prose prose-sm dark:prose-invert max-w-none line-clamp-6 [&>*]:my-1"
                       dangerouslySetInnerHTML={{ __html: variation.contentHtml || "" }}
                     />
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {(variation.contentHtml || "").replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length} words
                     </p>
                   </div>
@@ -594,7 +594,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                   variation.tweets.map((t: any, j: number) => (
                     <div key={j} className="p-3 rounded-md border mb-2 last:mb-0">
                       <p className="text-sm whitespace-pre-wrap">{t.content}</p>
-                      <span className="text-[10px] text-muted-foreground">{t.charCount} chars</span>
+                      <span className="text-xs text-muted-foreground">{t.charCount} chars</span>
                     </div>
                   ))
                 )}
@@ -621,10 +621,10 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                 <Card key={draft.id} className="hover-elevate cursor-pointer" onClick={() => navigate("/calendar")} data-testid={`card-draft-${draft.id}`}>
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-xs">
                         {draft.postType === "thread" ? "Thread" : "Tweet"}
                       </Badge>
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge variant="secondary" className="text-xs">
                         <CheckCircle2 className="h-2 w-2 mr-0.5" /> Draft
                       </Badge>
                     </div>
@@ -632,7 +632,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                   <CardContent>
                     <p className="text-sm line-clamp-3">{preview}</p>
                     {Array.isArray(tweets) && tweets.length > 1 && (
-                      <p className="text-[10px] text-muted-foreground mt-1">+{tweets.length - 1} more tweets in thread</p>
+                      <p className="text-xs text-muted-foreground mt-1">+{tweets.length - 1} more tweets in thread</p>
                     )}
                   </CardContent>
                 </Card>
@@ -665,13 +665,13 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                       <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{refAnalysis?.summary || refAnalysis?.discussion_summary || ""}</p>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Badge variant="secondary" className="text-[10px]">{SOURCE_TYPE_LABELS[ref.sourceType || ""] || ref.sourceType}</Badge>
+                      <Badge variant="secondary" className="text-xs">{SOURCE_TYPE_LABELS[ref.sourceType || ""] || ref.sourceType}</Badge>
                     </div>
                   </CardHeader>
                   <CardContent className="flex items-center gap-2 flex-wrap">
-                    {ref.sourcePlatform && <Badge variant="outline" className="text-[10px]">{ref.sourcePlatform}</Badge>}
+                    {ref.sourcePlatform && <Badge variant="outline" className="text-xs">{ref.sourcePlatform}</Badge>}
                     {(ref.tags || []).slice(0, 2).map((tag, i) => (
-                      <Badge key={i} variant="outline" className="text-[10px]">{tag}</Badge>
+                      <Badge key={i} variant="outline" className="text-xs">{tag}</Badge>
                     ))}
                     <div className="ml-auto flex items-center gap-1">
                       {ref.isBookmarked && <BookmarkCheck className="h-3 w-3 text-primary" />}

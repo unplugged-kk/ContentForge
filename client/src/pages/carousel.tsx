@@ -32,15 +32,15 @@ function SlidePreview({ slide, bg, isActive }: { slide: Slide; bg: typeof CAROUS
     >
       {slide.emoji && <div className="text-2xl">{slide.emoji}</div>}
       <div className="space-y-1.5">
-        <div className="text-[10px] font-medium opacity-60">{slide.type === "cover" ? "COVER" : slide.type === "cta" ? "CTA" : `SLIDE ${slide.slideNumber}`}</div>
+        <div className="text-xs font-medium opacity-60">{slide.type === "cover" ? "COVER" : slide.type === "cta" ? "CTA" : `SLIDE ${slide.slideNumber}`}</div>
         <h3 className="text-sm font-bold leading-tight">{slide.heading}</h3>
-        {slide.subheading && <p className="text-[10px] opacity-80">{slide.subheading}</p>}
+        {slide.subheading && <p className="text-xs opacity-80">{slide.subheading}</p>}
         {slide.bullets && (
-          <ul className="text-[10px] opacity-80 space-y-0.5">
+          <ul className="text-xs opacity-80 space-y-0.5">
             {slide.bullets.slice(0, 3).map((b, i) => <li key={i}>• {b}</li>)}
           </ul>
         )}
-        {slide.cta && <p className="text-[10px] font-semibold opacity-90">{slide.cta}</p>}
+        {slide.cta && <p className="text-xs font-semibold opacity-90">{slide.cta}</p>}
       </div>
     </div>
   );
@@ -82,7 +82,7 @@ export default function CarouselPage() {
       setSelectedCarousel(saved);
       setActiveSlide(0);
       setShowCreate(false);
-      toast({ title: "Carousel created!", description: `${(data.slides || []).length} slides generated` });
+      toast({ title: "Carousel created", description: `${(data.slides || []).length} slides generated` });
     },
     onError: (err: any) => toast({ title: "Generation failed", description: err.message, variant: "destructive" }),
   });
@@ -119,10 +119,10 @@ export default function CarouselPage() {
         <div className="w-64 border-r flex flex-col">
           <div className="p-3 border-b flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">My Carousels</span>
-            <Badge variant="secondary" className="text-[10px]">{carousels.length}</Badge>
+            <Badge variant="secondary" className="text-xs">{carousels.length}</Badge>
           </div>
           <div className="flex-1 overflow-auto p-2 space-y-1.5">
-            {isLoading ? <div className="animate-pulse space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 bg-muted rounded" />)}</div>
+            {isLoading ? <div className="pulse-skeleton space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 bg-muted rounded" />)}</div>
             : carousels.length === 0 ? (
               <div className="text-center py-8">
                 <LayoutGrid className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
@@ -136,7 +136,7 @@ export default function CarouselPage() {
                 data-testid={`button-carousel-${c.id}`}
               >
                 <p className="text-xs font-medium line-clamp-2">{c.title}</p>
-                <p className="text-[10px] text-muted-foreground mt-1">{(c.slides as Slide[]).length} slides · {c.platform}</p>
+                <p className="text-xs text-muted-foreground mt-1">{(c.slides as Slide[]).length} slides · {c.platform}</p>
               </button>
             ))}
           </div>

@@ -26,9 +26,9 @@ const ARTICLE_TEMPLATES = [
 
 const statusColors: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
-  writing: "bg-blue-500/20 text-blue-400",
-  ready: "bg-green-500/20 text-green-400",
-  published: "bg-purple-500/20 text-purple-400",
+  writing: "bg-info/10 text-info",
+  ready: "bg-success/10 text-success",
+  published: "bg-success/10 text-success",
 };
 
 function ArticleEditor({ article, pillars, onBack }: { article: Article; pillars: Pillar[]; onBack: () => void }) {
@@ -336,10 +336,10 @@ export default function ArticlesPage() {
                   <Badge className={statusColors[article.status || "draft"]}>{article.status || "draft"}</Badge>
                 </CardHeader>
                 <CardContent className="flex items-center gap-2 flex-wrap">
-                  {pillar && <Badge variant="outline" className="text-[10px]" style={{ borderColor: pillar.color || undefined }}>{pillar.name.split(" ")[0]}</Badge>}
-                  {article.articleTemplate && <Badge variant="secondary" className="text-[10px]">{ARTICLE_TEMPLATES.find((t) => t.id === article.articleTemplate)?.name || article.articleTemplate}</Badge>}
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-1"><BookOpen className="h-3 w-3" /> {article.wordCount || 0} words</span>
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> {article.estimatedReadMinutes || 0} min</span>
+                  {pillar && <Badge variant="outline" className="text-xs" style={{ borderColor: pillar.color || undefined }}>{pillar.name.split(" ")[0]}</Badge>}
+                  {article.articleTemplate && <Badge variant="secondary" className="text-xs">{ARTICLE_TEMPLATES.find((t) => t.id === article.articleTemplate)?.name || article.articleTemplate}</Badge>}
+                  <span className="text-xs text-muted-foreground flex items-center gap-1"><BookOpen className="h-3 w-3" /> {article.wordCount || 0} words</span>
+                  <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> {article.estimatedReadMinutes || 0} min</span>
                   <Button variant="ghost" size="icon" className="ml-auto" onClick={(e) => { e.stopPropagation(); setPendingDeleteId(article.id); }} aria-label="Delete article" data-testid={`button-delete-article-${article.id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>

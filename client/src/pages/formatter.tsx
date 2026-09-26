@@ -65,7 +65,7 @@ export default function FormatterPage() {
           </Button>
         </div>
         <div className="rounded-md border bg-muted/40 p-3 min-h-[4rem]">
-          <p className="text-[10px] text-muted-foreground mb-1">Preview</p>
+          <p className="text-xs text-muted-foreground mb-1">Preview</p>
           <div data-testid="text-formatter-preview" className="text-sm font-mono whitespace-pre-wrap break-all">
             {formatted || "—"}
           </div>
