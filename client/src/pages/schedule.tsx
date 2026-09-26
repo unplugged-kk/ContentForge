@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { PageHeader } from "@/components/ui-shared/page-header";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import QueuePage from "@/pages/queue";
 import CalendarPage from "@/pages/calendar";
 import { PublicationsView } from "@/components/schedule/publications-view";
-import { ListChecks, Calendar as CalendarIcon, Send } from "lucide-react";
+import { ListChecks, Calendar as CalendarIcon, Send, Sparkles } from "lucide-react";
 
 export default function SchedulePage() {
   const [location] = useLocation();
@@ -32,24 +33,43 @@ export default function SchedulePage() {
         testId="page-header-schedule"
         titleTestId="text-page-title"
         action={
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "queue" | "calendar" | "publications")} className="w-auto">
-            <TabsList className="h-8" data-testid="tabs-schedule-views">
-              <TabsTrigger value="queue" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-queue">
-                <ListChecks className="h-3.5 w-3.5" />
-                Queue
-              </TabsTrigger>
-              <TabsTrigger value="calendar" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-calendar">
-                <CalendarIcon className="h-3.5 w-3.5" />
-                Calendar
-              </TabsTrigger>
-              <TabsTrigger value="publications" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-publications">
-                <Send className="h-3.5 w-3.5" />
-                Publications
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <Button asChild size="sm" className="gap-1.5" data-testid="button-schedule-create">
+            <Link href="/create">
+              <Sparkles className="h-3.5 w-3.5" />
+              Create content
+            </Link>
+          </Button>
         }
       />
+
+      {/* View switching belongs to the page body; the header slot holds the
+          surface's primary action (J1). The strip scrolls rather than overflowing
+          at 390px, mirroring settings.tsx. */}
+      <div className="px-4 pt-3" data-testid="schedule-view-switcher">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as "queue" | "calendar" | "publications")}
+          className="w-full"
+        >
+          <TabsList
+            className="flex h-8 w-full max-w-full justify-start gap-1 overflow-x-auto no-scrollbar"
+            data-testid="tabs-schedule-views"
+          >
+            <TabsTrigger value="queue" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-queue">
+              <ListChecks className="h-3.5 w-3.5" />
+              Queue
+            </TabsTrigger>
+            <TabsTrigger value="calendar" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-calendar">
+              <CalendarIcon className="h-3.5 w-3.5" />
+              Calendar
+            </TabsTrigger>
+            <TabsTrigger value="publications" className="text-xs gap-1.5 px-3 h-7" data-testid="tab-trigger-publications">
+              <Send className="h-3.5 w-3.5" />
+              Publications
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
 
       <div className="flex-1 overflow-hidden">
         {activeTab === "queue" ? (

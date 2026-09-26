@@ -30,7 +30,7 @@ interface BestTimeSlot {
 
 function PlatformBadge({ platform }: { platform: string }) {
   return (
-    <Badge variant="secondary" className="text-[10px] gap-1">
+    <Badge variant="secondary" className="text-xs gap-1">
       <ChannelIcon channel={platform} decorative />
       <span className="capitalize">{platform}</span>
     </Badge>
@@ -52,7 +52,12 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
     queryKey: ["/api/posts"],
   });
 
-  const { data: bestTimes, isLoading: bestTimesLoading } = useQuery<{ x: BestTimeSlot[]; threads: BestTimeSlot[] }>({
+  const {
+    data: bestTimes,
+    isLoading: bestTimesLoading,
+    isError: bestTimesError,
+    refetch: refetchBestTimes,
+  } = useQuery<{ x: BestTimeSlot[]; threads: BestTimeSlot[] }>({
     queryKey: ["/api/schedule/best-times"],
     enabled: showBestTimes,
   });
@@ -122,17 +127,17 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
   const getStatusStyle = (status: string | null) => {
     switch (status) {
       case "draft": return "bg-muted text-muted-foreground";
-      case "ready": return "bg-blue-500/10 text-blue-500 dark:bg-blue-500/20";
-      case "scheduled": return "bg-amber-500/10 text-amber-500 dark:bg-amber-500/20";
-      case "posted": return "bg-green-500/10 text-green-500 dark:bg-green-500/20";
-      case "failed": return "bg-red-500/10 text-red-500 dark:bg-red-500/20";
+      case "ready": return "bg-info/10 text-info";
+      case "scheduled": return "bg-warning/10 text-warning";
+      case "posted": return "bg-success/10 text-success";
+      case "failed": return "bg-destructive/10 text-destructive";
       default: return "bg-muted text-muted-foreground";
     }
   };
 
   const engagementColor = (level: string) => {
-    if (level === "highest") return "text-green-500";
-    if (level === "high") return "text-blue-500";
+    if (level === "highest") return "text-success";
+    if (level === "high") return "text-info";
     return "text-muted-foreground";
   };
 
@@ -186,21 +191,21 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
               <div className="flex gap-1">
                 <button
                   onClick={() => setBestTimesPlatform("x")}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "x" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+                  className={`pressable flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "x" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
                   data-testid="button-best-times-x"
                 >
                   <ChannelIcon channel="x" decorative className="h-3 w-3" /> X
                 </button>
                 <button
                   onClick={() => setBestTimesPlatform("threads")}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "threads" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+                  className={`pressable flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "threads" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
                   data-testid="button-best-times-threads"
                 >
                   <ChannelIcon channel="threads" decorative className="h-3 w-3" /> Threads
                 </button>
               </div>
             </div>
-            <button onClick={() => setShowBestTimes(false)} className="text-muted-foreground hover:text-foreground">
+            <button onClick={() => setShowBestTimes(false)} aria-label="Dismiss best times" className="pressable text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -208,13 +213,20 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
             <div className="flex gap-2">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-32" />)}
             </div>
+          ) : bestTimesError ? (
+            <p className="text-xs text-destructive flex items-center gap-2" data-testid="text-best-times-error">
+              Couldn't load the best-time recommendations.
+              <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => refetchBestTimes()}>
+                Try again
+              </Button>
+            </p>
           ) : (
             <div className="flex gap-2 overflow-x-auto pb-1">
               {currentBestTimes.map((slot, i) => (
                 <div key={i} className="flex-shrink-0 bg-card border rounded-md p-2 min-w-[120px]">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium">{slot.day}</span>
-                    <span className={`text-[10px] font-medium capitalize ${engagementColor(slot.engagement)}`}>{slot.engagement}</span>
+                    <span className={`text-xs font-medium capitalize ${engagementColor(slot.engagement)}`}>{slot.engagement}</span>
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {slot.times.map((t, j) => (
@@ -225,7 +237,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                           setScheduleTime(t.includes("PM") && parseInt(h) !== 12 ? `${parseInt(h) + 12}:${m || "00"}` : `${h.padStart(2, "0")}:${m || "00"}`);
                           toast({ title: `Time set to ${t} ${slot.day}` });
                         }}
-                        className="text-[10px] bg-muted hover:bg-primary/10 hover:text-primary px-1.5 py-0.5 rounded transition-colors"
+                        className="pressable text-xs bg-muted hover:bg-primary/10 hover:text-primary px-1.5 py-0.5 rounded transition-colors"
                       >
                         {t}
                       </button>
@@ -255,7 +267,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
           <>
             <div className="grid grid-cols-7 gap-1 mb-1">
               {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                <div key={day} className="text-center text-[10px] font-medium text-muted-foreground uppercase tracking-wider py-1">
+                <div key={day} className="text-center text-xs font-medium text-muted-foreground uppercase tracking-wider py-1">
                   {day}
                 </div>
               ))}
@@ -280,7 +292,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                         <button
                           key={post.id}
                           onClick={() => openPostDialog(post)}
-                          className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate ${getStatusStyle(post.status)}`}
+                          className={`pressable w-full text-left rounded px-1 py-0.5 text-xs truncate ${getStatusStyle(post.status)}`}
                           style={{ borderLeft: `2px solid ${getPillarColor(post.pillarId)}` }}
                           data-testid={`button-calendar-post-${post.id}`}
                         >
@@ -288,7 +300,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                         </button>
                       ))}
                       {dayPosts.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground pl-1">
+                        <span className="text-xs text-muted-foreground pl-1">
                           +{dayPosts.length - 3} more
                         </span>
                       )}
@@ -302,7 +314,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
       </div>
 
       <Dialog open={!!selectedPost} onOpenChange={() => setSelectedPost(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Post Details</DialogTitle>
           </DialogHeader>
@@ -313,7 +325,7 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                   {selectedPost.status}
                 </Badge>
                 <PlatformBadge platform={selectedPost.targetPlatform || "both"} />
-                <Badge variant="outline" className="text-[10px]">{selectedPost.postType}</Badge>
+                <Badge variant="outline" className="text-xs">{selectedPost.postType}</Badge>
               </div>
               <XPostPreview
                 tweets={[...(selectedPost.tweets || [])].sort((a, b) => a.position - b.position).map((t) => t.content)}
@@ -333,6 +345,11 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                   <p className="text-xs font-medium">
                     {selectedPost.status === "scheduled" ? "Reschedule this post" : "Schedule this post"}
                   </p>
+                  {/* Make the target explicit before anything ships (WT-08). */}
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Target</span>
+                    <PlatformBadge platform={selectedPost.targetPlatform || "both"} />
+                  </div>
                   <div className="flex gap-2">
                     <Input
                       type="date"

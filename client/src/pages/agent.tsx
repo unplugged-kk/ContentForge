@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Bot,
+  ChevronDown,
+  ChevronUp,
   History,
   Loader2,
   Play,
@@ -141,6 +143,10 @@ function AgentWorkspaceInner() {
   const [untrusted, setUntrusted] = useState<string>("");
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  // Local, non-status-affecting collapse of the approval callout. It must never
+  // touch `view.waitingForApproval`, which feeds deriveRunDisplayStatus (F1(a)).
+  const [approvalHidden, setApprovalHidden] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(true);
 
   const eventsRef = useRef<AgentUiEvent[]>([]);
   const pumpLock = useRef(false);
@@ -159,17 +165,24 @@ function AgentWorkspaceInner() {
     if (!backendId && runtimeQuery.data?.backend.id) setBackendId(runtimeQuery.data.backend.id);
   }, [backendId, runtimeQuery.data?.backend.id]);
 
-  // Restore run from URL param (?runId=123) on initial load
+  // Restore run from URL params (?runId=123, ?prompt=…) on initial load.
+  // `getAskAgentUrl` (lib/insights-state.ts) emits ?prompt=; without this the
+  // handoff from Insights landed on the hardcoded default objective (W-E patch).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const runParam = params.get("runId");
     if (runParam && !Number.isNaN(Number(runParam))) {
       setSelectedRunId(Number(runParam));
     }
+    const promptParam = params.get("prompt");
+    if (promptParam && promptParam.trim()) {
+      setComposer(promptParam);
+    }
   }, []);
 
   const selectRun = (id: number | null) => {
     setSelectedRunId(id);
+    setApprovalHidden(false);
     const url = new URL(window.location.href);
     if (id) {
       url.searchParams.set("runId", String(id));
@@ -465,6 +478,17 @@ function AgentWorkspaceInner() {
                   </SheetDescription>
                 </SheetHeader>
                 <div className="space-y-4 pt-2">
+                  {activeRun && (
+                    <div
+                      className="rounded-md border bg-muted/30 p-3 space-y-1 text-xs"
+                      data-testid="panel-run-identity"
+                    >
+                      <p className="font-medium">Run #{activeRun.id}</p>
+                      <p className="text-muted-foreground">Backend: {activeRun.backendId}</p>
+                      <p className="text-muted-foreground">Status: {displayStatus}</p>
+                      <p className="text-muted-foreground">Started: {formatRelativeTime(activeRun.createdAt)}</p>
+                    </div>
+                  )}
                   <ResearchPanel jobId={researchJobId} onJob={setResearchJobId} />
                   <VideoPanel generationId={videoGenerationId} onGeneration={setVideoGenerationId} />
                   <AudioPanel />
@@ -563,7 +587,7 @@ function AgentWorkspaceInner() {
               {/* Starter Quick Actions & Execution CTAs */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground mr-1 hidden md:inline">Starters:</span>
+                  <span className="text-xs text-muted-foreground mr-1 hidden md:inline">Starters:</span>
                   {STARTER_PROMPTS.map((item) => (
                     <Button
                       key={item.label}
@@ -620,8 +644,6 @@ function AgentWorkspaceInner() {
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-muted-foreground">Run #{activeRun.id}</span>
                     <span className="text-muted-foreground">·</span>
-                    <span className="text-xs text-muted-foreground">{activeRun.backendId}</span>
-                    <span className="text-muted-foreground">·</span>
                     <span className="text-xs text-muted-foreground">
                       {formatRelativeTime(activeRun.createdAt)}
                     </span>
@@ -671,19 +693,19 @@ function AgentWorkspaceInner() {
             </div>
           )}
 
-          {/* Section 3: Human Approval Callout (if waiting for authorization) */}
-          {(view.waitingForApproval || displayStatus === "waiting_for_approval") && (
+          {/* Section 3: Human Approval Callout — the decision, and always truthful (F1(a), F1(c)) */}
+          {(view.waitingForApproval || displayStatus === "waiting_for_approval") && !approvalHidden && (
             <div
-              className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-4 space-y-3"
+              className="rounded-lg border border-warning/30 bg-warning/10 p-4 space-y-3"
               data-testid="panel-auth-callout"
             >
               <div className="flex items-start gap-3">
-                <ShieldAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <ShieldAlert className="h-5 w-5 text-warning mt-0.5 shrink-0" />
                 <div className="space-y-1 min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                  <h3 className="text-sm font-semibold text-warning">
                     Authorization Required
                   </h3>
-                  <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="text-auth-required">
+                  <p className="text-xs text-foreground" data-testid="text-auth-required">
                     Privileged action requires explicit user authorization.
                   </p>
                 </div>
@@ -702,100 +724,40 @@ function AgentWorkspaceInner() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setView((prev) => ({ ...prev, waitingForApproval: false }))}
-                  data-testid="button-run-dismiss"
+                  onClick={() => setApprovalHidden(true)}
+                  data-testid="button-run-hide-approval"
                   className="h-8"
                 >
-                  Dismiss
+                  Hide request
                 </Button>
               </div>
             </div>
           )}
 
-          {/* Section 4: Stepper Timeline & Activity Feed */}
-          <Card data-testid="panel-agent-activity" className="border-border">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-primary" />
-                  Execution Timeline
-                </CardTitle>
-                <StatusBadge status={displayStatus} />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {view.error && (
-                <div
-                  className="text-destructive text-xs border border-destructive/20 bg-destructive/5 rounded-md p-3 flex items-start justify-between gap-2"
-                  data-testid="text-agent-error"
-                >
-                  <div>
-                    <span className="font-semibold">{view.error.class}:</span> {view.error.message}
-                  </div>
-                  {view.error.retrySafe && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 text-xs px-2 shrink-0"
-                      onClick={retryContinue}
-                      data-testid="button-error-retry"
-                    >
-                      Retry
-                    </Button>
-                  )}
-                </div>
-              )}
-
-              {displayedToolCalls.length === 0 && view.activity.length === 0 && (
-                <p className="text-xs text-muted-foreground py-2">
-                  No execution steps recorded yet. Start a run above to watch the agent work.
-                </p>
-              )}
-
-              {/* Tool Calls List */}
-              <div className="space-y-2">
-                {displayedToolCalls.map((call) => (
-                  <ToolCallCard
-                    key={call.id}
-                    call={call}
-                    onOpen={(kind, id) => {
-                      if (kind === "artifact") handleOpenArtifact(id);
-                      if (kind === "research") handleOpenResearch(id);
-                    }}
-                  />
-                ))}
-              </div>
-
-              {/* Compact Raw AG-UI Events Log */}
-              {view.activity.length > 0 && (
-                <details className="mt-2 text-xs text-muted-foreground border-t pt-2">
-                  <summary className="cursor-pointer font-mono hover:text-foreground">
-                    Raw event stream ({view.activity.length} events)
-                  </summary>
-                  <div className="mt-2 font-mono bg-muted/30 p-2.5 rounded max-h-36 overflow-y-auto space-y-1 text-[11px]">
-                    {view.activity.map((line, i) => (
-                      <p key={`${line}-${i}`}>{line}</p>
-                    ))}
-                  </div>
-                </details>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Section 5: Repurpose Progress (if active plan running) */}
-          {planId && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold tracking-tight">Active Repurposing Plan</h3>
-              <RepurposePanel
-                storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
-                planId={planId}
-                onPlan={setPlanId}
-                onOpenArtifact={handleOpenArtifact}
-              />
+          {/* When the callout is hidden the run status is NOT changed — the badge
+              still reads "Waiting for approval" and approval stays reachable. */}
+          {(view.waitingForApproval || displayStatus === "waiting_for_approval") && approvalHidden && (
+            <div
+              className="rounded-lg border bg-card p-3 flex flex-wrap items-center justify-between gap-2"
+              data-testid="banner-approval-hidden"
+            >
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <StatusBadge status="waiting_for_approval" />
+                This run is still waiting for authorization — nothing was approved.
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => setApprovalHidden(false)}
+                data-testid="button-run-show-approval"
+              >
+                Show request
+              </Button>
             </div>
           )}
 
-          {/* Section 6: Generated Artifacts & Review (Primary Output Destination) */}
+          {/* Section 4: Generated Artifacts & Review — the decision, above the execution detail (F1(c)) */}
           <section className="space-y-4 pt-2">
             <div className="flex items-center justify-between border-b pb-2">
               <h2 className="text-base font-semibold tracking-tight">Generated Artifacts &amp; Results</h2>
@@ -819,12 +781,12 @@ function AgentWorkspaceInner() {
               </div>
             )}
 
-            {/* Generated Domain Entities */}
+            {/* Generated domain entities */}
             {story && <StoryCard story={story} />}
             {opportunities.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Opportunities ({opportunities.length})
+                  Ideas ({opportunities.length})
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {opportunities.map((opp) => (
@@ -838,6 +800,101 @@ function AgentWorkspaceInner() {
             {audio && <AudioAssetCard asset={audio} />}
             {untrusted && <UntrustedSource text={untrusted} />}
           </section>
+
+          {/* Section 5: Repurpose Progress (if active plan running) */}
+          {planId && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold tracking-tight">Active Repurposing Plan</h3>
+              <RepurposePanel
+                storyId={typeof story?.id === "number" ? story.id : Number(story?.id) || null}
+                planId={planId}
+                onPlan={setPlanId}
+                onOpenArtifact={handleOpenArtifact}
+              />
+            </div>
+          )}
+
+          {/* Section 6: Execution Timeline & Activity Feed — technical detail, below the decision (F1(c)) */}
+          <Card data-testid="panel-agent-activity" className="border-border">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-primary" />
+                  Execution Timeline
+                </CardTitle>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs gap-1"
+                  onClick={() => setTimelineOpen((prev) => !prev)}
+                  aria-expanded={timelineOpen}
+                  data-testid="button-toggle-execution-steps"
+                >
+                  {timelineOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {timelineOpen ? "Hide steps" : "Show steps"}
+                </Button>
+              </div>
+            </CardHeader>
+            {timelineOpen && (
+              <CardContent className="space-y-3 text-sm">
+                {view.error && (
+                  <div
+                    className="text-destructive text-xs border border-destructive/20 bg-destructive/5 rounded-md p-3 flex items-start justify-between gap-2"
+                    data-testid="text-agent-error"
+                  >
+                    <div>
+                      <span className="font-semibold">{view.error.class}:</span> {view.error.message}
+                    </div>
+                    {view.error.retrySafe && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-xs px-2 shrink-0"
+                        onClick={retryContinue}
+                        data-testid="button-error-retry"
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {displayedToolCalls.length === 0 && view.activity.length === 0 && (
+                  <p className="text-xs text-muted-foreground py-2">
+                    No execution steps recorded yet. Start a run above to watch the agent work.
+                  </p>
+                )}
+
+                {/* Tool Calls List */}
+                <div className="space-y-2">
+                  {displayedToolCalls.map((call) => (
+                    <ToolCallCard
+                      key={call.id}
+                      call={call}
+                      onOpen={(kind, id) => {
+                        if (kind === "artifact") handleOpenArtifact(id);
+                        if (kind === "research") handleOpenResearch(id);
+                      }}
+                    />
+                  ))}
+                </div>
+
+                {/* Compact Raw AG-UI Events Log */}
+                {view.activity.length > 0 && (
+                  <details className="mt-2 text-xs text-muted-foreground border-t pt-2">
+                    <summary className="cursor-pointer font-mono hover:text-foreground">
+                      Raw event stream ({view.activity.length} events)
+                    </summary>
+                    <div className="mt-2 font-mono bg-muted/30 p-2.5 rounded max-h-36 overflow-y-auto space-y-1 text-xs">
+                      {view.activity.map((line, i) => (
+                        <p key={`${line}-${i}`}>{line}</p>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </CardContent>
+            )}
+          </Card>
         </div>
 
         {/* Secondary Desktop Sidebar (>=lg): Capabilities & Run History */}
@@ -848,28 +905,38 @@ function AgentWorkspaceInner() {
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Capabilities
               </p>
-              <Badge variant="outline" className="text-[10px]">
-                {capabilities.filter((c) => c.available).length}/{capabilities.length} Active
-              </Badge>
+              {!toolsQuery.isError && (
+                <Badge variant="outline" className="text-xs">
+                  {capabilities.filter((c) => c.available).length}/{capabilities.length} Active
+                </Badge>
+              )}
             </div>
-            <div className="space-y-1.5 rounded-md border bg-card p-2.5">
-              {capabilities.map((row) => (
-                <div key={row.group} className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-foreground">{row.group}</span>
-                  <span
-                    className={`text-[11px] ${
-                      row.approvalRequired
-                        ? "text-amber-600 dark:text-amber-400 font-medium"
-                        : row.available
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {row.approvalRequired ? "approval req." : row.available ? "available" : "unavailable"}
-                  </span>
-                </div>
-              ))}
-            </div>
+            {toolsQuery.isError ? (
+              <ErrorState
+                title="Couldn't load capabilities"
+                description="Something went wrong while loading what the agent can do."
+                onRetry={() => toolsQuery.refetch()}
+              />
+            ) : (
+              <div className="space-y-1.5 rounded-md border bg-card p-2.5">
+                {capabilities.map((row) => (
+                  <div key={row.group} className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground">{row.group}</span>
+                    <span
+                      className={`text-xs ${
+                        row.approvalRequired
+                          ? "text-warning font-medium"
+                          : row.available
+                          ? "text-success"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {row.approvalRequired ? "approval req." : row.available ? "available" : "unavailable"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Desktop Run History */}
@@ -879,7 +946,7 @@ function AgentWorkspaceInner() {
                 Run History
               </p>
               {runsQuery.data?.runs?.length ? (
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   {runsQuery.data.runs.length} total
                 </span>
               ) : null}

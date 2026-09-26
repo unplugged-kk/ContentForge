@@ -1,12 +1,38 @@
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui-shared/status-badge";
 import type { ToolCallView } from "@shared/agent-ui";
 
 function textField(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   return "";
+}
+
+/**
+ * Tool-call statuses come from the agent protocol; `denied` is the one value the
+ * shared status vocabulary does not carry. A denied tool call is a blocked
+ * action, so it maps to `blocked` (destructive + alert glyph) rather than being
+ * rendered verbatim or rounded to `unknown` (F1(b) — one status vocabulary).
+ */
+function toolStatus(status: string): string {
+  return status === "denied" ? "blocked" : status;
+}
+
+/**
+ * Technical identity (ids, hashes, provider ids) is progressively disclosed
+ * behind this disclosure rather than competing with the operator workflow
+ * (F1(d)). Never rendered as the primary label.
+ */
+function TechnicalDetails({ children }: { children: ReactNode }) {
+  return (
+    <details className="pt-1">
+      <summary className="cursor-pointer text-xs text-muted-foreground">Technical details</summary>
+      <div className="mt-1 space-y-0.5 font-mono text-xs break-all">{children}</div>
+    </details>
+  );
 }
 
 export function ToolCallCard({
@@ -29,9 +55,7 @@ export function ToolCallCard({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-sm font-medium">{call.name.replace(/_/g, " ")}</CardTitle>
-          <Badge variant={call.status === "denied" ? "destructive" : "secondary"} data-testid={`badge-tool-status-${call.id}`}>
-            {call.status}
-          </Badge>
+          <StatusBadge status={toolStatus(call.status)} testId={`badge-tool-status-${call.id}`} />
         </div>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
@@ -51,7 +75,7 @@ export function ToolCallCard({
         )}
         {call.renderer === "generate_artifact" && (
           <div className="text-xs space-y-1">
-            {Number(refs.opportunityId) > 0 ? <p>Opportunity #{String(refs.opportunityId)}</p> : null}
+            {Number(refs.opportunityId) > 0 ? <p>Idea #{String(refs.opportunityId)}</p> : null}
             {textField(call.arguments.format) ? <p>Format: {textField(call.arguments.format)}</p> : null}
             {artifactId > 0 && (
               <Button size="sm" variant="outline" onClick={() => onOpen?.("artifact", artifactId)} data-testid={`button-view-artifact-${call.id}`}>
@@ -64,7 +88,7 @@ export function ToolCallCard({
           <Button size="sm" variant="ghost" onClick={() => onOpen?.("story", storyId)}>Open Story</Button>
         )}
         {opportunityIds.length > 0 && (
-          <p className="text-xs">{opportunityIds.length} opportunities</p>
+          <p className="text-xs">{opportunityIds.length} ideas</p>
         )}
         {call.errorMessage ? <p className="text-destructive text-xs">{call.errorMessage}</p> : null}
       </CardContent>
@@ -90,7 +114,7 @@ export function OpportunityCard({ opportunity }: { opportunity: Record<string, u
   return (
     <Card data-testid={`card-opportunity-${opportunity.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">Opportunity {String(opportunity.id)}</CardTitle>
+        <CardTitle className="text-sm">Idea {String(opportunity.id)}</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p>{textField(opportunity.format)} × {textField(opportunity.channel)}</p>
@@ -126,12 +150,15 @@ export function VisualAssetCard({ asset }: { asset: Record<string, unknown> }) {
   return (
     <Card data-testid={`card-visual-${asset.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">VisualAsset {String(asset.id)}</CardTitle>
+        <CardTitle className="text-sm">Image</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
-        <p>{textField(asset.kind)} · {textField(asset.mime) || "identity only"}</p>
-        <p>Status: {textField(asset.status)}</p>
-        {asset.contentHash ? <p className="font-mono break-all">hash {String(asset.contentHash)}</p> : null}
+        <p>{textField(asset.kind) || "Image"}</p>
+        <TechnicalDetails>
+          <p>id {String(asset.id)}</p>
+          {textField(asset.mime) ? <p>{textField(asset.mime)}</p> : null}
+          {asset.contentHash ? <p>hash {String(asset.contentHash)}</p> : null}
+        </TechnicalDetails>
       </CardContent>
     </Card>
   );
@@ -141,14 +168,16 @@ export function VideoAssetCard({ asset }: { asset: Record<string, unknown> }) {
   return (
     <Card data-testid={`card-video-${asset.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">VideoAsset {String(asset.id)}</CardTitle>
+        <CardTitle className="text-sm">Video</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
-        <p>Status: {textField(asset.status)}</p>
-        {asset.visualGenerationId != null ? <p>Generation {String(asset.visualGenerationId)}</p> : null}
-        {asset.durationMs != null ? <p>Duration {String(asset.durationMs)}ms</p> : null}
-        {asset.width != null && asset.height != null ? <p>{String(asset.width)}×{String(asset.height)}</p> : null}
-        <p>Identity only — no binary in agent messages.</p>
+        <p>Status: {textField(asset.status) || "unknown"}</p>
+        <TechnicalDetails>
+          <p>id {String(asset.id)}</p>
+          {asset.visualGenerationId != null ? <p>generation {String(asset.visualGenerationId)}</p> : null}
+          {asset.durationMs != null ? <p>{String(asset.durationMs)}ms</p> : null}
+          {asset.width != null && asset.height != null ? <p>{String(asset.width)}×{String(asset.height)}</p> : null}
+        </TechnicalDetails>
       </CardContent>
     </Card>
   );
@@ -158,14 +187,16 @@ export function AudioAssetCard({ asset }: { asset: Record<string, unknown> }) {
   return (
     <Card data-testid={`card-audio-${asset.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">AudioAsset {String(asset.id)}</CardTitle>
+        <CardTitle className="text-sm">Audio</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
-        <p>Status: {textField(asset.status)}</p>
-        {asset.visualGenerationId != null ? <p>Generation {String(asset.visualGenerationId)}</p> : null}
-        {asset.durationMs != null ? <p>Duration {String(asset.durationMs)}ms</p> : null}
-        {asset.sampleRate != null ? <p>{String(asset.sampleRate)}Hz · {String(asset.channels ?? "—")}ch</p> : null}
-        <p>Identity only — no binary or credentials in agent messages.</p>
+        <p>Status: {textField(asset.status) || "unknown"}</p>
+        <TechnicalDetails>
+          <p>id {String(asset.id)}</p>
+          {asset.visualGenerationId != null ? <p>generation {String(asset.visualGenerationId)}</p> : null}
+          {asset.durationMs != null ? <p>{String(asset.durationMs)}ms</p> : null}
+          {asset.sampleRate != null ? <p>{String(asset.sampleRate)}Hz · {String(asset.channels ?? "—")}ch</p> : null}
+        </TechnicalDetails>
       </CardContent>
     </Card>
   );
@@ -175,11 +206,14 @@ export function VideoGenerationCard({ generation }: { generation: Record<string,
   return (
     <Card data-testid={`card-video-generation-${generation.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">VideoGeneration {String(generation.id)}</CardTitle>
+        <CardTitle className="text-sm">Video generation</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p>Status: {textField(generation.status)}</p>
-        <p>Provider: {textField(generation.providerId)}</p>
+        <TechnicalDetails>
+          <p>id {String(generation.id)}</p>
+          <p>provider {textField(generation.providerId)}</p>
+        </TechnicalDetails>
       </CardContent>
     </Card>
   );
@@ -189,11 +223,11 @@ export function VideoRepurposingCard({ job }: { job: Record<string, unknown> }) 
   return (
     <Card data-testid={`card-video-repurposing-${job.id}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">VideoRepurposingJob {String(job.id)}</CardTitle>
+        <CardTitle className="text-sm">Video clips</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p data-testid="text-video-repurpose-status">Status: {textField(job.status)}</p>
-        <p data-testid="text-video-repurpose-source">Source VideoAsset {String(job.sourceVisualAssetId ?? "—")}</p>
+        <p data-testid="text-video-repurpose-source">Source video {String(job.sourceVisualAssetId ?? "—")}</p>
         <p data-testid="text-video-repurpose-clip-count">Clips {String(job.clipCount ?? "—")}</p>
       </CardContent>
     </Card>
@@ -208,7 +242,9 @@ export function ClipCard({ clip }: { clip: Record<string, unknown> }) {
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
         <p>Status: {textField(clip.status)}</p>
-        {clip.visualAssetId != null ? <p>VideoAsset {String(clip.visualAssetId)}</p> : null}
+        <TechnicalDetails>
+          {clip.visualAssetId != null ? <p>video {String(clip.visualAssetId)}</p> : null}
+        </TechnicalDetails>
       </CardContent>
     </Card>
   );
@@ -234,17 +270,17 @@ export function AgentRunCard({
   return (
     <button
       type="button"
-      className={`w-full text-left rounded-md border p-2 ${active ? "border-primary bg-primary/5" : "border-border"}`}
+      className={`w-full text-left rounded-md border p-2 pressable ${active ? "border-primary bg-primary/5" : "border-border"}`}
       onClick={() => onOpen(run.id)}
       data-testid={`card-agent-run-${run.id}`}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium">Run {run.id}</span>
-        <Badge variant="secondary">{run.status}</Badge>
+        <StatusBadge status={run.status} />
       </div>
       <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{run.objective}</p>
-      <p className="text-[10px] text-muted-foreground mt-1">
-        {run.backendId} · step {run.currentStep} · {new Date(run.createdAt).toLocaleString()}
+      <p className="text-xs text-muted-foreground mt-1">
+        step {run.currentStep} · {new Date(run.createdAt).toLocaleString()}
         {run.finishedAt ? ` · done ${new Date(run.finishedAt).toLocaleString()}` : ""}
       </p>
     </button>
