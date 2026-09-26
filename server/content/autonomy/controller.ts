@@ -14,7 +14,7 @@
  * production policy-mutation code path in this codebase, human or
  * autonomous.
  */
-import { and, desc, eq, gte, sql as rawSql } from "drizzle-orm";
+import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import type { ContentDatabase } from "../storage";
 import {
   autonomyDecisions,
@@ -30,12 +30,23 @@ import { openCircuitBreaker } from "./config";
 import { assertAllowedPolicyFields, ForbiddenPolicyFieldError } from "./policyFieldAllowlist";
 import { activationDecisionIdentityKey, rollbackDecisionIdentityKey } from "./identity";
 import {
+  AUTONOMY_TIMEZONE,
+  DAILY_WINDOW_MINUTES,
+  WEEKLY_WINDOW_MINUTES,
+  ROLLBACK_WINDOW_MINUTES,
+  autonomyWindowBoundaries,
+  cooldownElapsedMs,
+} from "./time";
+import {
   activatePolicyCandidate,
   rollbackPolicyForCandidate,
   policyKeyForScope,
   PolicyActivationError,
   type ActivationResult,
 } from "../policyActivation/activation";
+
+// Back-compat surface: `cooldownElapsed` now lives in the time-semantics module.
+export { cooldownElapsed } from "./time";
 
 export class AutonomyError extends Error {
   constructor(message: string, readonly code: string) {
@@ -77,12 +88,6 @@ export function meetsMinimumEvidence(quality: string, configuredMinimum: string)
       ? configuredMinimum
       : AUTONOMY_HARD_MINIMUM_EVIDENCE;
   return (EVIDENCE_RANK[quality] ?? 0) >= (EVIDENCE_RANK[effectiveMinimum] ?? 3);
-}
-
-/** Pure, unit-testable: has `cooldownMinutes` elapsed since `lastActivatedAt`? */
-export function cooldownElapsed(lastActivatedAt: Date | string, cooldownMinutes: number, now: number = Date.now()): boolean {
-  const elapsedMs = now - new Date(lastActivatedAt).getTime();
-  return elapsedMs >= cooldownMinutes * 60 * 1000;
 }
 
 /**
@@ -186,10 +191,23 @@ function baseGate(config: AutonomyConfig | undefined, requiredMode: string[]): G
   return null;
 }
 
+/**
+ * §33.7 — counts autonomous activations within a trailing window, with the
+ * window boundary evaluated **by the database, in the database's own time
+ * frame**.
+ *
+ * `created_at` is `timestamp WITHOUT time zone`, written by its
+ * `CURRENT_TIMESTAMP` default as session-local wall clock. Comparing it against
+ * a JS `Date` (serialised in the app process's zone) or against a driver-
+ * materialised value mixes two different frames and is wrong under any
+ * non-UTC session. `now() - make_interval(...)` keeps both sides of the
+ * comparison in the session frame, so the result is identical for a UTC,
+ * `Asia/Kolkata`, or `America/New_York` session.
+ */
 async function countAutonomousActivationsSince(
   db: ContentDatabase,
   userId: number,
-  sinceMs: number,
+  windowMinutes: number,
 ): Promise<number> {
   const [row] = await db
     .select({ count: rawSql<number>`count(*)::int` })
@@ -199,7 +217,7 @@ async function countAutonomousActivationsSince(
         eq(policyActivations.userId, userId),
         eq(policyActivations.actor, "autonomous_controller"),
         eq(policyActivations.action, "activate"),
-        gte(policyActivations.createdAt, new Date(sinceMs)),
+        rawSql`${policyActivations.createdAt} >= (now() - make_interval(mins => ${windowMinutes}))::timestamp`,
       ),
     );
   return row?.count ?? 0;
@@ -218,25 +236,42 @@ async function checkActivationBudgetCooldownAndChurn(
   policyKey: string,
 ): Promise<GateResult | null> {
   const now = Date.now();
-  const dayCount = await countAutonomousActivationsSince(db, userId, now - 24 * 60 * 60 * 1000);
+  const dayCount = await countAutonomousActivationsSince(db, userId, DAILY_WINDOW_MINUTES);
   if (dayCount >= config.maxActivationsPerDay) {
-    return denied("BUDGET_EXHAUSTED_DAILY", `Daily autonomous activation budget (${config.maxActivationsPerDay}) exhausted.`, { dayCount });
+    return denied(
+      "BUDGET_EXHAUSTED_DAILY",
+      `Daily autonomous activation budget (${config.maxActivationsPerDay}) exhausted.`,
+      { dayCount, ...autonomyWindowBoundaries(now, AUTONOMY_TIMEZONE) },
+    );
   }
-  const weekCount = await countAutonomousActivationsSince(db, userId, now - 7 * 24 * 60 * 60 * 1000);
+  const weekCount = await countAutonomousActivationsSince(db, userId, WEEKLY_WINDOW_MINUTES);
   if (weekCount >= config.maxActivationsPerWeek) {
-    return denied("BUDGET_EXHAUSTED_WEEKLY", `Weekly autonomous activation budget (${config.maxActivationsPerWeek}) exhausted.`, { weekCount });
+    return denied(
+      "BUDGET_EXHAUSTED_WEEKLY",
+      `Weekly autonomous activation budget (${config.maxActivationsPerWeek}) exhausted.`,
+      { weekCount, ...autonomyWindowBoundaries(now, AUTONOMY_TIMEZONE) },
+    );
   }
 
+  // Cooldown: the elapsed time is computed by the DATABASE (session-frame safe),
+  // never by subtracting a driver-materialised naive timestamp from Date.now().
   const [latestForScope] = await db
-    .select()
+    .select({
+      action: policyActivations.action,
+      elapsedMs: rawSql<number>`round(extract(epoch from (now() - ${policyActivations.createdAt})) * 1000)::bigint`,
+    })
     .from(policyActivations)
     .where(and(eq(policyActivations.userId, userId), eq(policyActivations.policyKey, policyKey)))
     .orderBy(desc(policyActivations.createdAt))
     .limit(1);
 
-  if (latestForScope && latestForScope.action === "activate" && !cooldownElapsed(latestForScope.createdAt, config.cooldownMinutes, now)) {
+  if (
+    latestForScope &&
+    latestForScope.action === "activate" &&
+    !cooldownElapsedMs(Number(latestForScope.elapsedMs), config.cooldownMinutes)
+  ) {
     return denied("COOLDOWN_ACTIVE", `Cooldown (${config.cooldownMinutes}m) has not elapsed since the last activation for this scope.`, {
-      elapsedMinutes: Math.floor((now - new Date(latestForScope.createdAt).getTime()) / 60000),
+      elapsedMinutes: Math.floor(Number(latestForScope.elapsedMs) / 60_000),
     });
   }
 
@@ -585,7 +620,8 @@ async function executeAutonomousRollbackLocked(
         eq(policyActivations.policyKey, policyKey),
         eq(policyActivations.action, "rollback"),
         eq(policyActivations.actor, "autonomous_controller"),
-        gte(policyActivations.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+        // §33.7: window boundary evaluated in the database's own time frame.
+        rawSql`${policyActivations.createdAt} >= (now() - make_interval(mins => ${ROLLBACK_WINDOW_MINUTES}))::timestamp`,
       ),
     );
   if ((recentRollbacks[0]?.count ?? 0) >= ROLLBACK_OSCILLATION_THRESHOLD) {
