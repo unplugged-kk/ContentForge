@@ -34,7 +34,7 @@ Measured on the integrated tree. "Before" = baseline snapshot `87a0601`.
 
 | Criterion | Before | After | Status |
 |---|---|---|---|
-| axe violations, canonical routes | **failing** (`color-contrast`, 2.58:1 avatar) | **0** — 26/26 `accessibility.e2e.spec.ts` pass | **MET** |
+| axe violations, canonical routes | **failing** (`color-contrast`, 2.58:1 avatar) | **0 across the full rule set**, 7 routes × 2 themes | **MET** |
 | Status distinguishable without colour | no | every one of 17 statuses has a glyph; verified no two share a (glyph, word) pair | **MET** |
 | Status distinguishable without motion | no | pulse is reinforcement only; glyph survives `prefers-reduced-motion` | **MET** |
 | `isError` on list/count/empty surfaces | 5+ regions rendered failure as empty | added across sources, insights, schedule, today, agent | **MET** |
@@ -77,8 +77,8 @@ Two P1-class items found during integration were **fixed in the integration tree
 
 | # | Class | Issue | Disposition |
 |---|---|---|---|
-| P3-1 | DESIGN SYSTEM | 45 `text-[Npx]` classes remain (188 → 45). They resolve to 12px via the floor, so nothing renders too small; this is a readability migration. | **DEFER.** |
-| P3-2 | DESIGN SYSTEM | 49 palette literals remain (250 → 49). ~31 are in dead routes (`discover`, `generate`, `ideas`, `canned-responses`) that do not ship, and 12 are `x-post-preview.tsx`'s platform brand colours, which are correct as literals. | **ACCEPTED AS-IS.** |
+| P3-1 | DESIGN SYSTEM | 45 `text-[Npx]` classes remain (188 → 45). They resolve to 12px via the floor, so nothing renders too small; this is a readability migration. **Correction (independent verification): the "dead routes" rationale covers only ~60% of the remainder — 17 of the 45 ship in live chunks** (`create-*`, `insights-*`, `x-post-preview-*`). | **DEFER.** |
+| P3-2 | DESIGN SYSTEM | 49 palette literals remain (250 → 49). ~31 are in dead routes and 12 are `x-post-preview.tsx`'s platform brand colours, which are correct as literals. **Correction (independent verification): 19 of the 49 ship in live chunks**, so the "dead routes" framing was optimistic. Still cosmetic — they do not fail contrast on a canonical route. | **DEFER**, now honestly counted. |
 | P3-3 | MOTION | 11 raw `transition-all` remain; `.pressable` is applied at more sites than before but 35 hand-rolled `<button>`s are still un-swept. | **DEFER.** |
 | P3-4 | DESIGN SYSTEM | `--accent` (`210 8% 94%`) vs `--popover` (`0 0% 94%`) is ~1.01:1, so a `bg-accent` highlight is nearly invisible as a fill. W-B worked around it correctly with an inset ring on `--ring` (6.71:1) rather than re-skinning, and proved a token fix would need `hsl(210 8% 55%)` — a visual change. | **ACCEPTED** (workaround is the honest fix). |
 | P3-5 | HYGIENE | Dead code carries migrated work: `vault.tsx` is unreachable (`/vault` → `/sources?view=vault`, imported by nothing) yet was migrated; `ui/navigation-menu.tsx` is imported by nothing; `ui/calendar.tsx:45` has the same 1:1 highlight bug with 0 importers. | **DEFER.** |

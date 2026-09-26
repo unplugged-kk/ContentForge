@@ -342,4 +342,82 @@ implemented.
 
 ---
 
+## 11. Wave 2 — parallel finalization
+
+**Coordinator note on scope.** The brief listed 33.2 and 33.3 as remaining implementation work.
+Their content was already landed on `main` by the design programme, so they were run as
+**independent verification passes** rather than re-implemented. 33.4 was the only genuine
+implementation workstream. This is a deliberate deviation, recorded in
+`docs/final-parallel-baseline.md` and `docs/final-parallel-synthesis.md`.
+
+Five workers ran in parallel — one writer, four read-only. Three targeted remediation workers
+followed. Full detail: `docs/final-parallel-synthesis.md` and
+`docs/final-integration-gap-report.md`.
+
+### What the wave found, and what it cost
+
+**The most important result is that a verifier caught the coordinator being wrong.** The security
+worker contradicted a claim I had already reported: the leaked `.env.orig-backup` blob was **not**
+purged. It had survived every prune because the integration worktree's git index still staged the
+path, and git never prunes an object an index references. My checks — `rev-list --all --objects`
+and `git fsck --unreachable` — are the natural ones and both gave a clean answer, because the
+first only sees *reachable* objects and `fsck` does not report packed unreachable ones. A
+different method (hashing the actual file, then testing that specific object) found it at once.
+
+Fixed and verified: the blob is absent from the object database, unreachable via
+`--all --reflog --indexed-objects`, and the leaked file's distinctive content appears **0 times**
+anywhere in it. The `.gitignore` gap that permitted the whole incident is closed, with the
+template files explicitly re-included. Committed as `4320f47`.
+
+### Defects found and fixed
+
+| Defect | Severity | Status |
+|---|---|---|
+| `/schedule` Radix `Tabs` with no `<TabsContent>` → `aria-controls` dangling → axe **`aria-valid-attr-value`, critical** | HIGH | **FIXED** (`9d1073c`) |
+| `/schedule` heading skip `h1→h5` | LOW | **FIXED** |
+| `/create` heading skip `h1→h3` | LOW | **FIXED** (`fcb743c`) |
+| `/today` rendered one publication **twice** — as a failure and as an unknown outcome | MEDIUM | **FIXED** (2 cards → 1) |
+
+### Claims corrected
+
+| Claim | Correction |
+|---|---|
+| "0 axe violations on canonical routes" | Was true only for the spec's **rule subset**. The full rule set found 6 violations. Now genuinely **0 across the full rule set, 14/14 route-theme combinations**. |
+| "3 pre-existing unit failures" | **They do not reproduce** — 4 consecutive runs give 772/772. Classified as flaky/environment-sensitive, not deterministic. |
+| "20 legacy paths" | **18**. |
+| Residual 49 literals / 45 sub-12px are "dead routes + brand colours" | Only ~60% true — **19 and 17 ship in live chunks**. |
+| `--primary` as text is 3.68:1 light | Not reproducible; light is 5.40:1. Only dark (3.40:1) fails. |
+
+### Worker 33.4 — not completed, and not integrated
+
+Two attempts hit their turn limit before finishing a single verification run. Its work, including
+an `CONTENTFORGE_E2E_SERVER`-gated rate-limit change, is preserved on
+`phase-33.4-test-stability` as a WIP commit labelled **"UNVERIFIED, DO NOT INTEGRATE"**
+(`b103dcf`). It was **deliberately not merged**: integrating unverified harness changes would
+violate the rule that governs this whole programme. `main` is unaffected and the work is
+recoverable. The 4 pre-existing E2E failures and the parallel-run contention therefore remain
+**open**, exactly as they were.
+
+### Verified state of `main` after wave 2
+
+```
+b4ed802  Merge branch 'phase-fix-today-create'
+f6bd575  Merge branch 'phase-fix-schedule-surface'
+4320f47  fix(security): close the .gitignore gap
+bcf1470  docs(design): land the multi-agent design programme reports
+```
+
+| Check | Result |
+|---|---|
+| `tsc` / `build` | pass |
+| Unit | **772 / 772** |
+| axe — full rule set, 7 routes × 2 themes | **14/14 clean** |
+| Targeted specs | **59 / 59** |
+| E2E serial | **252 passed / 4 failed** (pre-existing) |
+| Browser smoke, production build | all 7 routes clean |
+
+**Still not pushed.** The credential rotation remains the gate.
+
+---
+
 # DESIGN LANDED
