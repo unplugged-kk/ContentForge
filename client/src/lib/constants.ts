@@ -32,14 +32,6 @@ export const PLATFORMS = [
   { value: "both", label: "X + Threads" },
 ] as const;
 
-export const POST_STATUSES = [
-  { value: "draft", label: "Draft", color: "text-muted-foreground" },
-  { value: "ready", label: "Ready", color: "text-blue-500" },
-  { value: "scheduled", label: "Scheduled", color: "text-amber-500" },
-  { value: "posted", label: "Posted", color: "text-green-500" },
-  { value: "failed", label: "Failed", color: "text-red-500" },
-] as const;
-
 export const CHAR_LIMITS = {
   x: 280,
   threads: 500,

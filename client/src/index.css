@@ -36,6 +36,30 @@
   --accent-foreground: 210 8% 12%;
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 84% 98%;
+  /*
+   * Semantic status roles. Two values per role, and only two:
+   *   --{role}             text and border on a normal surface, and the source
+   *                        for tinted fills/borders via alpha
+   *                        (bg-success/10, border-success/30)
+   *   --{role}-foreground  text placed on a SOLID --{role} fill
+   *
+   * Status is re-decided at every call site today (250 raw palette literals),
+   * so the same concept renders in different hues on different pages. These
+   * are the one place a role's colour is declared.
+   *
+   * Values are computed, not eyeballed, against WCAG relative luminance,
+   * alpha-composited in sRGB. Every --{role} clears 4.5:1 against --background,
+   * against --card, and against its own 10% tint composited over both; every
+   * --{role}-foreground clears 4.5:1 against its --{role}. Light stops are
+   * Tailwind green-800 / amber-800 / blue-700; see the change report for the
+   * measured table.
+   */
+  --success: 143 64% 24%;
+  --success-foreground: 138 76% 97%;
+  --warning: 26 83% 31%;
+  --warning-foreground: 48 100% 96%;
+  --info: 224 76% 48%;
+  --info-foreground: 214 100% 97%;
   --input: 0 0% 75%;
   /* Focus ring sits outside the control against ring-offset-background, so it is
      tuned against that offset, not against --primary. At 38% it clears 7.6:1
@@ -136,8 +160,28 @@
   --muted-foreground: 0 0% 65%;
   --accent: 210 8% 16%;
   --accent-foreground: 210 8% 90%;
-  --destructive: 0 84% 42%;
-  --destructive-foreground: 0 84% 98%;
+  /*
+   * Destructive is theme-split on purpose. As error TEXT on the 8% dark surface
+   * the shared light value (0 84% 42%) measured 3.03:1. Lifted to 64% it
+   * measures 5.41:1 on --background and 5.15:1 on --card, and still clears its
+   * own 10% tint (4.86:1 / 4.60:1), which `hover:bg-destructive/10` relies on.
+   * That makes the solid fill light, so --destructive-foreground flips dark
+   * (5.43:1 on the fill); the old 0 84% 98% label would sit at 3.18:1 on it.
+   */
+  --destructive: 0 84% 64%;
+  --destructive-foreground: 0 84% 10%;
+  /*
+   * Semantic status roles — dark stops (Tailwind green-400 / amber-400 /
+   * blue-400). Same two-value contract as :root; the light roles are dark text
+   * on a light surface and these are the inverse. See the change report for the
+   * measured table.
+   */
+  --success: 142 69% 58%;
+  --success-foreground: 144 61% 12%;
+  --warning: 43 96% 56%;
+  --warning-foreground: 26 83% 14%;
+  --info: 213 94% 68%;
+  --info-foreground: 224 76% 12%;
   --input: 0 0% 28%;
   --ring: 217 91% 72%;
   --chart-1: 226 55% 58%;
