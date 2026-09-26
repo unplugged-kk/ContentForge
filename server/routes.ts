@@ -17,7 +17,7 @@ import { runDiscoverRefresh } from "./discoverRefresh";
 import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
 import { getThreadsConfigSummary, verifyThreadsAccessToken } from "./social/threads";
 import { getInstagramConfigSummary, verifyInstagramAccessToken, isProfessionalAccountType } from "./social/instagram";
-import { getUserId } from "./middleware/userContext";
+import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
@@ -2180,13 +2180,16 @@ Each tweet under ${charLimit} characters.` },
   });
 
   // ==================== DISCOVERY SETTINGS & SOURCES ====================
+  // Phase 33.7: scope both handlers to the authenticated owner. Before this,
+  // GET/PUT operated on a global singleton row (id 1), so any authenticated
+  // user read and overwrote every other user's custom keywords.
   app.get("/api/discover/settings", async (req, res) => {
-    try { res.json(await storage.getDiscoverySettings()); }
+    try { res.json(await storage.getDiscoverySettings(requireOwnerId(req))); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   app.put("/api/discover/settings", async (req, res) => {
-    try { res.json(await storage.updateDiscoverySettings(req.body)); }
+    try { res.json(await storage.updateDiscoverySettings(requireOwnerId(req), req.body)); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

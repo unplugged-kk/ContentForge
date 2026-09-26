@@ -218,6 +218,13 @@
       "when": 1790800000000,
       "tag": "0030_bounded_autonomy",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790886400000,
+      "tag": "0031_discovery_settings_ownership",
+      "breakpoints": true
     }
   ]
 }
