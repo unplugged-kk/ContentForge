@@ -562,8 +562,9 @@ export default function SettingsPage() {
               </div>
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Brand Voice</label>
+                  <label htmlFor="textarea-brand-voice" className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Brand Voice</label>
                   <Textarea
+                    id="textarea-brand-voice"
                     placeholder="e.g. Direct, data-driven, no-fluff. I speak from experience as a practitioner..."
                     value={brandVoice}
                     onChange={(e) => setBrandVoice(e.target.value)}
@@ -572,8 +573,9 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Writing Style Notes</label>
+                  <label htmlFor="textarea-writing-style" className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Writing Style Notes</label>
                   <Textarea
+                    id="textarea-writing-style"
                     placeholder="e.g. Short sentences. Use analogies. Start with a hook. Avoid buzzwords..."
                     value={writingStyleNotes}
                     onChange={(e) => setWritingStyleNotes(e.target.value)}
@@ -582,8 +584,9 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Target Audience</label>
+                  <label htmlFor="textarea-audience" className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Target Audience</label>
                   <Textarea
+                    id="textarea-audience"
                     placeholder="e.g. Infrastructure engineers, platform teams, data engineers, and CTOs who care about..."
                     value={audienceDescription}
                     onChange={(e) => setAudienceDescription(e.target.value)}
@@ -592,8 +595,9 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Content Goals</label>
+                  <label htmlFor="textarea-content-goals" className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Content Goals</label>
                   <Textarea
+                    id="textarea-content-goals"
                     placeholder="e.g. Build thought leadership in MLOps. Grow to 10k followers. Get consulting leads..."
                     value={contentGoals}
                     onChange={(e) => setContentGoals(e.target.value)}
@@ -602,8 +606,9 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Niche / Expertise</label>
+                  <label htmlFor="input-niche" className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Niche / Expertise</label>
                   <Input
+                    id="input-niche"
                     placeholder="e.g. Infrastructure Engineering, MLOps, AIOps, Cloud Native"
                     value={niche}
                     onChange={(e) => setNiche(e.target.value)}
@@ -616,6 +621,7 @@ export default function SettingsPage() {
                     {messagingPillarSlots.map((val, i) => (
                       <Input
                         key={i}
+                        aria-label={`Messaging pillar ${i + 1}`}
                         placeholder={`Pillar ${i + 1}`}
                         value={val}
                         onChange={(e) => {
@@ -676,8 +682,9 @@ export default function SettingsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Username</label>
+              <label htmlFor="input-connect-username" className="text-sm font-medium">Username</label>
               <Input
+                id="input-connect-username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder={connectDialog?.platform === "x" ? "@yourusername" : "Your username"}
@@ -685,10 +692,11 @@ export default function SettingsPage() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">
+              <label htmlFor="input-connect-token" className="text-sm font-medium">
                 {connectDialog?.platform === "x" ? "Bearer Token" : "Access Token"}
               </label>
               <Input
+                id="input-connect-token"
                 value={accessToken}
                 onChange={(e) => setAccessToken(e.target.value)}
                 placeholder="Paste your token here"
