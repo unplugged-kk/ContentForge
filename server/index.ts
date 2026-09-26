@@ -246,12 +246,19 @@ app.use((req, res, next) => {
 
   const { createDefaultExperimentRouter, createDefaultPolicyCandidateRouter } =
     await import("./content/experimentation/http");
-  app.use("/api/experiments", await createDefaultExperimentRouter());
-  app.use("/api/policy-candidates", await createDefaultPolicyCandidateRouter());
-
   const { createDefaultPolicyActivationRouter, createDefaultPolicyHistoryRouter } =
     await import("./content/policyActivation/http");
+  app.use("/api/experiments", await createDefaultExperimentRouter());
+  // Mount ORDER matters here (Phase 33.7). The policy-candidate CRUD router owns
+  // a catch-all `GET /:id`; the activation router owns the LITERAL `GET
+  // /activated-ids`. Express matches routers in registration order, so the
+  // catch-all would shadow `activated-ids` (parsed as a non-numeric id -> 400
+  // "Invalid candidate id") and make the real handler unreachable. The
+  // activation router is therefore registered FIRST: its static route matches
+  // before the catch-all, while any real candidate id still falls through to
+  // the candidate router's `GET /:id` (the activation router has no GET /:id).
   app.use("/api/policy-candidates", await createDefaultPolicyActivationRouter());
+  app.use("/api/policy-candidates", await createDefaultPolicyCandidateRouter());
   app.use("/api/policies", await createDefaultPolicyHistoryRouter());
 
   const { createDefaultAutonomyRouter } = await import("./content/autonomy/http");
