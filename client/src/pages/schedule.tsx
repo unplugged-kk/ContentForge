@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { PageHeader } from "@/components/ui-shared/page-header";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import QueuePage from "@/pages/queue";
 import CalendarPage from "@/pages/calendar";
 import { PublicationsView } from "@/components/schedule/publications-view";
@@ -44,13 +44,17 @@ export default function SchedulePage() {
 
       {/* View switching belongs to the page body; the header slot holds the
           surface's primary action (J1). The strip scrolls rather than overflowing
-          at 390px, mirroring settings.tsx. */}
-      <div className="px-4 pt-3" data-testid="schedule-view-switcher">
-        <Tabs
-          value={activeTab}
-          onValueChange={(v) => setActiveTab(v as "queue" | "calendar" | "publications")}
-          className="w-full"
-        >
+          at 390px, mirroring settings.tsx. Each view is a real `TabsContent`
+          panel (mirroring insights.tsx) so every trigger's `aria-controls`
+          resolves to an existing region instead of dangling (axe
+          aria-valid-attr-value). Radix renders only the active panel, exactly as
+          the previous conditional rendering did. */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as "queue" | "calendar" | "publications")}
+        className="flex flex-col flex-1 min-h-0 overflow-hidden"
+      >
+        <div className="px-4 pt-3" data-testid="schedule-view-switcher">
           <TabsList
             className="flex h-8 w-full max-w-full justify-start gap-1 overflow-x-auto no-scrollbar"
             data-testid="tabs-schedule-views"
@@ -68,20 +72,31 @@ export default function SchedulePage() {
               Publications
             </TabsTrigger>
           </TabsList>
-        </Tabs>
-      </div>
+        </div>
 
-      <div className="flex-1 overflow-hidden">
-        {activeTab === "queue" ? (
-          <QueuePage hideHeader={true} />
-        ) : activeTab === "calendar" ? (
-          <CalendarPage hideHeader={true} />
-        ) : (
-          <div className="h-full overflow-y-auto" data-testid="container-publications">
-            <PublicationsView />
-          </div>
-        )}
-      </div>
+        <div className="flex-1 overflow-hidden">
+          <TabsContent
+            value="queue"
+            className="h-full m-0 p-0 overflow-hidden data-[state=inactive]:hidden"
+          >
+            <QueuePage hideHeader={true} />
+          </TabsContent>
+          <TabsContent
+            value="calendar"
+            className="h-full m-0 p-0 overflow-hidden data-[state=inactive]:hidden"
+          >
+            <CalendarPage hideHeader={true} />
+          </TabsContent>
+          <TabsContent
+            value="publications"
+            className="h-full m-0 p-0 overflow-hidden data-[state=inactive]:hidden"
+          >
+            <div className="h-full overflow-y-auto" data-testid="container-publications">
+              <PublicationsView />
+            </div>
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
   );
 }
