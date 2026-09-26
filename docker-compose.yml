@@ -66,6 +66,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
+      # LOCAL ONLY. The session cookie is marked Secure whenever NODE_ENV is
+      # "production" (server/index.ts:149), which browsers tolerate on
+      # localhost but not through every local hostname or proxy. This stack is
+      # plain HTTP on your machine, so the flag is disabled here. Never carry
+      # this setting to a real deployment — it exists to make local login
+      # deterministic, not to relax production.
+      SESSION_COOKIE_SECURE: "0"
       DATABASE_URL: postgresql://${POSTGRES_USER:-cfuser}:${POSTGRES_PASSWORD:-cfpass}@postgres:5432/${POSTGRES_DB:-contentforge}
     # Fail closed, with a message that says what to do. The application already
     # refuses to boot on a dev-default SESSION_SECRET (Phase 30); this front
