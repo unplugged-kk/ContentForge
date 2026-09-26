@@ -15,6 +15,7 @@ import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { useToast } from "@/hooks/use-toast";
 import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles, Eye } from "lucide-react";
 import { CONTENT_PILLARS } from "@/lib/constants";
+import { maskSecret } from "@/lib/secret-display";
 import type { ConnectedAccount } from "@shared/schema";
 
 type AgentRuntimeResponse = {
@@ -308,8 +309,15 @@ export default function SettingsPage() {
               </div>
             )}
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Token</span>
-              <span className="text-xs font-medium font-mono">{account.accessToken || "Not set"}</span>
+              <span className="text-xs text-muted-foreground">Token (masked)</span>
+              {/* Masked at render rather than trusting the API's value: the client must
+                  be unable to print a credential even if the server stops masking it. */}
+              <span
+                className="text-xs font-medium font-mono"
+                data-testid={`text-account-token-${platform}`}
+              >
+                {maskSecret(account.accessToken)}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Status</span>
@@ -507,7 +515,9 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     Requires Google Cloud OAuth client with redirect{" "}
                     <code className="text-xs">/api/social/youtube/callback</code>
-                    {" "}and scopes youtube.upload + youtube.readonly. Tokens are never shown here.
+                    {" "}and scopes youtube.upload + youtube.readonly. Credentials are held
+                    server-side and are never shown in full. Only a masked hint (the last 4
+                    characters) is displayed, so you can tell which credential is connected.
                   </p>
                 </Card>
               </>
