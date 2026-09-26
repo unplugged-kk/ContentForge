@@ -52,8 +52,10 @@ const ACTOR: Record<
     label: "Activated Automatically",
     short: "Automatic",
     icon: Bot,
-    className:
-      "text-amber-700 dark:text-amber-400 border-amber-500/40 bg-amber-500/10",
+    // Semantic intent: "the system acted on your behalf" reads as a warning —
+    // it needs the operator's eye, it is not an error. Migrated from the
+    // literal amber ramp to the `--warning` token (direction §4.4).
+    className: "text-warning border-warning/40 bg-warning/10",
   },
 };
 

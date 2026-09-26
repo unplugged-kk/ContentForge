@@ -131,7 +131,7 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
             <span className="text-sm font-semibold tracking-tight truncate" data-testid="text-app-title">
               ContentForge
             </span>
-            <span className="text-[10px] text-muted-foreground leading-none truncate">
+            <span className="text-xs text-muted-foreground leading-none truncate">
               Content Operating System
             </span>
           </div>
@@ -147,10 +147,17 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
                 const testId = `link-nav-${item.title.toLowerCase()}`;
                 return (
                   <SidebarMenuItem key={item.title}>
+                    {/*
+                      G1(c): on a coarse pointer the row is raised from the
+                      desktop-dense 32px to the 44px floor. Deliberately bounded
+                      to the shell's highest-traffic controls — this is not a
+                      tap-target sweep of the chrome.
+                    */}
                     <SidebarMenuButton
                       asChild
                       isActive={isActive}
                       tooltip={item.title}
+                      className="[@media(pointer:coarse)]:h-11"
                     >
                       <Link
                         href={item.url}
@@ -183,14 +190,14 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
             <span className="text-xs font-medium truncate" data-testid="text-user-name">
               {user?.name || "Kishore Kumar"}
             </span>
-            <span className="text-[10px] text-muted-foreground truncate" data-testid="text-user-title">
+            <span className="text-xs text-muted-foreground truncate" data-testid="text-user-title">
               {user?.title || "Infra Engineering Lead"}
             </span>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
             onClick={() => logoutMutation.mutate()}
             disabled={logoutMutation.isPending}
             data-testid="button-logout"

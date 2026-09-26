@@ -102,7 +102,13 @@ export function QuickCapture() {
                 onKeyDown={(e) => { if (e.key === "Enter" && url) ingestMutation.mutate({ url }); }}
                 data-testid="input-quick-capture-url"
               />
-              <Button onClick={() => ingestMutation.mutate({ url })} disabled={!url || ingestMutation.isPending} data-testid="button-quick-capture-submit">
+              {/* G1(c): the dialog's primary action takes the 44px floor on a coarse pointer. */}
+              <Button
+                onClick={() => ingestMutation.mutate({ url })}
+                disabled={!url || ingestMutation.isPending}
+                className="[@media(pointer:coarse)]:h-11"
+                data-testid="button-quick-capture-submit"
+              >
                 {ingestMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : "Capture"}
               </Button>
             </div>
