@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { EmptyState } from "@/components/ui-shared/empty-state";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ActorBadge } from "@/components/ui-shared/actor-badge";
 import { AutomatedOptimizationPanel } from "./automated-optimization-panel";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1752,15 +1753,15 @@ export function LearningView() {
                             </Badge>
                             {activatedCandidateIds.has(candidate.id) ? (
                               <>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] py-0.5"
-                                  data-testid={`badge-activated-by-${candidate.id}`}
-                                >
-                                  {activatedCandidateActors[candidate.id] === "autonomous_controller"
-                                    ? "Activated Automatically"
-                                    : "Activated by You"}
-                                </Badge>
+                                <ActorBadge
+                                  kind={
+                                    activatedCandidateActors[candidate.id] ===
+                                    "autonomous_controller"
+                                      ? "automatic"
+                                      : "human"
+                                  }
+                                  testId={`badge-activated-by-${candidate.id}`}
+                                />
                                 <Button
                                   size="sm"
                                   variant="outline"

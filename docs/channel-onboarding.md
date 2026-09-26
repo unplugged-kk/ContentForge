@@ -147,4 +147,4 @@ account that already has a channel), then reconnect. Bind the resulting
 authenticated) so owner-scoped publish can resolve credentials.
 
 Do not claim live certification from unit doubles alone. Do not re-run the
-cert script after PASS — it reuses evidence and refuses a second upload.
+cert script after PASS — it reuses evidence and refuses a second upload.w

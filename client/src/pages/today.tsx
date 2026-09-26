@@ -7,8 +7,10 @@ import { PageHeader } from "@/components/ui-shared/page-header";
 import { EmptyState } from "@/components/ui-shared/empty-state";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { StatusBadge } from "@/components/ui-shared/status-badge";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import {
   deriveAttentionItems,
+  isSetupRequiredPublication,
   formatDateBucket,
   formatTimeOfDay,
   previewArtifactPayload,
@@ -26,7 +28,6 @@ import {
   AlertTriangle,
   Sparkle,
 } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
 import type { Post, Tweet } from "@shared/schema";
 
 interface PostWithTweets extends Post {
@@ -42,9 +43,13 @@ interface OccurrenceRow {
 }
 
 function PlatformBadge({ platform }: { platform?: string | null }) {
-  if (platform === "x") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"><SiX className="h-2.5 w-2.5" /> X</span>;
-  if (platform === "threads") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"><SiThreads className="h-2.5 w-2.5" /> Threads</span>;
-  return <span className="text-[11px] font-medium text-muted-foreground capitalize">{platform ?? "—"}</span>;
+  if (!platform) return <span className="text-[11px] font-medium text-muted-foreground">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+      <ChannelIcon channel={platform} decorative />
+      <span className="capitalize">{platform}</span>
+    </span>
+  );
 }
 
 function startOfToday(): Date {
@@ -72,13 +77,15 @@ export default function TodayPage() {
   const attentionSourcesErrored = [reviewQuery.isError, runsQuery.isError, publicationsQuery.isError].some(Boolean);
   const attentionLoading = reviewQuery.isLoading || runsQuery.isLoading || publicationsQuery.isLoading;
   const failedPublications = (publicationsQuery.data ?? []).filter((p) => p.state === "failed");
+  const setupRequiredPublications = failedPublications.filter(isSetupRequiredPublication);
+  const publicationFailures = failedPublications.filter((publication) => !isSetupRequiredPublication(publication));
   const unknownPublications = (publicationsQuery.data ?? []).filter((p) => p.result?.outcome === "unknown");
   const runsNeedingApproval = (runsQuery.data?.runs ?? []).filter((r) => r.needsApproval);
 
   const attentionItems = deriveAttentionItems({
     artifactsNeedingReview: reviewQuery.data ?? [],
     runsNeedingApproval,
-    failedPublications,
+    failedPublications: [...publicationFailures, ...setupRequiredPublications],
     unknownPublications,
   });
 
@@ -142,6 +149,16 @@ export default function TodayPage() {
           <h2 className="text-base font-medium tracking-tight">Attention</h2>
           {attentionLoading ? (
             <Skeleton className="h-16 w-full" />
+          ) : attentionSourcesErrored && attentionItems.length === 0 ? (
+            <ErrorState
+              title="Couldn't load attention status"
+              description="Some server-backed attention sources could not be checked. No clean status is being inferred."
+              onRetry={() => {
+                void reviewQuery.refetch();
+                void runsQuery.refetch();
+                void publicationsQuery.refetch();
+              }}
+            />
           ) : attentionItems.length === 0 ? (
             <EmptyState
               icon={CheckCircle2}
@@ -157,8 +174,14 @@ export default function TodayPage() {
             />
           ) : (
             <div className="space-y-2" data-testid="list-attention">
-              {attentionItems.map((item) => (
-                <Card key={item.id} className="p-4 flex items-center justify-between gap-4" data-testid={`card-attention-${item.id}`}>
+              {attentionItems.map((item, index) => (
+                <Card
+                  key={item.id}
+                  className="p-4 flex items-center justify-between gap-4 rise-in"
+                  style={{ animationDelay: `${Math.min(index * 40, 200)}ms` }}
+                  data-testid={`card-attention-${item.id}`}
+                  data-attention-kind={item.kind}
+                >
                   <div className="flex items-start gap-3 min-w-0">
                     <AlertTriangle
                       className={`h-4 w-4 mt-0.5 shrink-0 ${item.severity === "action_required" ? "text-primary" : "text-amber-600 dark:text-amber-400"}`}

@@ -37,24 +37,42 @@
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 84% 98%;
   --input: 0 0% 75%;
-  --ring: 217 91% 48%;
-  --chart-1: 217 91% 35%;
-  --chart-2: 200 85% 40%;
-  --chart-3: 190 75% 38%;
-  --chart-4: 175 70% 35%;
-  --chart-5: 165 65% 38%;
+  /* Focus ring sits outside the control against ring-offset-background, so it is
+     tuned against that offset, not against --primary. At 38% it clears 7.6:1
+     against the white offset and 7.3:1 against a card even with no offset. */
+  --ring: 217 91% 38%;
+  /* Chart series. A deliberate ramp, not five arbitrary blues. */
+  /*
+   * The old ramp (217/200/190/175/165 at near-identical lightness) measured
+   * 1.03:1 worst-pairwise in light mode, and series 3/4/5 sat at 1.04-1.13:1 —
+   * indistinguishable. Multi-series charts were effectively single-series.
+   *
+   * This ramp separates by LIGHTNESS first (the only cue that survives all
+   * three dichromacies) and uses hue as reinforcement. Measured worst pairwise
+   * 1.21:1 light and 1.11:1 dark, under normal vision and simulated
+   * deuteranopia and protanopia, with a monotonic lightness ladder
+   * 4 -> 7 -> 16 -> 51 -> 62 (light) and 19 -> 25 -> 39 -> 70 -> 78 (dark).
+   *
+   * Five categorical series is at the edge of what one ramp can separate.
+   * Charts that need more than five must vary lightness or stop stacking.
+   */
+  --chart-1: 215 44% 24%;
+  --chart-2: 277 43% 36%;
+  --chart-3: 313 42% 48%;
+  --chart-4: 43 70% 60%;
+  --chart-5: 155 55% 72%;
   --font-sans: Open Sans, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: Menlo, monospace;
   --radius: .5rem;
-  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 2px 4px -1px hsl(0 0% 0% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 4px 6px -1px hsl(0 0% 0% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 8px 10px -1px hsl(0 0% 0% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
+  --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.04);
+  --shadow-xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0px 1px 2px -1px hsl(0 0% 0% / 0.06), 0px 1px 3px 0px hsl(0 0% 0% / 0.04);
+  --shadow: 0px 2px 4px -2px hsl(0 0% 0% / 0.07), 0px 2px 6px -2px hsl(0 0% 0% / 0.04);
+  --shadow-md: 0px 4px 6px -2px hsl(0 0% 0% / 0.08), 0px 2px 4px -2px hsl(0 0% 0% / 0.04);
+  --shadow-lg: 0px 6px 10px -3px hsl(0 0% 0% / 0.09), 0px 3px 6px -3px hsl(0 0% 0% / 0.05);
+  --shadow-xl: 0px 10px 16px -4px hsl(0 0% 0% / 0.10), 0px 4px 8px -4px hsl(0 0% 0% / 0.05);
+  --shadow-2xl: 0px 16px 24px -6px hsl(0 0% 0% / 0.12), 0px 6px 10px -6px hsl(0 0% 0% / 0.06);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 
@@ -121,20 +139,20 @@
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 84% 98%;
   --input: 0 0% 28%;
-  --ring: 217 91% 55%;
-  --chart-1: 217 91% 65%;
-  --chart-2: 200 85% 60%;
-  --chart-3: 190 75% 62%;
-  --chart-4: 175 70% 65%;
-  --chart-5: 165 65% 62%;
-  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 100% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 100% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(0 0% 100% / 0.00), 0px 1px 2px -1px hsl(0 0% 100% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(0 0% 100% / 0.00), 0px 1px 2px -1px hsl(0 0% 100% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(0 0% 100% / 0.00), 0px 2px 4px -1px hsl(0 0% 100% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(0 0% 100% / 0.00), 0px 4px 6px -1px hsl(0 0% 100% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(0 0% 100% / 0.00), 0px 8px 10px -1px hsl(0 0% 100% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 100% / 0.00);
+  --ring: 217 91% 72%;
+  --chart-1: 226 55% 58%;
+  --chart-2: 268 56% 65%;
+  --chart-3: 309 50% 71%;
+  --chart-4: 43 69% 78%;
+  --chart-5: 175 58% 84%;
+  --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.30);
+  --shadow-xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.35);
+  --shadow-sm: 0px 1px 2px -1px hsl(0 0% 0% / 0.38), 0px 1px 3px 0px hsl(0 0% 0% / 0.24);
+  --shadow: 0px 2px 4px -2px hsl(0 0% 0% / 0.40), 0px 2px 6px -2px hsl(0 0% 0% / 0.26);
+  --shadow-md: 0px 4px 6px -2px hsl(0 0% 0% / 0.44), 0px 2px 4px -2px hsl(0 0% 0% / 0.28);
+  --shadow-lg: 0px 6px 10px -3px hsl(0 0% 0% / 0.48), 0px 3px 6px -3px hsl(0 0% 0% / 0.30);
+  --shadow-xl: 0px 10px 16px -4px hsl(0 0% 0% / 0.52), 0px 4px 8px -4px hsl(0 0% 0% / 0.32);
+  --shadow-2xl: 0px 16px 24px -6px hsl(0 0% 0% / 0.58), 0px 6px 10px -6px hsl(0 0% 0% / 0.36);
 
 /* Fallback for older browsers */
   --sidebar-primary-border: hsl(var(--sidebar-primary));
@@ -165,6 +183,24 @@
   --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
 }
 
+/**
+ * Type scale.
+ *
+ * The codebase had 189 arbitrary values under 12px (10px, 11px, 9px) across 37
+ * files, concentrated in the densest surfaces. Below 12px the glyphs stop
+ * carrying enough shape to scan in a dense table, which is exactly where this
+ * product puts most of its text.
+ *
+ * The scale is small on purpose. This is an operator instrument with a
+ * 5-minute-a-day budget, not a marketing page: hierarchy comes from weight and
+ * spacing contrast, not from a wide range of sizes. `meta` is the floor, and it
+ * is 12px, not 10px.
+ */
+:root {
+  --text-meta: 0.75rem; /* 12px — the floor for anything an operator must read */
+  --text-dense: 0.8125rem; /* 13px — dense table cells and evidence metrics */
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -172,6 +208,233 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/**
+ * Type floor.
+ *
+ * The codebase carried 189 arbitrary values under 12px (10px, 11px, 9px) across
+ * 37 files, concentrated in the densest surfaces. Below 12px the glyphs stop
+ * carrying enough shape to scan in a dense table, which is exactly where this
+ * product puts most of its text.
+ *
+ * This is a rule, not a convention: a convention gets followed in 37 files
+ * right up until someone is in a hurry.
+ *
+ * On placement. Tailwind emits arbitrary values into the `utilities` layer,
+ * which is emitted after `base`, so a same-specificity rule in `base` loses to
+ * `.text-\[10px\]` and changes nothing. Declared here outside any `@layer` it
+ * lands last in source order and wins on order, without needing `!important`.
+ */
+.text-\[9px\],
+.text-\[10px\],
+.text-\[11px\] {
+  font-size: var(--text-meta);
+}
+
+/**
+ * Motion tokens.
+ *
+ * Motion in this product explains one thing: work is happening. ContentForge
+ * is an operator surface, so the system stays disciplined:
+ *
+ *   - 150ms is the baseline for anything the hand triggers. It matches the
+ *     perceptual threshold where a response reads as instant rather than late.
+ *   - 250ms is for overlays, which move through space and need to be tracked.
+ *   - Exits run shorter than entrances because the user already understands
+ *     the object by the time it leaves.
+ *   - Easing decelerates hard (quint out). Software that overshoots on a menu
+ *     reads as toy-like, and nothing here should feel springy.
+ *
+ * --duration-press is deliberately 100ms: press feedback must land faster than
+ * the eye can follow a release, or the button feels unresponsive under a fast
+ * click rate.
+ */
+:root {
+  --duration-press: 100ms;
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-overlay: 250ms;
+  --duration-layout: 300ms;
+  --duration-loop: 800ms;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+}
+
+@layer utilities {
+  /**
+   * Tactile press. A 0.98 scale reads as a physical key going down; anything
+   * deeper starts to feel broken rather than responsive.
+   */
+  .pressable {
+    transition-property: transform;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out-quart);
+  }
+
+  .pressable:active {
+    transform: scale(0.98);
+  }
+
+  /**
+   * Overlay enter/exit timing.
+   *
+   * Radix overlays ship with animate-in/animate-out but no duration, so
+   * tailwindcss-animate hardcodes `animation-duration: .15s` on `.animate-in`.
+   * Same specificity, later in the utilities layer, so a plain `.overlay-motion`
+   * rule loses the cascade. The doubled class raises specificity deliberately:
+   * this has to win over the plugin, and doing it here is cheaper than
+   * `!important` on a value that is safe to assert.
+   *
+   * 0.15s is also simply too quick for a surface that moves through space, and
+   * it collides numerically with the 150ms press baseline, which makes an
+   * overlay feel interchangeable with a button press.
+   */
+  .overlay-motion.animate-in,
+  .overlay-motion.animate-out {
+    animation-duration: var(--duration-overlay);
+    animation-timing-function: var(--ease-out-quint);
+  }
+
+  .overlay-motion[data-state="closed"].animate-out {
+    animation-duration: 175ms;
+    animation-timing-function: var(--ease-out-quart);
+  }
+
+  /**
+   * Staged arrival for a list that just resolved.
+   *
+   * This is the one place a sequence earns its keep: when the attention list
+   * finishes loading, the rows land in severity order, so the operator reads
+   * "most urgent first" without having to scan. The offset is small (6px) and
+   * the total stagger is capped, because an operator opens this page many times
+   * a day and a theatrical entrance would tax them on every visit.
+   *
+   * Pair with an inline `animation-delay` of index × 40ms, clamped so a long
+   * list does not push the last row past a fifth of a second.
+   */
+  .rise-in {
+    animation: rise-in var(--duration-layout) var(--ease-out-quint) both;
+  }
+
+  /**
+   * A single resting pulse for "this is live right now". 1.6s is fast enough
+   * to read as activity in peripheral vision without pulling focus; the
+   * previous 2s default was slow enough that an operator scanning a queue
+   * could miss which rows were actually running.
+   */
+  .pulse-live {
+    animation: pulse-live 1.6s var(--ease-in-out-quart) infinite;
+  }
+
+  /**
+   * Loading skeletons use the same rhythm as the live badge.
+   *
+   * These were on Tailwind's `animate-pulse`, which runs a 2s cycle. Skeletons
+   * are what an operator stares at during every cold load, and at 2s the
+   * opacity dip lands so slowly it reads as a rendering glitch rather than
+   * "this is loading". Reusing the live pulse keeps the two honest signals
+   * moving at one tempo, so waiting feels like one state instead of two.
+   */
+  .pulse-skeleton {
+    animation: pulse-skeleton 1.6s var(--ease-in-out-quart) infinite;
+  }
+
+  /**
+   * Loading spinners, normalized in one place rather than at every call site.
+   *
+   * Tailwind's default is a 1s linear rotation, which reads as hurried and
+   * slightly frantic on a surface where waiting is routine. A 800ms turn is
+   * the standard metronome for continuous waiting: steady rather than panicked,
+   * and slow enough that the eye can lock onto it without tracking.
+   *
+   * Linear is correct here, unlike everywhere else in this file. A spinner is
+   * a constant rotation, and easing it would make it visibly stutter at the
+   * ends of the arc.
+   */
+  .animate-spin.animate-spin {
+    animation: spin var(--duration-loop) linear infinite;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-skeleton {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/**
+ * Reduced motion.
+ *
+ * This app has real motion in it: animate-pulse on live status badges,
+ * animate-spin on loading indicators, and Radix animate-in/animate-out enter
+ * and exit on every overlay. None of that is decorative, but it still triggers
+ * vestibular symptoms for some users, so the setting has to be honored.
+ *
+ * Two tiers, because "no motion" and "no motion" are not the same request:
+ * the user still needs to know that something is working. Purely decorative
+ * motion (pulse, bounce, elastic) is removed outright; functional feedback
+ * (the loading spinner) is kept but stops spinning, since a static icon still
+ * communicates "in progress" via its label and the surrounding layout.
+ *
+ * Durations collapse to 0.01ms rather than `none` so animationend and
+ * transitionend still fire and any JS waiting on them does not hang.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin.animate-spin {
+    animation: none !important;
+  }
+
+  .motion-safe-pulse,
+  .pulse-live,
+  .pulse-skeleton {
+    animation: none !important;
+  }
+
+  /**
+   * Staged arrival collapses to a plain appearance. The stagger is removed
+   * along with the offset, because a fade that lands 200ms after the rows are
+   * already in place is worse than no animation at all.
+   */
+  .rise-in {
+    animation: none !important;
   }
 }
 

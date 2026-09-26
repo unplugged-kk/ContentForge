@@ -540,7 +540,7 @@ function AgentWorkspaceInner() {
       {/* Main Responsive Grid: 2-Column on Desktop (>=lg), 1-Column Single Vertical Scroll on Mobile */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_20rem] xl:grid-cols-[1fr_22rem]">
         {/* Primary Orchestration Column */}
-        <main className="flex flex-col min-w-0 p-4 sm:p-6 space-y-6 max-w-4xl mx-auto w-full">
+        <div className="flex flex-col min-w-0 p-4 sm:p-6 space-y-6 max-w-4xl mx-auto w-full">
           {/* Section 1: Composer Card */}
           <Card className="border-border shadow-sm">
             <CardContent className="p-4 sm:p-5 space-y-3">
@@ -838,7 +838,7 @@ function AgentWorkspaceInner() {
             {audio && <AudioAssetCard asset={audio} />}
             {untrusted && <UntrustedSource text={untrusted} />}
           </section>
-        </main>
+        </div>
 
         {/* Secondary Desktop Sidebar (>=lg): Capabilities & Run History */}
         <aside className="hidden lg:flex flex-col border-l bg-muted/10 p-4 space-y-6 overflow-y-auto">

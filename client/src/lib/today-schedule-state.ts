@@ -18,7 +18,8 @@ export type AttentionKind =
   | "needs_review"
   | "waiting_approval"
   | "failed_publication"
-  | "unknown_publication";
+  | "unknown_publication"
+  | "setup_required_publication";
 
 export interface AttentionItem {
   id: string;
@@ -43,9 +44,14 @@ export interface PublicationLike {
   artifactId: number;
   channel: string;
   state: string;
+  providerCalled?: boolean;
   lastError: string | null;
   createdAt: string;
-  result: { outcome: string; errorMessage?: string | null } | null;
+  result: {
+    outcome: string;
+    errorClass?: string | null;
+    errorMessage?: string | null;
+  } | null;
 }
 
 export interface RunLike {
@@ -71,6 +77,39 @@ export function previewArtifactPayload(payload: Record<string, unknown> | null):
 function truncate(text: string, max = 100): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+
+function channelLabel(channel: string): string {
+  const normalized = channel.toLowerCase();
+  if (normalized === "x") return "X";
+  if (normalized === "threads") return "Threads";
+  if (normalized === "linkedin") return "LinkedIn";
+  if (normalized === "instagram") return "Instagram";
+  if (normalized === "youtube") return "YouTube";
+  return channel.charAt(0).toUpperCase() + channel.slice(1);
+}
+
+/**
+ * A setup gap is a deterministic, pre-network configuration failure recorded by
+ * the server. It is not an ambiguous external operation and must not be hidden
+ * behind a generic failure label. The providerCalled guard is intentional: if
+ * the server says a transport was invoked, verification still takes priority.
+ */
+export function isSetupRequiredPublication(publication: PublicationLike): boolean {
+  if (publication.state !== "failed" || publication.result?.outcome !== "failed") return false;
+  if (publication.providerCalled === true) return false;
+  if (publication.result.errorClass?.toLowerCase() !== "policy_human") return false;
+
+  const errorText = [
+    publication.result.errorMessage,
+    publication.lastError,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+
+  return /(?:_CONFIG_MISSING|credentials?\s+(?:are\s+)?missing|not connected|connect\s+(?:an?\s+)?[^.]*account|configuration\s+required|reconnect)/i.test(
+    errorText,
+  );
 }
 
 /**
@@ -112,12 +151,27 @@ export function deriveAttentionItems(input: {
   }
 
   for (const pub of input.failedPublications) {
+    const errorMessage = pub.result?.errorMessage || pub.lastError;
+    if (isSetupRequiredPublication(pub)) {
+      items.push({
+        id: `setup-${pub.id}`,
+        kind: "setup_required_publication",
+        severity: "informational",
+        title: `${channelLabel(pub.channel)} setup required`,
+        subtitle: errorMessage || "Connect the channel before publishing.",
+        timestamp: pub.createdAt,
+        actionLabel: "Connect account",
+        actionUrl: "/settings",
+      });
+      continue;
+    }
+
     items.push({
       id: `failed-${pub.id}`,
       kind: "failed_publication",
       severity: "warning",
       title: "Publication failed",
-      subtitle: pub.result?.errorMessage || pub.lastError || "The channel reported a failure.",
+      subtitle: errorMessage || "The channel reported a failure.",
       timestamp: pub.createdAt,
       actionLabel: "View details",
       actionUrl: getCanonicalReviewUrl(pub.artifactId),

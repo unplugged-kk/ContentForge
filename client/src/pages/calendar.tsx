@@ -9,11 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { ErrorState } from "@/components/ui-shared/error-state";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import { ChevronLeft, ChevronRight, Clock, Sparkles, Loader2, TrendingUp, X, Trash2 } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek } from "date-fns";
 import type { Post, Tweet } from "@shared/schema";
 import { XPostPreview } from "@/components/x-post-preview";
@@ -29,12 +29,10 @@ interface BestTimeSlot {
 }
 
 function PlatformBadge({ platform }: { platform: string }) {
-  if (platform === "x") return <Badge variant="secondary" className="text-[10px] gap-1"><SiX className="h-2.5 w-2.5" />X</Badge>;
-  if (platform === "threads") return <Badge variant="secondary" className="text-[10px] gap-1"><SiThreads className="h-2.5 w-2.5" />Threads</Badge>;
   return (
     <Badge variant="secondary" className="text-[10px] gap-1">
-      <SiX className="h-2.5 w-2.5" />
-      <SiThreads className="h-2.5 w-2.5" />
+      <ChannelIcon channel={platform} decorative />
+      <span className="capitalize">{platform}</span>
     </Badge>
   );
 }
@@ -191,14 +189,14 @@ export default function CalendarPage({ hideHeader = false }: { hideHeader?: bool
                   className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "x" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
                   data-testid="button-best-times-x"
                 >
-                  <SiX className="h-3 w-3" /> X
+                  <ChannelIcon channel="x" decorative className="h-3 w-3" /> X
                 </button>
                 <button
                   onClick={() => setBestTimesPlatform("threads")}
                   className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${bestTimesPlatform === "threads" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
                   data-testid="button-best-times-threads"
                 >
-                  <SiThreads className="h-3 w-3" /> Threads
+                  <ChannelIcon channel="threads" decorative className="h-3 w-3" /> Threads
                 </button>
               </div>
             </div>

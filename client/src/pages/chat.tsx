@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { MessageSquare, Send, Loader2, Copy, Save, Sparkles, ArrowRight, RotateCcw } from "lucide-react";
-import { SiX, SiThreads, SiLinkedin } from "react-icons/si";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { CONTENT_PILLARS, PLATFORMS } from "@/lib/constants";
 
 interface Message {
@@ -28,10 +28,7 @@ const STARTERS = [
 ];
 
 function PlatformIcon({ platform }: { platform: string }) {
-  if (platform === "x") return <SiX className="h-3.5 w-3.5" />;
-  if (platform === "threads") return <SiThreads className="h-3.5 w-3.5" />;
-  if (platform === "linkedin") return <SiLinkedin className="h-3.5 w-3.5" />;
-  return <SiX className="h-3.5 w-3.5" />;
+  return <ChannelIcon channel={platform} decorative />;
 }
 
 export default function ChatPage() {

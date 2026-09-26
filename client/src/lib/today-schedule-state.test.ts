@@ -74,6 +74,82 @@ describe("deriveAttentionItems", () => {
     assert.equal(items[0].subtitle, "Rate limited by LinkedIn");
   });
 
+  it("classifies a pre-network configuration failure as setup-required", () => {
+    const items = deriveAttentionItems({
+      ...base,
+      failedPublications: [
+        {
+          id: 4,
+          artifactId: 10,
+          channel: "x",
+          state: "failed",
+          providerCalled: false,
+          lastError: "XQUICK_CONFIG_MISSING",
+          createdAt: "2026-01-01T00:00:00Z",
+          result: {
+            outcome: "failed",
+            errorClass: "policy_human",
+            errorMessage: "xQuick credentials missing: connect an xQuick token in Settings.",
+          },
+        },
+      ],
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].kind, "setup_required_publication");
+    assert.equal(items[0].title, "X setup required");
+    assert.equal(items[0].actionUrl, "/settings");
+  });
+
+  it("does not relabel an ambiguous provider call as setup-required", () => {
+    const items = deriveAttentionItems({
+      ...base,
+      unknownPublications: [
+        {
+          id: 5,
+          artifactId: 11,
+          channel: "x",
+          state: "failed",
+          providerCalled: true,
+          lastError: "XQUICK_CONFIG_MISSING",
+          createdAt: "2026-01-01T00:00:00Z",
+          result: {
+            outcome: "unknown",
+            errorClass: "unknown",
+            errorMessage: "reconcile_required",
+          },
+        },
+      ],
+    });
+
+    assert.equal(items[0].kind, "unknown_publication");
+  });
+
+  it("keeps policy failures that are not setup gaps as publication failures", () => {
+    const items = deriveAttentionItems({
+      ...base,
+      failedPublications: [
+        {
+          id: 6,
+          artifactId: 12,
+          channel: "x",
+          state: "failed",
+          providerCalled: false,
+          lastError: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          result: {
+            outcome: "failed",
+            errorClass: "policy_human",
+            errorMessage: "Artifact 12 is \"draft\"; only approved revisions may publish",
+          },
+        },
+      ],
+    });
+
+    assert.equal(items[0].kind, "failed_publication");
+    assert.equal(items[0].title, "Publication failed");
+  });
+
   it("routes waiting-for-approval items to the agent run", () => {
     const items = deriveAttentionItems({
       ...base,

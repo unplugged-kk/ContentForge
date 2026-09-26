@@ -15,6 +15,7 @@ export type ContentStatus =
   | "completed"
   | "completed_with_errors"
   | "failed"
+  | "rejected"
   | "blocked"
   | "processing"
   | "unknown";
@@ -33,6 +34,7 @@ const STATUS_LABEL: Record<ContentStatus, string> = {
   completed: "Completed",
   completed_with_errors: "Completed with warnings",
   failed: "Failed",
+  rejected: "Rejected",
   blocked: "Blocked",
   processing: "Processing",
   unknown: "Unknown",
@@ -52,6 +54,7 @@ const STATUS_VARIANT: Record<ContentStatus, BadgeProps["variant"]> = {
   completed: "default",
   completed_with_errors: "outline",
   failed: "destructive",
+  rejected: "destructive",
   blocked: "destructive",
   processing: "outline",
   unknown: "secondary",
@@ -60,9 +63,9 @@ const STATUS_VARIANT: Record<ContentStatus, BadgeProps["variant"]> = {
 const STATUS_TONE: Partial<Record<ContentStatus, string>> = {
   scheduled: "text-amber-600 dark:text-amber-400 border-amber-500/30",
   publishing: "text-amber-600 dark:text-amber-400 border-amber-500/30",
-  generating: "text-blue-600 dark:text-blue-400 border-blue-500/30 animate-pulse",
-  running: "text-blue-600 dark:text-blue-400 border-blue-500/30 animate-pulse",
-  waiting_for_approval: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 animate-pulse",
+  generating: "text-blue-600 dark:text-blue-400 border-blue-500/30 pulse-live",
+  running: "text-blue-600 dark:text-blue-400 border-blue-500/30 pulse-live",
+  waiting_for_approval: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 pulse-live",
   completed_with_errors: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30",
   approved: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
   completed: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
@@ -72,7 +75,6 @@ const STATUS_TONE: Partial<Record<ContentStatus, string>> = {
 function normalize(status: string): ContentStatus {
   const key = status.toLowerCase().replace(/[\s-]+/g, "_");
   if (key === "in_review") return "needs_review";
-  if (key === "rejected") return "failed";
   if (key === "in_progress") return "running";
   if (key === "waiting_approval") return "waiting_for_approval";
   if (key === "completed_with_warnings") return "completed_with_errors";

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { Switch, Route, useLocation, Redirect } from "wouter";
+import { Switch, Route, useLocation, useSearch, Redirect } from "wouter";
 import { queryClient, getQueryFn } from "./lib/queryClient";
+import { getLegacyRouteTarget } from "./lib/legacy-route-mapping";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -14,29 +15,12 @@ import CreatePage from "@/pages/create";
 import SourcesPage from "@/pages/sources";
 import SchedulePage from "@/pages/schedule";
 import InsightsPage from "@/pages/insights";
-import GeneratePage from "@/pages/generate";
-import CalendarPage from "@/pages/calendar";
-import IdeasPage from "@/pages/ideas";
-import TemplatesPage from "@/pages/templates";
-import AnalyticsPage from "@/pages/analytics";
 import SettingsPage from "@/pages/settings";
-import ArticlesPage from "@/pages/articles";
-import ReferencesPage from "@/pages/references";
-import DiscoverPage from "@/pages/discover";
-import IngestPage from "@/pages/ingest";
-import ImageGenPage from "@/pages/imagegen";
 import AuthPage from "@/pages/auth";
-import VaultPage from "@/pages/vault";
-import HooksPage from "@/pages/hooks";
-import CarouselPage from "@/pages/carousel";
-import ChatPage from "@/pages/chat";
 import YoutubePage from "@/pages/youtube";
-import FormatterPage from "@/pages/formatter";
-import CannedResponsesPage from "@/pages/canned-responses";
-import QueuePage from "@/pages/queue";
-import AiUsagePage from "@/pages/ai-usage";
 import AgentWorkspacePage from "@/pages/agent";
 import { QuickCapture } from "@/components/quick-capture";
+import { AnnouncerProvider } from "@/components/ui-shared/announcer";
 
 const CANONICAL_TITLES: Record<string, string> = {
   "/today": "Today",
@@ -84,6 +68,13 @@ function getRouteTitle(path: string): string {
   return "Not Found";
 }
 
+function LegacyRouteRedirect({ legacyPath }: { legacyPath: string }) {
+  const search = useSearch();
+  const hash = typeof window === "undefined" ? "" : window.location.hash;
+  const target = getLegacyRouteTarget(legacyPath, search, hash);
+  return target ? <Redirect to={target} /> : <NotFound />;
+}
+
 function Router() {
   const [location] = useLocation();
   useEffect(() => {
@@ -102,26 +93,26 @@ function Router() {
       <Route path="/insights" component={InsightsPage} />
       <Route path="/settings" component={SettingsPage} />
 
-      {/* Legacy / Compatibility Routes */}
-      <Route path="/generate" component={() => <GeneratePage />} />
-      <Route path="/calendar" component={() => <CalendarPage />} />
-      <Route path="/ideas" component={IdeasPage} />
-      <Route path="/templates" component={TemplatesPage} />
-      <Route path="/analytics" component={() => <AnalyticsPage />} />
-      <Route path="/articles" component={ArticlesPage} />
-      <Route path="/references" component={ReferencesPage} />
-      <Route path="/discover" component={DiscoverPage} />
-      <Route path="/ingest" component={IngestPage} />
-      <Route path="/images" component={ImageGenPage} />
-      <Route path="/vault" component={VaultPage} />
-      <Route path="/hooks" component={HooksPage} />
-      <Route path="/carousel" component={CarouselPage} />
-      <Route path="/chat" component={ChatPage} />
+      {/* Legacy routes: preserve bookmarks and query state at the canonical destination. */}
+      <Route path="/generate" component={() => <LegacyRouteRedirect legacyPath="/generate" />} />
+      <Route path="/calendar" component={() => <LegacyRouteRedirect legacyPath="/calendar" />} />
+      <Route path="/ideas" component={() => <LegacyRouteRedirect legacyPath="/ideas" />} />
+      <Route path="/templates" component={() => <LegacyRouteRedirect legacyPath="/templates" />} />
+      <Route path="/analytics" component={() => <LegacyRouteRedirect legacyPath="/analytics" />} />
+      <Route path="/articles" component={() => <LegacyRouteRedirect legacyPath="/articles" />} />
+      <Route path="/references" component={() => <LegacyRouteRedirect legacyPath="/references" />} />
+      <Route path="/discover" component={() => <LegacyRouteRedirect legacyPath="/discover" />} />
+      <Route path="/ingest" component={() => <LegacyRouteRedirect legacyPath="/ingest" />} />
+      <Route path="/images" component={() => <LegacyRouteRedirect legacyPath="/images" />} />
+      <Route path="/vault" component={() => <LegacyRouteRedirect legacyPath="/vault" />} />
+      <Route path="/hooks" component={() => <LegacyRouteRedirect legacyPath="/hooks" />} />
+      <Route path="/carousel" component={() => <LegacyRouteRedirect legacyPath="/carousel" />} />
+      <Route path="/chat" component={() => <LegacyRouteRedirect legacyPath="/chat" />} />
       <Route path="/youtube" component={YoutubePage} />
-      <Route path="/formatter" component={FormatterPage} />
-      <Route path="/canned-responses" component={CannedResponsesPage} />
-      <Route path="/queue" component={() => <QueuePage />} />
-      <Route path="/ai-usage" component={() => <AiUsagePage />} />
+      <Route path="/formatter" component={() => <LegacyRouteRedirect legacyPath="/formatter" />} />
+      <Route path="/canned-responses" component={() => <LegacyRouteRedirect legacyPath="/canned-responses" />} />
+      <Route path="/queue" component={() => <LegacyRouteRedirect legacyPath="/queue" />} />
+      <Route path="/ai-usage" component={() => <LegacyRouteRedirect legacyPath="/ai-usage" />} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -184,8 +175,10 @@ function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <AppShell />
-          <Toaster />
+          <AnnouncerProvider>
+            <AppShell />
+            <Toaster />
+          </AnnouncerProvider>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

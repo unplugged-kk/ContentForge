@@ -1,3 +1,4 @@
+import { useChartColors, CHART_TICK_FONT_SIZE } from "@/hooks/use-chart-colors";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +62,6 @@ const FEATURE_LABELS: Record<string, string> = {
   unknown:             "Other",
 };
 
-const CHART_COLORS = ["#3B82F6", "#8B5CF6", "#06B6D4", "#10B981", "#F97316", "#EF4444", "#F59E0B", "#84CC16"];
 
 function fmt$(v: number) {
   if (v === 0) return "$0.00";
@@ -105,6 +105,7 @@ function CostTooltip({ active, payload, label }: any) {
 }
 
 export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
+  const chartColors = useChartColors();
   const [days, setDays] = useState("30");
 
   const { data, isLoading, isError, refetch } = useQuery<DashboardData>({
@@ -240,16 +241,16 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 10 }}
+                  tick={{ fontSize: CHART_TICK_FONT_SIZE }}
                   tickFormatter={(v) => v.slice(5)} // MM-DD
                 />
                 <YAxis
-                  tick={{ fontSize: 10 }}
+                  tick={{ fontSize: CHART_TICK_FONT_SIZE }}
                   tickFormatter={(v) => `$${v.toFixed(3)}`}
                   width={58}
                 />
                 <Tooltip content={<CostTooltip />} />
-                <Bar dataKey="cost" name="cost" fill="#8B5CF6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="cost" name="cost" fill={chartColors[1]} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -279,7 +280,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                       innerRadius={35}
                     >
                       {d.byFeature.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                        <Cell key={i} fill={chartColors[i % chartColors.length]} />
                       ))}
                     </Pie>
                     <Tooltip formatter={(v: any) => fmt$(v)} />
@@ -290,7 +291,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                     <div key={f.feature} className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
+                          style={{ background: chartColors[i % chartColors.length] }} />
                         <span className="text-muted-foreground">
                           {FEATURE_LABELS[f.feature] ?? f.feature}
                         </span>
@@ -320,7 +321,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                       <div className="flex items-center justify-between text-xs mb-1">
                         <div className="flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full shrink-0"
-                            style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
+                            style={{ background: chartColors[i % chartColors.length] }} />
                           <span className="font-mono text-[11px] truncate max-w-[140px]">{m.model}</span>
                         </div>
                         <div className="flex items-center gap-3 tabular-nums">
@@ -331,7 +332,7 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
                       <div className="w-full bg-muted rounded-full h-1.5">
                         <div
                           className="h-1.5 rounded-full"
-                          style={{ width: `${pct}%`, background: CHART_COLORS[i % CHART_COLORS.length] }}
+                          style={{ width: `${pct}%`, background: chartColors[i % chartColors.length] }}
                         />
                       </div>
                     </div>
@@ -358,12 +359,12 @@ export default function AiUsagePage({ hideHeader = false }: { hideHeader?: boole
             <ResponsiveContainer width="100%" height={160}>
               <LineChart data={chartDays} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
-                <YAxis tick={{ fontSize: 10 }} tickFormatter={fmtK} width={46} />
+                <XAxis dataKey="date" tick={{ fontSize: CHART_TICK_FONT_SIZE }} tickFormatter={(v) => v.slice(5)} />
+                <YAxis tick={{ fontSize: CHART_TICK_FONT_SIZE }} tickFormatter={fmtK} width={46} />
                 <Tooltip content={<CostTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line type="monotone" dataKey="tokens" stroke="#3B82F6" strokeWidth={2} dot={false} name="tokens" />
-                <Line type="monotone" dataKey="calls" stroke="#10B981" strokeWidth={2} dot={false} name="calls" />
+                <Line type="monotone" dataKey="tokens" stroke={chartColors[0]} strokeWidth={2} dot={false} name="tokens" />
+                <Line type="monotone" dataKey="calls" stroke={chartColors[2]} strokeWidth={2} dot={false} name="calls" />
               </LineChart>
             </ResponsiveContainer>
           </Card>

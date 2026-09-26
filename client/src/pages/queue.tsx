@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
 import { ErrorState } from "@/components/ui-shared/error-state";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -18,7 +19,6 @@ import {
   Loader2, ListChecks, Send, Clock, ShieldCheck, Pencil, CheckCircle,
   ChevronDown, ChevronUp, Save, X as XIcon, Calendar, Trash2, Eye, RefreshCw, AlertTriangle,
 } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
 import type { Post, Tweet } from "@shared/schema";
 import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -29,11 +29,13 @@ interface PostWithTweets extends Post {
 }
 
 function PlatformBadge({ platform }: { platform: string | null }) {
-  if (platform === "x")
-    return <Badge variant="secondary" className="text-[10px] gap-1"><SiX className="h-2.5 w-2.5" />X</Badge>;
-  if (platform === "threads")
-    return <Badge variant="secondary" className="text-[10px] gap-1"><SiThreads className="h-2.5 w-2.5" />Threads</Badge>;
-  return <Badge variant="secondary" className="text-[10px] gap-1"><SiX className="h-2.5 w-2.5" /><SiThreads className="h-2.5 w-2.5" /></Badge>;
+  const channel = platform ?? "both";
+  return (
+    <Badge variant="secondary" className="text-[10px] gap-1">
+      <ChannelIcon channel={channel} decorative />
+      <span className="capitalize">{platform ?? "X + Threads"}</span>
+    </Badge>
+  );
 }
 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {

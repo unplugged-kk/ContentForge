@@ -233,12 +233,12 @@ export default function SourcesPage() {
       </div>
 
       {/* Main View Body */}
-      <main className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto">
         {activeView === "discover" && <DiscoverTab />}
         {activeView === "saved" && <SavedTab initialFilter={savedFilter} key={savedFilter} />}
         {activeView === "research" && <ResearchTab onSelectJob={() => setActiveView("discover")} />}
         {activeView === "ingest" && <IngestPage />}
-      </main>
+      </div>
     </div>
   );
 }

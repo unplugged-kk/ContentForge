@@ -7,9 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { SchedulePicker } from "@/components/ui-shared/schedule-picker";
 import { PublishPreview } from "@/components/ui-shared/publish-preview";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
+import { StatusBadge } from "@/components/ui-shared/status-badge";
+import { ActorBadge } from "@/components/ui-shared/actor-badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getPublicationFeedback } from "@/lib/publication-feedback";
 import { useToast } from "@/hooks/use-toast";
+import { XCircle } from "lucide-react";
 import { classifyAgentError } from "@shared/agent-ui";
 import { Link } from "wouter";
 import { getCanonicalReviewUrl } from "@/lib/agent-workspace-state";
@@ -47,6 +52,7 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleIso, setScheduleIso] = useState<string | null>(null);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
 
   const accountsQuery = useQuery<Array<{ platform: string; username: string | null }>>({
     queryKey: ["/api/accounts"],
@@ -125,10 +131,29 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
 
   const approve = useMutation({
     mutationFn: async () => {
+      if (artifact?.readiness === "draft") {
+        await apiRequest("POST", `/api/artifacts/${artifactId}/submit-review`, {});
+      }
       const res = await apiRequest("POST", `/api/artifacts/${artifactId}/approve`, {});
       return res.json();
     },
     onSuccess: invalidate,
+    onError,
+  });
+
+  const reject = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/artifacts/${artifactId}/reject`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      setRejectConfirmOpen(false);
+      toast({
+        title: "Artifact rejected",
+        description: "This revision is permanently rejected. Create a new version to continue.",
+      });
+      invalidate();
+    },
     onError,
   });
 
@@ -191,6 +216,8 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   }
 
   const approved = artifact.readiness === "approved";
+  const inReview = artifact.readiness === "in_review";
+  const rejected = artifact.readiness === "rejected";
   const suggestion = !approved;
 
   return (
@@ -199,19 +226,23 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm">Artifact {artifact.id}</CardTitle>
           <div className="flex flex-col items-end gap-1">
-            <Badge variant={approved ? "default" : "secondary"} data-testid="badge-artifact-readiness">
-              {artifact.readiness}
-            </Badge>
-            <Badge variant="outline" data-testid="badge-approval-source">
-              {suggestion ? "Agent suggestion" : "User approval"}
-            </Badge>
+            <StatusBadge status={artifact.readiness} data-testid="badge-artifact-readiness" />
+            <ActorBadge
+              kind={suggestion ? "agent" : "human"}
+              testId="badge-approval-source"
+            />
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <p className="text-xs text-muted-foreground">
-          {artifact.format} · {artifact.channel} · {artifact.provenance ?? "generated"}
-          {artifact.supersedesId ? ` · replaces revision #${artifact.supersedesId}` : ""}
+        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+          <span>{artifact.format}</span>
+          <span aria-hidden="true">·</span>
+          <ChannelIcon channel={artifact.channel} decorative />
+          <span>{artifact.channel}</span>
+          <span aria-hidden="true">·</span>
+          <span>{artifact.provenance ?? "generated"}</span>
+          {artifact.supersedesId ? <span>· replaces revision #{artifact.supersedesId}</span> : null}
         </p>
         {historyQuery.data && historyQuery.data.length > 0 && (
           <div className="flex flex-wrap gap-1" data-testid="list-artifact-revisions">
@@ -230,6 +261,11 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
           />
         ) : (
           <p className="whitespace-pre-wrap break-words text-sm" data-testid="text-artifact-content">{text || "(empty)"}</p>
+        )}
+        {rejected && (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-muted-foreground" data-testid="text-artifact-rejected-immutable">
+            This revision is rejected and cannot be approved or scheduled. Create a new revision to continue.
+          </p>
         )}
         <div className="flex flex-wrap gap-2">
           <Button asChild size="sm" variant="default" data-testid="button-artifact-review">
@@ -254,7 +290,7 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
               }}
               data-testid="button-artifact-edit"
             >
-              Edit
+              {rejected ? "Create new revision" : "Edit"}
             </Button>
           )}
           <Button size="sm" variant="outline" onClick={() => regenerate.mutate()} disabled={regenerate.isPending} data-testid="button-artifact-regenerate">
@@ -265,15 +301,30 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
               Submit for review
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => approve.mutate()}
-            disabled={approve.isPending || approved}
-            data-testid="button-artifact-approve"
-          >
-            Approve
-          </Button>
+          {!rejected && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => approve.mutate()}
+              disabled={approve.isPending || approved}
+              data-testid="button-artifact-approve"
+            >
+              Approve
+            </Button>
+          )}
+          {inReview && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setRejectConfirmOpen(true)}
+              disabled={reject.isPending}
+              data-testid="button-artifact-reject"
+            >
+              <XCircle className="mr-1.5 h-3.5 w-3.5" />
+              Reject
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setScheduleOpen(true)} disabled={!approved} data-testid="button-artifact-schedule">
             Schedule
           </Button>
@@ -322,6 +373,17 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={rejectConfirmOpen}
+        onOpenChange={setRejectConfirmOpen}
+        title="Reject this revision?"
+        description="Rejecting marks this exact revision as rejected. It cannot be approved or scheduled; create a new revision if you want to continue."
+        confirmLabel="Reject revision"
+        destructive
+        loading={reject.isPending}
+        onConfirm={() => reject.mutate()}
+      />
     </Card>
   );
 }

@@ -14,12 +14,12 @@ const routes: { path: string; selector: string }[] = [
 
   // Compatibility / legacy routes
   { path: "/generate", selector: '[data-testid="text-page-title"]' },
-  { path: "/calendar", selector: '[data-testid="text-calendar-title"]' },
+  { path: "/calendar", selector: '[data-testid="page-header-schedule"]' },
   { path: "/ideas", selector: '[data-testid="text-ideas-title"]' },
   { path: "/templates", selector: '[data-testid="text-templates-title"]' },
-  { path: "/analytics", selector: '[data-testid="text-analytics-title"]' },
+  { path: "/analytics", selector: '[data-testid="page-header-insights"]' },
   { path: "/articles", selector: '[data-testid="text-articles-title"]' },
-  { path: "/references", selector: '[data-testid="text-references-title"]' },
+  { path: "/references", selector: '[data-testid="page-header-sources"]' },
   { path: "/discover", selector: '[data-testid="text-discover-title"]' },
   { path: "/ingest", selector: '[data-testid="text-ingest-title"]' },
   { path: "/images", selector: '[data-testid="text-imagegen-title"]' },
@@ -30,8 +30,8 @@ const routes: { path: string; selector: string }[] = [
   { path: "/formatter", selector: '[data-testid="text-formatter-title"]' },
   { path: "/canned-responses", selector: '[data-testid="text-canned-responses-title"]' },
   { path: "/youtube", selector: '[data-testid="text-youtube-title"]' },
-  { path: "/queue", selector: '[data-testid="text-queue-title"]' },
-  { path: "/ai-usage", selector: '[data-testid="text-ai-usage-title"]' },
+  { path: "/queue", selector: '[data-testid="page-header-schedule"]' },
+  { path: "/ai-usage", selector: '[data-testid="page-header-insights"]' },
 ];
 
 for (const { path, selector } of routes) {

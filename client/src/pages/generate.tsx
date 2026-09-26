@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { XPostPreview } from "@/components/x-post-preview";
 import { Sparkles, Copy, Save, RefreshCw, Check, AlertTriangle, Zap, Loader2, TrendingUp, ArrowUp, Eye, Type } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import type { Post, Tweet } from "@shared/schema";
 
 function CharCount({ count, limit }: { count: number; limit: number }) {
@@ -29,14 +29,7 @@ function CharCount({ count, limit }: { count: number; limit: number }) {
 }
 
 function PlatformIcon({ platform }: { platform: string }) {
-  if (platform === "x") return <SiX className="h-3 w-3" />;
-  if (platform === "threads") return <SiThreads className="h-3 w-3" />;
-  return (
-    <span className="flex items-center gap-1">
-      <SiX className="h-3 w-3" />
-      <SiThreads className="h-3 w-3" />
-    </span>
-  );
+  return <ChannelIcon channel={platform} decorative />;
 }
 
 interface GenerationResult {

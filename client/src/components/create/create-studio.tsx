@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusBadge } from "@/components/ui-shared/status-badge";
 import { ErrorState } from "@/components/ui-shared/error-state";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -19,7 +20,6 @@ import {
 } from "@/lib/create-workflow";
 import {
   Sparkles,
-  Layers,
   ChevronDown,
   BookOpen,
   Lightbulb,
@@ -29,7 +29,6 @@ import {
   AlertCircle,
   Check,
 } from "lucide-react";
-import { SiX, SiLinkedin, SiInstagram, SiYoutube, SiThreads } from "react-icons/si";
 
 export interface CreateStudioProps {
   onGenerationComplete: (artifactId: number) => void;
@@ -67,23 +66,6 @@ interface TemplateItem {
   name: string;
   description: string | null;
   supportedFormats?: string[];
-}
-
-function ChannelIcon({ channel }: { channel: string }) {
-  switch (channel.toLowerCase()) {
-    case "x":
-      return <SiX className="h-3.5 w-3.5" />;
-    case "linkedin":
-      return <SiLinkedin className="h-3.5 w-3.5 text-[#0A66C2]" />;
-    case "instagram":
-      return <SiInstagram className="h-3.5 w-3.5 text-[#E4405F]" />;
-    case "youtube":
-      return <SiYoutube className="h-3.5 w-3.5 text-[#FF0000]" />;
-    case "threads":
-      return <SiThreads className="h-3.5 w-3.5" />;
-    default:
-      return <Layers className="h-3.5 w-3.5" />;
-  }
 }
 
 export function CreateStudio({
@@ -410,7 +392,7 @@ export function CreateStudio({
               {activeTypeDesc.supportedChannels.map((ch) => (
                 <SelectItem key={ch} value={ch} data-testid={`option-channel-${ch}`}>
                   <div className="flex items-center gap-2 capitalize">
-                    <ChannelIcon channel={ch} />
+                    <ChannelIcon channel={ch} decorative />
                     <span>{ch}</span>
                   </div>
                 </SelectItem>

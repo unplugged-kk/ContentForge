@@ -24,8 +24,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { Loader2, Youtube } from "lucide-react";
-import { SiThreads, SiX } from "react-icons/si";
 import { CONTENT_PILLARS, PLATFORMS, POST_TYPES, TONES, CHAR_LIMITS } from "@/lib/constants";
 import type { YoutubeChannel } from "@shared/schema";
 
@@ -43,8 +43,7 @@ function defaultScheduleLocal(): string {
 }
 
 function PlatformIcon({ platform }: { platform: string }) {
-  if (platform === "threads") return <SiThreads className="h-3.5 w-3.5" />;
-  return <SiX className="h-3.5 w-3.5" />;
+  return <ChannelIcon channel={platform} decorative />;
 }
 
 const PLATFORM_OPTIONS = PLATFORMS.filter((p) => p.value === "x" || p.value === "threads");

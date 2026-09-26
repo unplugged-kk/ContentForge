@@ -9,6 +9,8 @@ import { StatusBadge } from "@/components/ui-shared/status-badge";
 import { SchedulePicker } from "@/components/ui-shared/schedule-picker";
 import { PublishPreview } from "@/components/ui-shared/publish-preview";
 import { ErrorState } from "@/components/ui-shared/error-state";
+import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getPublicationFeedback } from "@/lib/publication-feedback";
 import { useToast } from "@/hooks/use-toast";
@@ -28,14 +30,13 @@ import {
   Send,
   ArrowLeft,
   AlertTriangle,
+  XCircle,
   History,
-  Layers,
   FileText,
   Image as ImageIcon,
   Film,
   Music,
 } from "lucide-react";
-import { SiX, SiLinkedin, SiInstagram, SiYoutube, SiThreads } from "react-icons/si";
 
 export interface ArtifactReviewViewProps {
   artifactId: number;
@@ -76,23 +77,6 @@ interface StoryRecord {
   provenance: string;
 }
 
-function ChannelIcon({ channel }: { channel: string }) {
-  switch (channel.toLowerCase()) {
-    case "x":
-      return <SiX className="h-3.5 w-3.5" />;
-    case "linkedin":
-      return <SiLinkedin className="h-3.5 w-3.5 text-[#0A66C2]" />;
-    case "instagram":
-      return <SiInstagram className="h-3.5 w-3.5 text-[#E4405F]" />;
-    case "youtube":
-      return <SiYoutube className="h-3.5 w-3.5 text-[#FF0000]" />;
-    case "threads":
-      return <SiThreads className="h-3.5 w-3.5" />;
-    default:
-      return <Layers className="h-3.5 w-3.5" />;
-  }
-}
-
 export function ArtifactReviewView({
   artifactId,
   onBackToCreate,
@@ -104,6 +88,7 @@ export function ArtifactReviewView({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleIso, setScheduleIso] = useState<string | null>(null);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
 
   // Queries
   const artifactQuery = useQuery<ArtifactRecord>({
@@ -199,6 +184,24 @@ export function ArtifactReviewView({
     },
   });
 
+  const rejectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/artifacts/${artifactId}/reject`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      setRejectConfirmOpen(false);
+      toast({
+        title: "Artifact rejected",
+        description: "This revision is permanently rejected. Create a new version to continue.",
+      });
+      invalidate();
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to reject", description: err.message, variant: "destructive" });
+    },
+  });
+
   const regenerateMutation = useMutation({
     mutationFn: async () => {
       if (!artifact?.opportunityId) throw new Error("Missing opportunity");
@@ -290,6 +293,8 @@ export function ArtifactReviewView({
 
   const text = extractArtifactPreviewText(artifact.payload);
   const isApproved = artifact.readiness === "approved";
+  const isInReview = artifact.readiness === "in_review";
+  const isRejected = artifact.readiness === "rejected";
   const history = historyQuery.data || [];
   const currentVersion = deriveVersionNumber(artifact.id, history);
 
@@ -355,7 +360,7 @@ export function ArtifactReviewView({
           <Card className="border shadow-xs" data-testid="card-review-preview">
             <CardHeader className="pb-3 border-b bg-muted/20 flex flex-row items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-medium">
-                <ChannelIcon channel={artifact.channel} />
+                <ChannelIcon channel={artifact.channel} decorative />
                 <span className="capitalize">{artifact.channel}</span>
                 <span className="text-muted-foreground">·</span>
                 <span className="capitalize">{artifact.format.replace(/_/g, " ")}</span>
@@ -463,7 +468,7 @@ export function ArtifactReviewView({
               <div>
                 <span className="text-muted-foreground block mb-0.5">Target Channel</span>
                 <div className="flex items-center gap-1.5 font-medium">
-                  <ChannelIcon channel={artifact.channel} />
+                  <ChannelIcon channel={artifact.channel} decorative />
                   <span className="capitalize">{artifact.channel}</span>
                 </div>
               </div>
@@ -500,45 +505,93 @@ export function ArtifactReviewView({
             </CardHeader>
             <CardContent className="p-4 space-y-2.5">
               {!isApproved ? (
-                <>
-                  <Button
-                    className="w-full justify-center gap-2"
-                    onClick={() => approveMutation.mutate()}
-                    disabled={approveMutation.isPending}
-                    data-testid="button-review-approve"
-                  >
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                    Approve Content
-                  </Button>
+                isRejected ? (
+                  <>
+                    <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-muted-foreground" data-testid="text-rejected-immutable">
+                      This revision is rejected and cannot be approved or scheduled. Create a new version to continue.
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          setDraftText(text);
+                          setEditing(true);
+                        }}
+                        data-testid="button-review-edit"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                        New version
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => regenerateMutation.mutate()}
+                        disabled={regenerateMutation.isPending}
+                        data-testid="button-review-regenerate"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
+                        Regenerate
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <Button
+                        className="w-full justify-center gap-2"
+                        onClick={() => approveMutation.mutate()}
+                        disabled={approveMutation.isPending}
+                        data-testid="button-review-approve"
+                      >
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        Approve Content
+                      </Button>
+                      {isInReview && (
+                        <Button
+                          variant="outline"
+                          className="w-full justify-center gap-2 text-destructive hover:text-destructive"
+                          onClick={() => setRejectConfirmOpen(true)}
+                          disabled={rejectMutation.isPending}
+                          data-testid="button-review-reject"
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Reject
+                        </Button>
+                      )}
+                    </div>
 
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={() => {
-                        setDraftText(text);
-                        setEditing(true);
-                      }}
-                      data-testid="button-review-edit"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                      Edit
-                    </Button>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          setDraftText(text);
+                          setEditing(true);
+                        }}
+                        data-testid="button-review-edit"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                        Edit
+                      </Button>
 
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={() => regenerateMutation.mutate()}
-                      disabled={regenerateMutation.isPending}
-                      data-testid="button-review-regenerate"
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
-                      Regenerate
-                    </Button>
-                  </div>
-                </>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => regenerateMutation.mutate()}
+                        disabled={regenerateMutation.isPending}
+                        data-testid="button-review-regenerate"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} />
+                        Regenerate
+                      </Button>
+                    </div>
+                  </>
+                )
               ) : (
                 <>
                   {/* Approved State Actions */}
@@ -629,6 +682,17 @@ export function ArtifactReviewView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={rejectConfirmOpen}
+        onOpenChange={setRejectConfirmOpen}
+        title="Reject this revision?"
+        description="Rejecting marks this exact revision as rejected. It cannot be approved or scheduled; create a new version if you want to continue."
+        confirmLabel="Reject revision"
+        destructive
+        loading={rejectMutation.isPending}
+        onConfirm={() => rejectMutation.mutate()}
+      />
     </div>
   );
 }

@@ -709,14 +709,14 @@ test.describe("Create + Review Workflow (Phase 28.2C)", () => {
 
     const expectedLinks = [
       { id: "post-thread", href: "/create" },
-      { id: "hooks", href: "/hooks" },
-      { id: "carousel", href: "/carousel" },
-      { id: "images", href: "/images" },
-      { id: "articles", href: "/articles" },
-      { id: "templates", href: "/templates" },
-      { id: "formatter", href: "/formatter" },
-      { id: "canned-responses", href: "/canned-responses" },
-      { id: "chat-post", href: "/chat" },
+      { id: "hooks", href: "/create?mode=hooks" },
+      { id: "carousel", href: "/create?mode=carousel" },
+      { id: "images", href: "/create?mode=images" },
+      { id: "articles", href: "/create?mode=articles" },
+      { id: "templates", href: "/create?mode=templates" },
+      { id: "formatter", href: "/create?mode=formatter" },
+      { id: "canned-responses", href: "/create?mode=canned-responses" },
+      { id: "chat-post", href: "/create?mode=chat-post" },
     ];
 
     for (const item of expectedLinks) {

@@ -1,11 +1,20 @@
-import { useState, useEffect } from "react";
-import { Link, useLocation } from "wouter";
+import { useState, useEffect, type ComponentType } from "react";
+import { Link, useLocation, useSearch } from "wouter";
 import { PageHeader } from "@/components/ui-shared/page-header";
 import { CreateStudio } from "@/components/create/create-studio";
 import { ArtifactReviewView } from "@/components/create/artifact-review-view";
+import HooksPage from "@/pages/hooks";
+import CarouselPage from "@/pages/carousel";
+import ImageGenPage from "@/pages/imagegen";
+import ArticlesPage from "@/pages/articles";
+import TemplatesPage from "@/pages/templates";
+import FormatterPage from "@/pages/formatter";
+import CannedResponsesPage from "@/pages/canned-responses";
+import ChatPage from "@/pages/chat";
 import { EmptyState } from "@/components/ui-shared/empty-state";
 import { Button } from "@/components/ui/button";
 import type { ContentType } from "@/lib/create-workflow";
+import { getCreateModeHref } from "@/lib/legacy-route-mapping";
 import {
   Sparkles,
   Zap,
@@ -17,24 +26,42 @@ import {
   Quote,
   MessageSquare,
   PlusCircle,
+  Youtube,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const CREATE_MODES = [
-  { key: "post-thread", name: "Post & Thread", path: "/create", icon: Sparkles, active: true },
-  { key: "hooks", name: "Hooks", path: "/hooks", icon: Zap, active: false },
-  { key: "carousel", name: "Carousel", path: "/carousel", icon: LayoutGrid, active: false },
-  { key: "images", name: "Images", path: "/images", icon: Image, active: false },
-  { key: "articles", name: "Articles", path: "/articles", icon: FileText, active: false },
-  { key: "templates", name: "Templates", path: "/templates", icon: LayoutTemplate, active: false },
-  { key: "formatter", name: "Formatter", path: "/formatter", icon: CaseSensitive, active: false },
-  { key: "canned-responses", name: "Canned Responses", path: "/canned-responses", icon: Quote, active: false },
-  { key: "chat-post", name: "Chat → Post", path: "/chat", icon: MessageSquare, active: false },
-];
+  { key: "post-thread", name: "Post & Thread", icon: Sparkles },
+  { key: "hooks", name: "Hooks", icon: Zap },
+  { key: "carousel", name: "Carousel", icon: LayoutGrid },
+  { key: "images", name: "Images", icon: Image },
+  { key: "articles", name: "Articles", icon: FileText },
+  { key: "templates", name: "Templates", icon: LayoutTemplate },
+  { key: "formatter", name: "Formatter", icon: CaseSensitive },
+  { key: "canned-responses", name: "Canned Responses", icon: Quote },
+  { key: "chat-post", name: "Chat → Post", icon: MessageSquare },
+] as const;
+
+const CREATE_MODE_COMPONENTS: Record<string, ComponentType> = {
+  hooks: HooksPage,
+  carousel: CarouselPage,
+  images: ImageGenPage,
+  articles: ArticlesPage,
+  templates: TemplatesPage,
+  formatter: FormatterPage,
+  "canned-responses": CannedResponsesPage,
+  "chat-post": ChatPage,
+};
+
+function isCreateMode(value: string | null): value is string {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(CREATE_MODE_COMPONENTS, value));
+}
 
 export default function CreatePage() {
-  const [location, setLocation] = useLocation();
+  const [location] = useLocation();
+  const search = useSearch();
   const [activeArtifactId, setActiveArtifactId] = useState<number | null>(null);
+  const [activeMode, setActiveMode] = useState<string | null>(null);
   const [contentType, setContentType] = useState<ContentType>("post");
   const [initialStoryId, setInitialStoryId] = useState<number | undefined>(undefined);
   const [initialIdeaId, setInitialIdeaId] = useState<number | undefined>(undefined);
@@ -42,12 +69,17 @@ export default function CreatePage() {
 
   // Parse query parameters
   useEffect(() => {
-    const search = window.location.search;
-    if (search) {
-      const params = new URLSearchParams(search);
+    const searchString = search || window.location.search;
+    if (searchString) {
+      const params = new URLSearchParams(searchString);
+      const modeParam = params.get("mode");
+      setActiveMode(isCreateMode(modeParam) ? modeParam : null);
+
       const artParam = params.get("artifact") || params.get("artifactId");
       if (artParam && !Number.isNaN(Number(artParam))) {
         setActiveArtifactId(Number(artParam));
+      } else {
+        setActiveArtifactId(null);
       }
 
       const typeParam = params.get("type");
@@ -68,11 +100,13 @@ export default function CreatePage() {
         setInitialIdeaId(Number(ideaParam));
       }
 
-      if (params.get("empty") === "true") {
-        setShowEmptyState(true);
-      }
+      setShowEmptyState(params.get("empty") === "true");
+    } else {
+      setActiveMode(null);
+      setActiveArtifactId(null);
+      setShowEmptyState(false);
     }
-  }, [location]);
+  }, [location, search]);
 
   const handleGenerationComplete = (artifactId: number) => {
     setActiveArtifactId(artifactId);
@@ -89,6 +123,9 @@ export default function CreatePage() {
     url.searchParams.delete("artifactId");
     window.history.pushState({}, "", url.toString());
   };
+
+  const currentSearch = search || window.location.search;
+  const ActiveModeComponent = activeMode ? CREATE_MODE_COMPONENTS[activeMode] : null;
 
   return (
     <div className="flex flex-col h-full overflow-hidden" data-testid="page-create">
@@ -119,22 +156,36 @@ export default function CreatePage() {
         data-testid="nav-create-modes"
       >
         <span className="text-[11px] font-medium text-muted-foreground mr-1 shrink-0">Mode:</span>
-        {CREATE_MODES.map((mode) => (
-          <Link
-            key={mode.name}
-            href={mode.path}
-            data-testid={`link-create-mode-${mode.key}`}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
-              mode.active
-                ? "bg-background text-foreground shadow-xs border"
-                : "text-muted-foreground hover:text-foreground hover:bg-background/50",
-            )}
-          >
-            <mode.icon className="h-3.5 w-3.5" />
-            <span>{mode.name}</span>
-          </Link>
-        ))}
+        {CREATE_MODES.map((mode) => {
+          const isActive = mode.key === "post-thread" ? activeMode === null : activeMode === mode.key;
+          return (
+            <Link
+              key={mode.name}
+              href={getCreateModeHref(mode.key, currentSearch)}
+              data-testid={`link-create-mode-${mode.key}`}
+              aria-current={isActive ? "page" : undefined}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
+                isActive
+                  ? "bg-background text-foreground shadow-xs border"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background/50",
+              )}
+            >
+              <mode.icon className="h-3.5 w-3.5" />
+              <span>{mode.name}</span>
+            </Link>
+          );
+        })}
+        <Link
+          href="/youtube"
+          data-testid="link-youtube-deferred"
+          aria-label="YouTube, legacy capability with canonical placement deferred"
+          title="YouTube remains available on its legacy route until its canonical home is decided"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background/50 shrink-0"
+        >
+          <Youtube className="h-3.5 w-3.5" />
+          <span>YouTube (deferred)</span>
+        </Link>
       </div>
 
       {/* Main Content Area */}
@@ -168,6 +219,10 @@ export default function CreatePage() {
               window.history.pushState({}, "", url.toString());
             }}
           />
+        ) : ActiveModeComponent ? (
+          <div className="h-full overflow-y-auto" data-testid={`create-mode-${activeMode}`}>
+            <ActiveModeComponent />
+          </div>
         ) : (
           <CreateStudio
             onGenerationComplete={handleGenerationComplete}

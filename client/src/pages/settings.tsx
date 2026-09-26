@@ -11,9 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { PageHeader } from "@/components/ui-shared/page-header";
 import { ErrorState } from "@/components/ui-shared/error-state";
 import { ConfirmDialog } from "@/components/ui-shared/confirm-dialog";
+import { ChannelIcon } from "@/components/ui-shared/channel-icon";
 import { useToast } from "@/hooks/use-toast";
 import { Cpu, Zap, Globe, Loader2, Trash2, CheckCircle2, AlertCircle, ExternalLink, Brain, Sparkles, Eye } from "lucide-react";
-import { SiX, SiThreads, SiLinkedin, SiYoutube } from "react-icons/si";
 import { CONTENT_PILLARS } from "@/lib/constants";
 import type { ConnectedAccount } from "@shared/schema";
 
@@ -252,7 +252,6 @@ export default function SettingsPage() {
     platform,
     label,
     description,
-    icon: Icon,
     account,
     helpUrl,
     helpText,
@@ -260,7 +259,6 @@ export default function SettingsPage() {
     platform: string;
     label: string;
     description: string;
-    icon: any;
     account: ConnectedAccount | undefined;
     helpUrl: string;
     helpText: string;
@@ -270,7 +268,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-foreground/5 flex items-center justify-center">
-              <Icon className="h-5 w-5" />
+              <ChannelIcon channel={platform} decorative className="h-5 w-5" />
             </div>
             <div>
               <h3 className="text-sm font-medium">{label}</h3>
@@ -409,7 +407,7 @@ export default function SettingsPage() {
                   platform="x"
                   label="X (Twitter)"
                   description="Connect xQuick to publish directly to X"
-                  icon={SiX}
+                  
                   account={xAccount}
                   helpUrl="https://xquik.com"
                   helpText="Use an xQuick API key and the X account username/account ID connected in the xQuick dashboard. The server also supports XQUIK_API_KEY and XQUIK_ACCOUNT env vars."
@@ -418,7 +416,7 @@ export default function SettingsPage() {
                   platform="threads"
                   label="Threads"
                   description="Connect to publish directly to Threads"
-                  icon={SiThreads}
+                  
                   account={threadsAccount}
                   helpUrl="https://developers.facebook.com/docs/threads/"
                   helpText="You need an access token from Meta's Threads API. Create a Meta app, add the Threads product, and generate a long-lived access token."
@@ -427,7 +425,7 @@ export default function SettingsPage() {
                   platform="linkedin"
                   label="LinkedIn"
                   description="Connect to publish posts and carousels to LinkedIn"
-                  icon={SiLinkedin}
+                  
                   account={linkedinAccount}
                   helpUrl="https://www.linkedin.com/developers/apps"
                   helpText="You need an OAuth access token from the LinkedIn Developer Portal. Create an app, add the Share on LinkedIn product, and generate a token with w_member_social scope."
@@ -436,7 +434,7 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-full bg-foreground/5 flex items-center justify-center">
-                        <SiYoutube className="h-5 w-5" />
+                        <ChannelIcon channel="youtube" decorative className="h-5 w-5" />
                       </div>
                       <div>
                         <h3 className="text-sm font-medium">YouTube</h3>

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useChartColors, CHART_TICK_FONT_SIZE } from "@/hooks/use-chart-colors";
 import { Link } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +21,6 @@ import {
   HelpCircle,
   Sparkles,
 } from "lucide-react";
-import { SiX, SiThreads } from "react-icons/si";
 import {
   BarChart,
   Bar,
@@ -103,7 +103,10 @@ function StatCard({
   );
 }
 
-const CHART_COLORS = ["#3B82F6", "#8B5CF6", "#06B6D4", "#10B981", "#F59E0B", "#EF4444"];
+/**
+ * Chart series colors come from the shared ramp via `useChartColors`, so charts
+ * follow the active theme instead of hardcoding light-mode hex.
+ */
 
 type InsightsPayload = {
   topPosts: Array<{ postId: number; score: number; preview: string; tweets: string[] }>;
@@ -112,6 +115,7 @@ type InsightsPayload = {
 };
 
 export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
+  const chartColors = useChartColors();
   const {
     data: summary,
     isLoading,
@@ -328,10 +332,10 @@ export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boo
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={insights.bestHours}>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
-                      <YAxis tick={{ fontSize: 10 }} />
+                      <XAxis dataKey="hour" tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
+                      <YAxis tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
                       <Tooltip />
-                      <Bar dataKey="avgEngagement" fill="#3B82F6" name="Avg engagement" />
+                      <Bar dataKey="avgEngagement" fill={chartColors[0]} name="Avg engagement" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -343,10 +347,10 @@ export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boo
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart layout="vertical" data={insights.pillarStats} margin={{ left: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis type="number" tick={{ fontSize: 10 }} />
-                      <YAxis type="category" dataKey="pillarName" width={100} tick={{ fontSize: 9 }} />
+                      <XAxis type="number" tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
+                      <YAxis type="category" dataKey="pillarName" width={100} tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
                       <Tooltip />
-                      <Bar dataKey="avgEngagement" fill="#8B5CF6" name="Avg engagement" />
+                      <Bar dataKey="avgEngagement" fill={chartColors[1]} name="Avg engagement" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -385,7 +389,7 @@ export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boo
                           label={({ pillar, count }) => `${pillar}: ${count}`}
                         >
                           {stats.byPillar.map((entry, i) => (
-                            <Cell key={i} fill={entry.color || CHART_COLORS[i % CHART_COLORS.length]} />
+                            <Cell key={i} fill={entry.color || chartColors[i % chartColors.length]} />
                           ))}
                         </Pie>
                         <Tooltip />
@@ -403,12 +407,12 @@ export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boo
                     <ResponsiveContainer width="100%" height={250}>
                       <BarChart data={stats.byPillar}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                        <XAxis dataKey="pillar" tick={{ fontSize: 10 }} />
-                        <YAxis tick={{ fontSize: 10 }} />
+                        <XAxis dataKey="pillar" tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
+                        <YAxis tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
                         <Tooltip />
                         <Bar dataKey="impressions" radius={[4, 4, 0, 0]}>
                           {stats.byPillar.map((entry, i) => (
-                            <Cell key={i} fill={entry.color || CHART_COLORS[i % CHART_COLORS.length]} />
+                            <Cell key={i} fill={entry.color || chartColors[i % chartColors.length]} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -430,11 +434,11 @@ export default function AnalyticsPage({ hideHeader = false }: { hideHeader?: boo
                     <ResponsiveContainer width="100%" height={250}>
                       <BarChart data={stats.byPlatform}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                        <XAxis dataKey="platform" tick={{ fontSize: 10 }} />
-                        <YAxis tick={{ fontSize: 10 }} />
+                        <XAxis dataKey="platform" tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
+                        <YAxis tick={{ fontSize: CHART_TICK_FONT_SIZE }} />
                         <Tooltip />
-                        <Bar dataKey="count" fill="#3B82F6" name="Posts" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="likes" fill="#EF4444" name="Likes" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="count" fill={chartColors[0]} name="Posts" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="likes" fill={chartColors[3]} name="Likes" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   ) : (
