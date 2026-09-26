@@ -27,6 +27,7 @@ import {
 import { db } from "./db";
 import { eq, desc, sql, and, gte, inArray } from "drizzle-orm";
 import { decryptSecret, ensureEncrypted, isEncrypted } from "./middleware/crypto";
+import { forUser } from "./middleware/userContext";
 
 /**
  * Transparent decryption helper for connected_accounts rows. Stored values
@@ -111,8 +112,8 @@ export interface IStorage {
   createDiscoveredIdeas(userId: number, ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
   updateDiscoveredIdeaStatus(userId: number, id: number, status: string): Promise<DiscoveredIdea | undefined>;
 
-  getDiscoverySettings(): Promise<DiscoverySettings>;
-  updateDiscoverySettings(settings: Partial<DiscoverySettings>): Promise<DiscoverySettings>;
+  getDiscoverySettings(userId: number): Promise<DiscoverySettings>;
+  updateDiscoverySettings(userId: number, settings: Partial<DiscoverySettings>): Promise<DiscoverySettings>;
 
   getViralScores(userId: number, postId?: number, articleId?: number): Promise<ViralScore[]>;
   createViralScore(userId: number, score: InsertViralScore): Promise<ViralScore>;
@@ -489,18 +490,26 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getDiscoverySettings(): Promise<DiscoverySettings> {
-    const [existing] = await db.select().from(discoverySettings).limit(1);
+  // Phase 33.7: scoped to the authenticated owner. The pre-fix read was an
+  // unscoped `.limit(1)` and the write targeted whatever row that returned, so
+  // every owner resolved to the same singleton row (id 1). Reads and writes now
+  // go through `forUser(...)`, and the row is created for the caller on miss.
+  async getDiscoverySettings(userId: number): Promise<DiscoverySettings> {
+    const [existing] = await db.select().from(discoverySettings)
+      .where(forUser(discoverySettings, userId)).limit(1);
     if (existing) return existing;
-    const [created] = await db.insert(discoverySettings).values({}).returning();
+    const [created] = await db.insert(discoverySettings).values({ userId }).returning();
     return created;
   }
 
-  async updateDiscoverySettings(settings: Partial<DiscoverySettings>): Promise<DiscoverySettings> {
-    const existing = await this.getDiscoverySettings();
+  async updateDiscoverySettings(userId: number, settings: Partial<DiscoverySettings>): Promise<DiscoverySettings> {
+    // Never let the caller re-attribute or re-key the row: `id` and `userId`
+    // come only from the authenticated owner, not the request body.
+    const { id: _ignoredId, userId: _ignoredUserId, ...safe } = settings;
+    const existing = await this.getDiscoverySettings(userId);
     const [result] = await db.update(discoverySettings)
-      .set({ ...settings, updatedAt: new Date() })
-      .where(eq(discoverySettings.id, existing.id))
+      .set({ ...safe, updatedAt: new Date() })
+      .where(and(eq(discoverySettings.id, existing.id), forUser(discoverySettings, userId)))
       .returning();
     return result;
   }

@@ -306,15 +306,22 @@ export const discoveredIdeas = pgTable("discovered_ideas", {
   discoveredAt: timestamp("discovered_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+// Phase 33.7: discovery settings are per-owner. Previously a global singleton
+// with no owner column, so any authenticated user read/overwrote another's
+// keywords (row id 1). `user_id` NOT NULL + one-row-per-owner unique index
+// closes the cross-owner read/write.
 export const discoverySettings = pgTable("discovery_settings", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
   autoRefreshFrequency: varchar("auto_refresh_frequency", { length: 20 }).default("daily"),
   customKeywords: text("custom_keywords").array().default(sql`'{}'::text[]`),
   monitoredXAccounts: text("monitored_x_accounts").array().default(sql`'{}'::text[]`),
   enabledSources: jsonb("enabled_sources").default({ hackernews: true, reddit: true, rss: true, github: true }),
   minViralScore: decimal("min_viral_score", { precision: 3, scale: 1 }).default("5.0"),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (table) => [
+  uniqueIndex("discovery_settings_user_id_uq").on(table.userId),
+]);
 
 export const viralScores = pgTable("viral_scores", {
   id: serial("id").primaryKey(),
