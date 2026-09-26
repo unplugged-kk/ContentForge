@@ -1,210 +1,206 @@
-# Final ContentForge v1 Audit
+# ContentForge — Final Independent Audit (v1)
 
-**Branch:** `main` · **HEAD:** `ef69f46` · **Decision:** COMPLETE WITH EXPLICIT NON-BLOCKING DEBT
+**Date:** 2026-09-26
+**Audited commit:** `a763250` (pushed `origin/main` at audit time)
+**Auditors:** four independent workers, each in a fresh checkout of the pushed tree
+**Decision:** **FINAL NO-GO**
+
+---
 
 ## 1. Executive Summary
 
-Independent clean-room audit of the final MAIN tree across architecture,
-autonomy, scheduler, security, isolation, integrity, providers, operations,
-UX, a11y, responsive, browsers, and the full test matrix — with load-bearing
-claims re-proven, not trusted from prior reports. Findings: no P0/P1 in any
-dimension. The system is coherent, secure, operable, recoverable,
-understandable, and bounded. Remaining items are documented non-blocking
-limitations with owners and triggers (§18–19).
+The independent audit **falsified the platform's headline security claim** and found the single
+most serious defect of this entire programme.
 
-## 2. Final Repository State
+`authGate` compared `req.path.startsWith("/api")` **case-sensitively** while Express routes
+case-insensitively. A capital letter in the path (`/API/research/jobs`) reached the same handler
+with the gate stepped aside. Handlers then resolved the owner as `getUserId(req) ?? 1`, so an
+unauthenticated request silently became **owner 1**.
 
-`main` at `ef69f46`, clean tree (tooling dirs only untracked). No history
-rewrites anywhere in the chain (verified by log). `main` canonical;
-`replit` retained as history; PR #3 closed superseded (reversible, no merge
-performed); `origin/HEAD` still points at `replit` — owner action with
-deploy wiring. No stale implementation branches relied upon (all work is on
-`main`; other branches untouched since their eras).
+Verified independently by the coordinator: anonymous **read and write** of owner 1's data, and
+anonymous access to **paid** AI endpoints. `POST /API/autonomy/enable` returned
+`{userId: 1, enabled: true}`.
 
-## 3. Final Architecture
+**Fixed and pushed** as `ea86cca` — 95 call sites, plus regression tests. **But that commit has
+not itself been independently audited**, so the audited commit `a763250` is a **NO-GO**, and the
+remediation requires re-audit.
 
-Reconstructed from source (single-instance verified by grep):
-- One queue: pg-boss (`jobs/runtime.ts`; `index.ts` only starts/stops it).
-- One autonomy controller (`autonomy/controller.ts`: evaluate/execute/
-  rollback; `evaluateExperiment` is experiment scoring, a separate concern).
-- One auth chain (`authGate` + `requireAuthMiddleware` + session).
-- Policy writes confined to the 29.3 service (`activation.ts`); `storage.ts`
-  only inserts immutable content-addressed revisions + reads.
-- Lifecycle `ResearchJob → Story → … → Result` and learning loop intact;
-  scheduler graph exactly as approved (durable job → lease → reread →
-  controller → bounded action → audit). No duplicated abstractions found.
+The audit also **corrected two of the coordinator's own claims**, and found a class of
+accessibility defect that axe cannot see.
 
-## 4. Canonical Lifecycle
+**This is the third time in the programme that independent verification overturned a
+coordinator conclusion.** That is the finding about the process, not just the product.
 
-Lifecycle + learning-loop suites green in the 350/350 DB run and 740/741
-unit run on this tree. Scheduler adds evaluations/activations only through
-the same services. No second content model, no second design system.
+---
 
-## 5. Autonomy Safety
+## 2. Final MAIN State
 
-All 15 gates re-proven by suites on this tree (20/20 autonomy dbtests incl.
-kill/mode/flags/breaker/ownership/scope/allowlist/evidence/guardrails/
-budgets/cooldown/churn/oscillation/rollback/lineage/concurrency) + live
-default-deny config for new users (verified via API: all-false closed
-breaker). Scheduler cannot bypass (sole-entry static proof + behavioral
-DENYs); agent cannot bypass (static scan, 0 hits); no direct mutation path
-(§3).
+```
+origin/main : ea86cca  fix(security): close the auth-gate case bypass …   (pushed)
+audited     : a763250  (previous tip)
+tag         : rc-33-design-verified -> a763250 (superseded)
+local == remote: yes
+server/ changes since the pre-design main: the security fix above
+```
 
-## 6. Scheduler
+Worktrees `audit-a`…`audit-d` are detached at the audited tree. `phase-33.4-test-stability`
+holds an explicitly **unverified** WIP commit, correctly not merged and not pushed.
 
-Re-audited deltas: WHEN-only confirmed (no eligibility/eligibility-adjacent
-code in job/scheduler modules); durability/idempotency/lease/concurrency/
-restart/retry/DLQ/backoff (exponential+jitter, vendor-SQL evidence);
-authoritative reread (live kill-flip proof in 31.1 + soak cycles);
-10/10 + 23/23 suites green in this tree's totals; 5-cycle live soak
-(14 completed, 5×1 activations, DLQ drill, restart, kill cycle) on record.
-No scheduler HTTP endpoint; no agent path.
+---
 
-## 7. Security
+## 3. Security
 
-Fresh live battery on production build (final tree): 10 anonymous probes
-(reads, mutations, paid generation, external publish, autonomy, ingest,
-accounts) → all 401 before handler execution; forged owner header ignored
-(own profile returned); metadata/loopback/private URL fetches → 400 with no
-outbound request; secrets scan clean (no live keys in tree/history-literal
-scan); no `ownerId`/`userId` rendered client-side; error handler sanitizes
-5xx; CSRF enforced post-auth with client auto-retry. STOP conditions never
-triggered (no arch/auth/data/infra changes needed).
-
-## 8. Tenant Isolation
-
-Gate (401) + per-row own-or-null-or-404 across newer slices (ownerIsolation
-5/5 in totals) + pre-existing ForOwner slices re-verified; live A/B/anon
-matrix green (A builds, B 404s, anon 401s, logout→401). Residue R1a (legacy
-NULL pool shared) + R1b (voices/templates/policies shared-config): inert
-single-tenant, triggers defined. Anonymous → owner-1 is impossible (no
-fallback remains in any reachable helper — pinned by static tests).
-
-## 9. Data Integrity
-
-Immutability trigger present in migrations; zero schema/migration changes
-since 29.4 (`git log` proof); lineage suites green; old generations stay
-pinned to historical policies (29.3 proof stands, code identical);
-scheduler/activation append-only journals verified in soak (5 rows / 5
-distinct candidates).
-
-## 10. External Side Effects
-
-Adapters unchanged since certification; success/failed/unknown taxonomy
-intact with unknown-first parking + bounded reconcile (suites green);
-duplicate suppression (idempotency + lease + provider honesty notes)
-intact; no blind retry of unknown anywhere (scheduler path is DB-only).
-
-## 11. Production Operations
-
-Fresh live verification: clean install → migrate empty DB → prod boot →
-`/api/health` ok → `/api/ready` 200 → authenticated flows; fail-closed boot
-without SESSION_SECRET (design); graceful shutdown (cron stop + boss drain)
-in code and soak; backup→restore chain proven in 30.0 (no schema drift
-since); logging redacted + sanitized; pg defaults adequate with monitor
-notes. Railway env prerequisites documented (SESSION_SECRET must exist).
-
-## 12. UX
-
-30.3 stands (zero client diff since); this phase re-toured all 7
-destinations + autonomy panel + logout cycle in a real browser on the final
-build: correct titles/headings/landmarks/empty states/identity/badges/
-controls/logout-to-SignIn, zero console errors. Journeys green in CI (231).
-
-## 13. Accessibility
-
-CI axe suites green; live snapshots confirm landmarks, skip link, labeled
-inputs, heading order. No new interactive elements since certification.
-
-## 14. Responsive
-
-CI 7-viewport matrix green; no client changes to invalidate it. Local
-viewport rendering unavailable (no browsers on ARM box) — environment
-limitation covered by CI evidence.
-
-## 15. Browser Validation
-
-Real-browser tour (§12) + unauthenticated 7/7 → AuthPage with no leak +
-register/login/logout/401 cycle + autonomy panel defaults + log secret scan
-clean. One harness artifact noted (stale element refs across calls) —
-methodology note only, not product behavior.
-
-## 16. Test Results
-
-| Suite | Result (this phase, final tree) |
-|---|---|
-| tsc / build | clean |
-| unit | 740 pass / 0 fail / 1 env-skip (741) |
-| DB | 350 pass / 0 fail (incl. scheduler 23 + isolation 5) |
-| api E2E (local, prior identical tree) | 37 + 1 env-skip |
-| CI browsers (latest main) | 231 passed / 1 quarantined (Journey E) / 3 skipped |
-| Live batteries (auth/SSRF/ops) | all green, this phase |
-
-The lease-timing flake did not reproduce in this run (350/350), consistent
-with its intermittent classification.
-
-## 17. Historical Findings Reconciliation
-
-| Era | Items | Status |
+| Claim | Verdict | Evidence |
 |---|---|---|
-| 28.2H 36 + 29.5 UX-37/38/39 | 39 | RESOLVED (re-verified 30.3 + §12) |
-| 29.x arch (learning/experiments/policy/autonomy/concurrency) | all | RESOLVED |
-| 30.0 F1–F6 + B1 | 7 | RESOLVED (F1–F6 fixed+verified; B1 fixed in 30.1) |
-| 30.1 gate + harness | — | RESOLVED |
-| 30.2 R1/B1/matrix | — | RESOLVED / NON-BLOCKING residue R1a/R1b |
-| 31/31.1 scheduler + A1/A2 harness | — | RESOLVED |
-| 31.2/30.3 UX | zero new findings | RESOLVED |
-| 31.3 soak | — | PASSED, no code changes |
-| Journey E quarantine | 1 | NON-BLOCKING (TEST DEFECT, §18) |
-| Lease timing flake | 1 | NON-BLOCKING (intermittent, both trees) |
+| Every protected `/api/*` requires auth | **FALSIFIED** | `/api/...` 401, but `/API/...` **200** |
+| **Anonymous never becomes owner 1** | **FALSIFIED — CRITICAL** | `GET /API/research/jobs` returned owner rows; `POST /API/autonomy/enable` → `{userId:1, enabled:true}`, confirmed in SQL |
+| Paid endpoints authenticated | **FALSIFIED** | `POST /API/images/generate` reached the OpenAI SDK anonymously |
+| Forged client identity ignored | VERIFIED | `X-User-Id`/`X-Owner-Id`/body/query → 401 |
+| CSRF enforced | VERIFIED | missing/invalid token → 403; token endpoint is not a bypass |
+| SSRF boundary | VERIFIED | `safeFetch` rejects loopback, link-local, metadata, RFC1918, CGNAT, numeric encodings, IPv4-mapped, credentials, non-http |
+| Credential masking | VERIFIED | `/api/accounts` returns only `••••••<last4>`, no `refreshToken`; nothing beyond the last 4 rendered |
 
-No historical finding was silently changed; residues keep their triggers.
+**Fixed in `ea86cca`**, verified: all case variants 401 for reads and writes; allowlist
+(`/api/health`, `/api/ready`, `/api/csrf-token`) still 200; `authGate.test.ts` 10/10.
 
-## 18. Remaining Debt
+## 4. Tenant Isolation
 
-Reviewed item by item — none is a production blocker for the certified
-single-operator model: command palette / multi-account switcher (no
-evidence these exist as promised features — not debt, non-goals);
-profile-copy cleanup, allowlist visibility, budget indicator (P3 UX);
-shared configuration decisions R1b (explicit); shared-pool legacy residue
-R1a (trigger: multi-tenant onboarding); Journey E harness isolation Q1
-(trigger: none for prod; CI quarantine documented); alerting M2 (polling
-proportionate); TikTok/media connectors (deferred non-goals);
-auth-provider migration (explicit non-goal). TikTok + providers stay
-deferred by scope, not by defect.
+**FALSIFIED (one domain).** `discovery_settings` (`shared/schema.ts:309`) has **no `user_id`**;
+one user can read and overwrite another's `customKeywords`. Every other per-user domain checked
+(posts, ideas, articles, references, vault, accounts, research, artifacts, publications,
+schedule-occurrences, experiments, policy-candidates, learning, automation) **is** properly
+owner-scoped. **Not yet fixed.**
 
-## 19. Operational Mitigations
+## 5. Authentication
 
-M1-narrowed (single-tenant for NULL pool/shared config; monitor: quarterly
-access review + unauth probes; NO-GO trigger: second tenant/open
-registration pre-backfill) — ACCEPTABLE. M2 (daily status/decisions poll;
-trigger: volume outgrows polling) — ACCEPTABLE. M3 (platform backups +
-quarterly restore confirmation) — ACCEPTABLE. D1 (CI-gated deploys;
-Journey E quarantined) — ACCEPTABLE. Q1 (quarantine + follow-up) —
-ACCEPTABLE. Railway SESSION_SECRET prerequisite — pre-deploy checklist.
+The gate itself is correct for canonical paths (allowlist = `/api/auth/*`, `/api/csrf-token`,
+`/api/health`, `/api/ready`). The bypass was the case comparison, now fixed. The `authGate.test.ts`
+suite passed 8/8 throughout because it never used a mixed-case path — a test-design gap now closed.
 
-## 20. Findings
+## 6. Functionality
 
-| ID | Sev | Location | Evidence | Impact | Status | Action |
-|---|---|---|---|---|---|---|
-| F-32-01 | P3 | Journey E assertion | 4 consecutive CI runs, shared-user mechanism | CI red signal needs quarantine reading | NON-BLOCKING | harness isolation follow-up |
-| F-32-02 | P3 | visualPublication timing | intermittent, both trees, 9/9 reruns | none (lease correct on clean runs) | NON-BLOCKING | none (record stands) |
+**Audit incomplete.** Auditor B (functionality / scheduler / autonomy / recovery) hit its turn
+limit without producing a report. The core and advanced loops and the scheduler
+`WHEN`/`WHETHER` separation are therefore **UNVERIFIED by this audit** and must be re-run.
 
-No P0/P1/P2. No other findings in any dimension.
+## 7. UX
 
-## 21. Final GO / NO-GO
+Real findings, from the UX auditor's per-destination pass:
 
-**COMPLETE WITH EXPLICIT NON-BLOCKING DEBT.**
+- **MEDIUM** `/create`: the primary action is disabled with **no inline reason** — the design
+  direction explicitly forbids a disabled primary as the only explanation.
+- **MEDIUM** `/create`, `/settings`: mode strips scroll behind `no-scrollbar` with **no visible
+  affordance**; 37 off-viewport elements at 390px.
+- **MEDIUM** `/sources`: the section heading ties the page `h1` in weight.
+- **MEDIUM** `/sources`: the header action (`Quick Capture`) does not name the surface's actual job.
+- **MEDIUM** `/agent`: **Capabilities is deleted below `lg`**, not disclosed.
+- **MEDIUM** `/insights`: only one heading on the page; no section navigation.
 
-No production-relevant blocker remains in security, correctness, integrity,
-recovery, scheduler, operations, or UX. The two P3 test-hygiene items and
-the accepted operational posture (§19) are the only open items, all with
-owners and triggers.
+## 8. Visual Design
 
-## 22. Final Release State
+Consistent with the design programme: one token system, semantic status colour, no exclamation
+copy, no colour-only status. **Latent defect found:** `analytics.tsx:101` still carries a raw
+`text-green-500` literal (2.28:1 on light) that renders only when a trend string exists — the
+empty database hid it from axe.
 
-ContentForge v1: coherent lifecycle, bounded autonomy with a boring durable
-scheduler, enforced authentication and ownership, immutable history,
-reconciled external effects, operable and observable deployment, honest UX.
-HEAD `ef69f46` (+ this report) is the v1 release state. No Phase 33 or new
-architecture is created or needed.
+## 9. Accessibility
+
+**0 axe violations on default first paint — 7 routes × 2 themes.** But the auditor's **deep pass
+(opening every tab and every overlay)** found more, and additional probes found defects axe
+**structurally cannot report**:
+
+- **HIGH — dialog focus is not restored to the invoking control** (3 dialogs).
+- **HIGH — 12 form controls on `/settings` have no programmatically associated label** (Brand
+  Profile ×10, Connect dialog ×2). `el.labels.length === 0`, no `aria-label`, no `id`.
+  `create-studio.tsx` does this correctly and is the model.
+- **HIGH — colour contrast in the Calendar view**, both themes (visible only when the Calendar tab
+  is activated).
+- **LOW/MEDIUM** — `aria-modal` absent on dialogs (Radix compensates via `aria-hidden`).
+
+The auditor proved axe does not flag placeholder-only or unassociated-label inputs, so
+**"0 axe violations" is not "accessible"**. This also **corrects the coordinator's earlier
+"14/14 clean" claim**, which was first-paint only.
+
+Clean: one `<main>` and one `<h1>` per route, no skipped heading levels, tab `aria-controls`
+resolve before activation, primary actions keyboard-reachable, real focus rings, no overflow at
+320px or 2× zoom, and a genuinely enforced CSP.
+
+## 10. Responsive
+
+No horizontal overflow at 320px on all seven routes, nor at 2× zoom. Risks are the hidden
+scroll strips and the deleted Capabilities list above. Coarse-pointer behaviour is
+**structurally invisible** to the harness (Playwright is fine-pointer only) and was not verified.
+
+## 11. Performance
+
+Not re-measured — auditor D was still running at report time. The pre-audit baseline stands:
+entry 362 KB (from 1,792 KB), 8 route chunks. `/create` (647 KB) and `/insights` (497 KB) exceed
+Vite's 500 KB warning.
+
+## 12. Autonomy / 13. Scheduler / 14. Data Integrity / 15. Recovery
+
+**UNVERIFIED by this audit** (auditor B incomplete). Migrations were independently confirmed
+additive-only (no `DROP`, `TRUNCATE`, or `DELETE` across 31 files), so schema changes cannot
+destroy data.
+
+## 16. Test Integrity
+
+- `tsc` clean · build clean · `authGate.test.ts` 10/10 · unit **774/774** after the fix.
+- E2E serial **252 passed / 4 failed** (all pre-existing and classified); parallel 235 / 19 under
+  known rate-limit contention.
+- **The 3 "flaky" `threads.test.ts` failures were explained, not excused:** they were stale
+  `connected_accounts` rows in the shared test database encrypted under a different
+  `ENCRYPTION_KEY` (`Failed to decrypt stored accessToken`). Deleting them restored 774/774. The
+  suite is **not isolated from database state** — a real harness defect, previously mislabelled.
+- Worker 33.4 (test stability) **failed twice**; its work is preserved unverified and not merged.
+
+## 17. Previous Findings Reconciliation
+
+Substantially incomplete: the reconciliation auditor (D) did not report. What was reconciled by
+the security and UX auditors is recorded in `docs/final-audit-security.md` and
+`docs/final-audit-ux-a11y.md`. Notably, the legacy "shared rows" claim (R1) **no longer holds** —
+legacy domains are owner-scoped at this commit.
+
+## 18. New Findings
+
+1. **CRITICAL** auth-gate case bypass + owner-1 fallback — fixed in `ea86cca`.
+2. **HIGH** `discovery_settings` has no tenant column — open.
+3. **HIGH** ×3 accessibility defects axe cannot see — open.
+4. **MEDIUM** hidden scroll strips; deleted Capabilities below `lg`; disabled primary without a
+   reason; `/insights` heading structure; `/sources` header action.
+5. **MEDIUM** test suite pollutes itself with un-decryptable rows.
+
+## 19. Remaining Debt
+
+The four pre-existing E2E failures; the parallel-run contention; 33.4 incomplete; hidden scroll
+strips; 45 sub-12px classes and 49 palette literals (19 and 17 shipping in live chunks);
+`/create` + `/insights` chunk sizes; coarse-pointer verification.
+
+## 20. Don't-Build Review
+
+**PASS.** No second queue, no second workflow engine, no second design system, no native app, no
+auto-DM/reply, no speculative dashboards, no RL/bandits, no autonomous experiment creation or
+self-modification. The design programme added no product features; the one feature-class finding
+(scheduled-post surfacing) remained deferred.
+
+## 21. Final Decision
+
+**FINAL NO-GO.**
+
+Three independent grounds:
+
+1. **A CRITICAL production security blocker existed in the audited commit** — anonymous read,
+   write and paid-endpoint access as owner 1. It is fixed in `ea86cca`, but that commit has not
+   been independently audited, and the rule is that the audit must run against the pushed tree.
+2. **A P1 tenant-isolation defect remains open** — `discovery_settings` has no owner column.
+3. **Three HIGH accessibility defects remain open**, and the audit **corrected the coordinator's
+   own claim** that there were none.
+
+Additionally the audit is **incomplete**: two of four auditors did not produce reports, so
+functionality, scheduler, autonomy, recovery, performance and findings reconciliation are
+**unverified**.
+
+Minimal remediation required before a GO:
+fix `discovery_settings` ownership; fix the three accessibility defects; re-run the incomplete
+auditors; then re-audit the resulting commit independently. The four pre-existing E2E failures and
+33.4 may remain as documented non-blocking debt.
