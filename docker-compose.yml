@@ -1,8 +1,24 @@
-version: "3.8"
-
-# Docker Compose to run both Postgres database and the ContentForge application.
-# Start all services: docker compose up --build -d
-# Stop and clean up: docker compose down
+# ContentForge — local production-like stack.
+#
+# Purpose: run the real application locally for dogfooding. This is a
+# production-like environment, not a test harness — see docs/DOGFOODING.md.
+#
+#   docker compose up --build -d      start (builds the image first time)
+#   docker compose logs -f app        follow application logs
+#   docker compose restart            restart WITHOUT losing data or queued jobs
+#   docker compose down               stop, KEEPS the database volume
+#   docker compose down -v            stop AND DESTROY ALL LOCAL DATA (see below)
+#
+# DESTRUCTIVE: `down -v` deletes the named volume and with it every story,
+# artifact, revision, schedule, publication, learning record and queued job.
+# There is no automatic reset anywhere in this file — losing local data is
+# always something you typed deliberately.
+#
+# Architecture note: there is deliberately ONE application service. The server
+# process runs the migrations (`server/index.ts` `migrate(...)`) and starts the
+# schedulers (`startSchedulers()`) in the same process. Adding a second
+# "worker" container would mean running a second scheduler against the same
+# queue, which this application does not support — so it is not done here.
 
 services:
   postgres:
@@ -10,40 +26,92 @@ services:
     container_name: contentforge-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: cfuser
-      POSTGRES_PASSWORD: cfpass
-      POSTGRES_DB: contentforge
+      POSTGRES_USER: ${POSTGRES_USER:-cfuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cfpass}
+      POSTGRES_DB: ${POSTGRES_DB:-contentforge}
     ports:
-      - "5432:5432"
+      # Exposed so you can inspect the local database with psql if you want to.
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - contentforge_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cfuser -d contentforge"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cfuser} -d ${POSTGRES_DB:-contentforge}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  web:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: contentforge-app
     restart: unless-stopped
-    ports:
-      - "3000:5000"
-    environment:
-      DATABASE_URL: postgresql://cfuser:cfpass@postgres:5432/contentforge
-      SESSION_SECRET: change-me-in-production
-      AI_API_KEY: ${AI_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      # Pass through or fallback for optional configs
-      XQUIK_API_BASE_URL: ${XQUIK_API_BASE_URL:-https://xquik.com/api/v1}
-      XQUIK_API_KEY: ${XQUIK_API_KEY}
-      XQUIK_ACCOUNT: ${XQUIK_ACCOUNT}
-      XQUIK_ALLOW_WRITE_RETRIES: ${XQUIK_ALLOW_WRITE_RETRIES:-0}
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:5000"
+    # Real credentials come from the gitignored local .env — never from this
+    # file, and never into git. `.env` takes precedence for anything set below
+    # only where noted; DATABASE_URL is deliberately overridden to address the
+    # `postgres` service rather than localhost.
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cfuser}:${POSTGRES_PASSWORD:-cfpass}@postgres:5432/${POSTGRES_DB:-contentforge}
+    # Fail closed, with a message that says what to do. The application already
+    # refuses to boot on a dev-default SESSION_SECRET (Phase 30); this front
+    # door turns that into a readable error instead of a crash loop, and names
+    # exactly which variable is missing.
+    command:
+      - sh
+      - -c
+      - |
+        missing=""
+        [ -n "$$SESSION_SECRET" ] || missing="$$missing SESSION_SECRET"
+        [ -z "$$missing" ] || {
+          echo "FATAL: missing required environment:$$missing" >&2
+          echo "       Set them in .env — see .env.example and LOCAL_DEPLOYMENT_REPORT.md." >&2
+          exit 1
+        }
+        case "$$SESSION_SECRET" in
+          change-me*|changeme*|dev*|test*|"")
+            echo "FATAL: SESSION_SECRET is a development default; the application refuses to boot with it." >&2
+            echo "       Generate one: openssl rand -base64 48   (then put it in .env)" >&2
+            exit 1 ;;
+        esac
+        if [ -z "$$ENCRYPTION_KEY" ]; then
+          echo "WARN: ENCRYPTION_KEY is not set. The server derives one from SESSION_SECRET." >&2
+          echo "      That works, but changing SESSION_SECRET later will make every stored provider token unreadable." >&2
+          echo "      For a multi-day run, set a dedicated ENCRYPTION_KEY in .env and keep it stable." >&2
+        fi
+        exec node dist/index.cjs
+    healthcheck:
+      # Readiness already reflects real PostgreSQL connectivity — a process that
+      # cannot use the database does not report healthy.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
 volumes:
   contentforge_pg_data:
+    name: contentforge_pg_data
