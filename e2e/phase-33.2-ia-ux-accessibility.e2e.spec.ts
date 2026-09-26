@@ -178,13 +178,15 @@ test.describe("Phase 33.2 IA, UX, and accessibility", () => {
   });
 
   test("Today distinguishes server-recorded setup gaps from real failures and unknown outcomes", async ({ page }) => {
-    await page.route("**/api/artifacts?readiness=in_review&limit=10", async (route) => {
+    // Today reads artifacts and publications under canonical query keys; match on the
+    // path so this fixture survives a limit/state consolidation without going stale.
+    await page.route("**/api/artifacts**", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     });
     await page.route("**/api/agent/runs?limit=10", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [] }) });
     });
-    await page.route("**/api/publications?limit=20", async (route) => {
+    await page.route("**/api/publications**", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -228,10 +230,6 @@ test.describe("Phase 33.2 IA, UX, and accessibility", () => {
     await page.route("**/api/posts/queue/today", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     });
-    await page.route("**/api/artifacts?limit=5", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
-    });
-
     await page.goto("/today");
     await expect(page.getByTestId("card-attention-setup-1")).toContainText("X setup required");
     await expect(page.getByTestId("card-attention-failed-2")).toContainText("Publication failed");

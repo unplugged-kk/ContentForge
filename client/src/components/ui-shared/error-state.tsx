@@ -23,8 +23,9 @@ export function ErrorState({
       <AlertCircle className="h-8 w-8 text-destructive" aria-hidden="true" />
       <p className="text-sm font-medium" data-testid="text-error-state-title">{title}</p>
       <p className="text-xs text-muted-foreground max-w-sm" data-testid="text-error-state-description">{description}</p>
+      {/* Detail uses full-opacity muted-foreground: /70 measured 4.16:1 in dark and 3.1:1 in light (axe). */}
       {detail ? (
-        <p className="text-xs text-muted-foreground/70 font-mono max-w-sm break-words">{detail}</p>
+        <p className="text-xs text-muted-foreground font-mono max-w-sm break-words">{detail}</p>
       ) : null}
       {onRetry ? (
         <Button size="sm" variant="outline" onClick={onRetry} disabled={retrying} data-testid="button-error-state-retry">

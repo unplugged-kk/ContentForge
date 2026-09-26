@@ -179,7 +179,9 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
 
       <SidebarFooter className="p-3 border-t">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-primary shrink-0 overflow-hidden">
+          {/* `text-primary` on a `bg-primary/20` tint measured 2.58:1 (axe, /today).
+              The sidebar's own foreground token clears AA on the tint in both themes. */}
+          <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-sidebar-foreground shrink-0 overflow-hidden">
             {user?.avatar ? (
               <img src={user.avatar} alt={user.name} className="h-8 w-8 rounded-full object-cover" />
             ) : (

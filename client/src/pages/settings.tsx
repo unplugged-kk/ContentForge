@@ -354,7 +354,9 @@ export default function SettingsPage() {
             <AlertCircle className="h-3.5 w-3.5 mt-0.5 text-muted-foreground shrink-0" />
             <div>
               <p className="text-xs text-muted-foreground">{helpText}</p>
-              <a href={helpUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1" data-testid={`link-help-${platform}`}>
+              {/* `text-primary` (#0b60ea) as text measured 3.04:1 on a dark card and 3.68:1 on a
+                  light one — below AA for 12px. `--info` is contrast-verified in both themes. */}
+              <a href={helpUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-info flex items-center gap-1 mt-1" data-testid={`link-help-${platform}`}>
                 <ExternalLink className="h-3 w-3" /> Get API credentials
               </a>
             </div>

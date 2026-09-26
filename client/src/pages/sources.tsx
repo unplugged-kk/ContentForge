@@ -160,7 +160,8 @@ export default function SourcesPage() {
         {/* Secondary / compatibility views, subordinate to the primary band. Kept as-is
             for legacy tests & direct navigation; consolidating them is deferred. */}
         <div className="px-4 pb-2 pt-1 flex items-center gap-1 overflow-x-auto">
-          <span className="text-xs font-medium text-muted-foreground/70 mr-1 shrink-0">
+          {/* Full-opacity muted-foreground: at /70 this measured 4.16:1 in dark and 3.1:1 in light (axe). */}
+          <span className="text-xs font-medium text-muted-foreground mr-1 shrink-0">
             More:
           </span>
           <button
