@@ -40,11 +40,11 @@ const SAMPLE_TOPICS = [
 ];
 
 function ViralScoreBadge({ score }: { score: number }) {
-  const color = score >= 8 ? "bg-green-500/10 text-green-500 border-green-500/20"
-    : score >= 6 ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+  const color = score >= 8 ? "bg-success/10 text-success border-success/30"
+    : score >= 6 ? "bg-info/10 text-info border-info/30"
     : "bg-muted text-muted-foreground";
   return (
-    <Badge className={`text-[10px] px-1.5 border ${color}`}>
+    <Badge className={`text-xs px-1.5 border ${color}`}>
       <TrendingUp className="h-3 w-3 mr-1" />{score}/10
     </Badge>
   );
@@ -72,20 +72,20 @@ export default function HooksPage() {
   const copy = (text: string, idx: number) => {
     navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
-    toast({ title: "Hook copied!" });
+    toast({ title: "Hook copied" });
     setTimeout(() => setCopiedIdx(null), 2000);
   };
 
   const hookTypeColor = (type: string) => {
     const colors: Record<string, string> = {
-      "Contrarian/Hot take": "bg-red-500/10 text-red-500",
-      "Stat-based": "bg-blue-500/10 text-blue-500",
-      "Story opener": "bg-amber-500/10 text-amber-500",
-      "Question hook": "bg-purple-500/10 text-purple-500",
-      "List hook": "bg-green-500/10 text-green-500",
-      "Confession": "bg-pink-500/10 text-pink-500",
-      "Bold claim": "bg-orange-500/10 text-orange-500",
-      "FOMO": "bg-cyan-500/10 text-cyan-500",
+      "Contrarian/Hot take": "bg-destructive/10 text-destructive",
+      "Stat-based": "bg-info/10 text-info",
+      "Story opener": "bg-warning/10 text-warning",
+      "Question hook": "bg-info/10 text-info",
+      "List hook": "bg-success/10 text-success",
+      "Confession": "bg-warning/10 text-warning",
+      "Bold claim": "bg-warning/10 text-warning",
+      "FOMO": "bg-info/10 text-info",
     };
     return colors[type] || "bg-muted text-muted-foreground";
   };
@@ -159,7 +159,7 @@ export default function HooksPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 space-y-2">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <Badge className={`text-[10px] px-1.5 ${hookTypeColor(hook.type)}`}>{hook.type}</Badge>
+                        <Badge className={`text-xs px-1.5 ${hookTypeColor(hook.type)}`}>{hook.type}</Badge>
                         {hook.viralScore && <ViralScoreBadge score={hook.viralScore} />}
                       </div>
                       <p className="text-sm font-medium leading-snug">{hook.text}</p>

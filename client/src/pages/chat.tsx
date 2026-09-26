@@ -86,7 +86,7 @@ export default function ChatPage() {
     onSuccess: (data) => {
       setFinalPost(data.content);
       setRefineInput("");
-      toast({ title: "Post refined!" });
+      toast({ title: "Post refined" });
     },
     onError: (err: any) => toast({ title: "Refinement failed", description: err.message, variant: "destructive" }),
   });
@@ -104,7 +104,7 @@ export default function ChatPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
-      toast({ title: "Saved as draft!" });
+      toast({ title: "Saved as draft" });
     },
     onError: (err: any) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
   });
@@ -237,7 +237,7 @@ export default function ChatPage() {
             <div className="p-3 border-b flex items-center justify-between">
               <span className="text-sm font-medium flex items-center gap-1.5"><Sparkles className="h-4 w-4 text-primary" />Generated Post</span>
               <div className="flex gap-1">
-                <Button variant="ghost" size="sm" onClick={() => { navigator.clipboard.writeText(finalPost); toast({ title: "Copied!" }); }}>
+                <Button variant="ghost" size="sm" onClick={() => { navigator.clipboard.writeText(finalPost); toast({ title: "Copied" }); }}>
                   <Copy className="h-3.5 w-3.5" />
                 </Button>
                 <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-chat-post">
@@ -264,7 +264,7 @@ export default function ChatPage() {
               </div>
               <div className="flex flex-wrap gap-1">
                 {["Make it shorter", "Add a hook", "More technical", "Add CTA", "Thread format"].map(r => (
-                  <button key={r} onClick={() => refineMutation.mutate(r)} className="text-[10px] px-2 py-0.5 rounded-full border hover:bg-primary/10 hover:border-primary/40 transition-colors">
+                  <button key={r} onClick={() => refineMutation.mutate(r)} className="text-xs px-2 py-0.5 rounded-full border hover:bg-primary/10 hover:border-primary/40 transition-colors">
                     {r}
                   </button>
                 ))}

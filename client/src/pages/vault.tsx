@@ -58,7 +58,7 @@ export default function VaultPage() {
       setContent(data.summary || "");
       setSourceUrl(data.url || "");
       setCategory("Insights");
-      toast({ title: "Content extracted!", description: "Review and save to your vault." });
+      toast({ title: "Content extracted", description: "Review and save to your vault." });
     },
     onError: (err: any) => toast({ title: "Extraction failed", description: err.message, variant: "destructive" }),
   });
@@ -73,7 +73,7 @@ export default function VaultPage() {
       setTitle(imageName || "Image Analysis");
       setContent(data.content || "");
       setCategory("Insights");
-      toast({ title: "Image analyzed!", description: "Review and save to your vault." });
+      toast({ title: "Image analyzed", description: "Review and save to your vault." });
     },
     onError: (err: any) => toast({ title: "Analysis failed", description: err.message, variant: "destructive" }),
   });
@@ -87,7 +87,7 @@ export default function VaultPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/vault"] });
       setShowAdd(false);
       resetForm();
-      toast({ title: "Saved to vault!" });
+      toast({ title: "Saved to vault" });
     },
     onError: (err: any) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
   });
@@ -171,7 +171,7 @@ export default function VaultPage() {
       <div className="flex-1 overflow-auto p-4">
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-lg" />)}
+            {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted pulse-skeleton rounded-lg" />)}
           </div>
         ) : isError ? (
           <ErrorState
@@ -200,15 +200,15 @@ export default function VaultPage() {
                     <button onClick={() => favoriteMutation.mutate(item.id)} className={`p-1 rounded hover:bg-muted ${item.isFavorite ? "text-red-400" : "text-muted-foreground"}`}>
                       <Heart className="h-3.5 w-3.5" fill={item.isFavorite ? "currentColor" : "none"} />
                     </button>
-                    <button onClick={() => setPendingDeleteId(item.id)} className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-500" aria-label="Delete vault item" data-testid={`button-delete-vault-${item.id}`}>
+                    <button onClick={() => setPendingDeleteId(item.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" aria-label="Delete vault item" data-testid={`button-delete-vault-${item.id}`}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground line-clamp-4">{item.content}</p>
                 <div className="flex items-center gap-1.5 mt-auto">
-                  {item.category && <Badge variant="secondary" className="text-[10px] px-1.5">{item.category}</Badge>}
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 ml-auto">
+                  {item.category && <Badge variant="secondary" className="text-xs px-1.5">{item.category}</Badge>}
+                  <span className="text-xs text-muted-foreground flex items-center gap-0.5 ml-auto">
                     {sourceIcon(item.sourceType)}{item.sourceType || "manual"}
                   </span>
                 </div>

@@ -66,7 +66,7 @@ export function XPostPreview({ tweets, displayName = "You", handle = "preview", 
                 @{handle} · just now
               </span>
               <span
-                className={cn("ml-auto text-[10px] px-2 py-0.5 rounded-full tabular-nums", charBadgeClass(tweet.length))}
+                className={cn("ml-auto text-xs px-2 py-0.5 rounded-full tabular-nums", charBadgeClass(tweet.length))}
                 data-testid={`x-preview-char-count-${i}`}
               >
                 {tweet.length}

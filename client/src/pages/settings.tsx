@@ -31,17 +31,17 @@ function AiProviderStatusCard() {
   let description = "Checking provider status…";
   if (runtimeQuery.isError) {
     label = "Unable to verify";
-    tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
+    tone = "bg-warning/10 text-warning border-warning/30";
     description = "Provider status cannot be verified right now.";
   } else if (runtimeQuery.data) {
     const { backend } = runtimeQuery.data;
     if (backend.configuredId === "fixture") {
       label = "Configuration required";
-      tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
+      tone = "bg-warning/10 text-warning border-warning/30";
       description = "No AI backend is configured yet — the agent runtime is running against a local fixture.";
     } else if (backend.hasBaseUrl || backend.hasAguiUrl) {
       label = "Configured";
-      tone = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+      tone = "bg-success/10 text-success border-success/30";
       description = "A backend is configured. Live reachability is confirmed at generation time.";
     } else {
       label = "Not connected";
@@ -54,7 +54,7 @@ function AiProviderStatusCard() {
     <Card className="p-4 space-y-3" data-testid="card-ai-provider-status">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
-          <h3 className="text-sm font-medium">AI Provider</h3>
+          <h2 className="text-sm font-medium">AI Provider</h2>
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
         <Badge className={tone} data-testid="badge-ai-provider-status">{label}</Badge>
@@ -146,7 +146,7 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profile/memory"] });
-      toast({ title: "Brand profile saved!" });
+      toast({ title: "Brand profile saved" });
     },
     onError: (err: any) => toast({ title: "Failed to save", description: err.message, variant: "destructive" }),
   });
@@ -161,7 +161,7 @@ export default function SettingsPage() {
       if (learned.brandVoice) setBrandVoice(learned.brandVoice);
       if (learned.writingStyleNotes) setWritingStyleNotes(learned.writingStyleNotes);
       queryClient.invalidateQueries({ queryKey: ["/api/profile/memory"] });
-      toast({ title: "AI analysis complete!", description: "Brand profile updated from your content." });
+      toast({ title: "AI analysis complete", description: "Brand profile updated from your content." });
     },
     onError: (err: any) => toast({ title: "AI analysis failed", description: err.message, variant: "destructive" }),
   });
@@ -212,7 +212,7 @@ export default function SettingsPage() {
       setUsername("");
       const warning = data.warning;
       toast({
-        title: warning ? "Account saved with warning" : "Account connected!",
+        title: warning ? "Account saved with warning" : "Account connected",
         description: warning || `Connected as @${data.username}`,
         variant: warning ? "default" : "default",
       });
@@ -241,7 +241,7 @@ export default function SettingsPage() {
     },
     onSuccess: (data) => {
       if (data.success) {
-        toast({ title: "Connection verified!", description: data.username ? `Authenticated as @${data.username}` : data.note });
+        toast({ title: "Connection verified", description: data.username ? `Authenticated as @${data.username}` : data.note });
       } else {
         toast({ title: "Connection issue", description: data.error, variant: "destructive" });
       }
@@ -271,14 +271,14 @@ export default function SettingsPage() {
               <ChannelIcon channel={platform} decorative className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-sm font-medium">{label}</h3>
+              <h2 className="text-sm font-medium">{label}</h2>
               <p className="text-xs text-muted-foreground">{description}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {account ? (
               <>
-                <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
+                <Badge className="bg-success/10 text-success border-success/30">
                   <CheckCircle2 className="h-3 w-3 mr-1" /> Connected
                 </Badge>
               </>
@@ -313,7 +313,7 @@ export default function SettingsPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Status</span>
-              <span className="text-xs font-medium text-green-500">{account.isActive ? "Active" : "Inactive"}</span>
+              <span className="text-xs font-medium text-success">{account.isActive ? "Active" : "Inactive"}</span>
             </div>
             <div className="flex items-center gap-2 pt-1">
               <Button
@@ -337,6 +337,7 @@ export default function SettingsPage() {
               <Button
                 variant="ghost"
                 size="icon"
+                className="text-destructive hover:text-destructive"
                 onClick={() => setPendingDeleteId(account.id)}
                 disabled={disconnectMutation.isPending}
                 aria-label="Disconnect account"
@@ -352,8 +353,8 @@ export default function SettingsPage() {
           <div className="flex items-start gap-2 p-2 rounded-md bg-muted/30">
             <AlertCircle className="h-3.5 w-3.5 mt-0.5 text-muted-foreground shrink-0" />
             <div>
-              <p className="text-[11px] text-muted-foreground">{helpText}</p>
-              <a href={helpUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-primary flex items-center gap-1 mt-1" data-testid={`link-help-${platform}`}>
+              <p className="text-xs text-muted-foreground">{helpText}</p>
+              <a href={helpUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1" data-testid={`link-help-${platform}`}>
                 <ExternalLink className="h-3 w-3" /> Get API credentials
               </a>
             </div>
@@ -437,7 +438,7 @@ export default function SettingsPage() {
                         <ChannelIcon channel="youtube" decorative className="h-5 w-5" />
                       </div>
                       <div>
-                        <h3 className="text-sm font-medium">YouTube</h3>
+                        <h2 className="text-sm font-medium">YouTube</h2>
                         <p className="text-xs text-muted-foreground">
                           Connect via Google OAuth (offline) to publish videos
                         </p>
@@ -445,7 +446,7 @@ export default function SettingsPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       {youtubeAccount || youtubeStatus?.accountConnected ? (
-                        <Badge className="bg-green-500/10 text-green-500 border-green-500/20" data-testid="badge-youtube-connected">
+                        <Badge className="bg-success/10 text-success border-success/30" data-testid="badge-youtube-connected">
                           <CheckCircle2 className="h-3 w-3 mr-1" />
                           {youtubeStatus?.channelTitle
                             ? `YouTube connected — ${youtubeStatus.channelTitle}`
@@ -467,6 +468,7 @@ export default function SettingsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          className="text-destructive hover:text-destructive"
                           onClick={() => setPendingDeleteId(youtubeAccount.id)}
                           aria-label="Disconnect account"
                           data-testid="button-disconnect-youtube"
@@ -500,9 +502,9 @@ export default function SettingsPage() {
                       </span>
                     </div>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Requires Google Cloud OAuth client with redirect{" "}
-                    <code className="text-[10px]">/api/social/youtube/callback</code>
+                    <code className="text-xs">/api/social/youtube/callback</code>
                     {" "}and scopes youtube.upload + youtube.readonly. Tokens are never shown here.
                   </p>
                 </Card>
@@ -520,7 +522,7 @@ export default function SettingsPage() {
                 <div className="flex items-center gap-3">
                   <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: pillar.color }} />
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium">{pillar.name}</h3>
+                    <h2 className="text-sm font-medium">{pillar.name}</h2>
                     <p className="text-xs text-muted-foreground">{pillar.description}</p>
                   </div>
                 </div>
@@ -532,7 +534,7 @@ export default function SettingsPage() {
             <Card className="p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-medium flex items-center gap-1.5"><Brain className="h-4 w-4 text-primary" />Brand Memory Profile</h3>
+                  <h2 className="text-sm font-medium flex items-center gap-1.5"><Brain className="h-4 w-4 text-primary" />Brand Memory Profile</h2>
                   <p className="text-xs text-muted-foreground mt-0.5">Your personal branding second brain — used to personalize AI content generation</p>
                 </div>
                 <Button
@@ -681,7 +683,7 @@ export default function SettingsPage() {
                 type="password"
                 data-testid="input-connect-token"
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {connectDialog?.platform === "x"
                   ? "Get this from the X Developer Portal: developer.x.com > Your App > Keys and Tokens > Bearer Token"
                   : "Get this from Meta Developer Portal: developers.facebook.com > Your App > Threads > Access Token"}

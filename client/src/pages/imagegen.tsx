@@ -56,7 +56,7 @@ export default function ImageGenPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/images"] });
-      toast({ title: "Image generated!" });
+      toast({ title: "Image generated" });
     },
     onError: (err: any) => {
       toast({ title: "Generation failed", description: err.message, variant: "destructive" });
@@ -147,7 +147,7 @@ export default function ImageGenPage() {
                       data-testid={`button-ratio-${r.value.replace(":", "-")}`}
                     >
                       <div className="font-medium">{r.value}</div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{r.desc.split("Best for ")[1]}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 leading-tight">{r.desc.split("Best for ")[1]}</div>
                     </button>
                   ))}
                 </div>
@@ -214,7 +214,7 @@ export default function ImageGenPage() {
             {isLoading ? (
               <div className="grid grid-cols-2 gap-3">
                 {[1, 2, 3, 4].map(i => (
-                  <div key={i} className="aspect-square bg-muted animate-pulse rounded-lg" />
+                  <div key={i} className="aspect-square bg-muted pulse-skeleton rounded-lg" />
                 ))}
               </div>
             ) : filtered.length === 0 ? (
@@ -253,7 +253,7 @@ export default function ImageGenPage() {
                           <Download className="h-4 w-4" />
                         </a>
                         <button
-                          onClick={() => { navigator.clipboard.writeText(img.prompt); toast({ title: "Prompt copied!" }); }}
+                          onClick={() => { navigator.clipboard.writeText(img.prompt); toast({ title: "Prompt copied" }); }}
                           className="p-2 rounded-full bg-white/20 hover:bg-white/30 transition-colors text-white"
                         >
                           <Copy className="h-4 w-4" />
@@ -275,8 +275,8 @@ export default function ImageGenPage() {
                     </div>
                     <div className="p-2">
                       <div className="flex items-center gap-1.5 mb-1">
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{img.style}</Badge>
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{img.aspectRatio}</Badge>
+                        <Badge variant="secondary" className="text-xs px-1.5 py-0">{img.style}</Badge>
+                        <Badge variant="outline" className="text-xs px-1.5 py-0">{img.aspectRatio}</Badge>
                       </div>
                       <p className="text-xs text-muted-foreground line-clamp-2">{img.prompt}</p>
                     </div>
