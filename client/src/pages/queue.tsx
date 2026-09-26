@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import type { Post, Tweet } from "@shared/schema";
 import { X_OFFICIAL_DOCS } from "@shared/xDeveloperRisk";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { XPostPreview } from "@/components/x-post-preview";
 
 interface PostWithTweets extends Post {
@@ -480,7 +480,12 @@ export default function QueuePage({ hideHeader = false }: { hideHeader?: boolean
         )}
         <Alert className="mt-3 max-w-3xl" data-testid="alert-queue-x-compliance">
           <ShieldCheck className="h-4 w-4" />
-          <AlertTitle className="text-sm">Publish on your terms</AlertTitle>
+          {/* The shadcn AlertTitle is a hard-coded <h5>. On /schedule the queue
+              sits under the page's single <h1>, so an <h5> skipped three levels
+              (axe heading-order). This renders at the correct level — <h2>, the
+              same level the queue's section headings use — with AlertTitle's
+              exact classes, so nothing changes visually. */}
+          <h2 className="mb-1 text-sm font-medium leading-none tracking-tight">Publish on your terms</h2>
           <AlertDescription className="text-xs leading-relaxed">
             Only you (or your schedule) sends to X — no auto-replies, DMs, or auto-posting from draft.
             Uses the{" "}
