@@ -1,0 +1,57 @@
+# Build context is the repo root (Dockerfile copies `.` in the builder stage).
+# Keep secrets, host-only state, and generated artifacts out of the image:
+# a stale `.env` must never enter a build layer, and neither must local data.
+
+# Secrets and local config
+.env
+.env.*
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules
+dist
+build
+coverage
+.playwright
+playwright-report
+test-results
+*.tsbuildinfo
+
+# Version control and editors
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+
+# Local runtime state (persisted via Docker volumes, never baked into the image)
+/.scratch
+/uploads
+
+# Docs, plans, and scratch efforts are not needed at runtime.
+# Anchored with a leading slash: a bare `research` here would also exclude
+# `server/research/`, which the build imports.
+/docs
+/plans
+/roadmap
+/architecture
+/research
+/.agents
+/.claude
+/.commandcode
+/.cursor
+/.gemini
+/.grok
+/.kiro
+/.kimchi
+/.windsurf
+/graft
+/graphify-out
+
+# Logs
+*.log
+
+# The marketing site is static and deployed elsewhere; it is not part of the app image.
+/website

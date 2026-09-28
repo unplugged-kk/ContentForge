@@ -79,7 +79,10 @@ function startXQuickMediaFixture() {
           return send(503, { message: "503 upstream media store unavailable" });
         }
         mediaSeq += 1;
-        return send(200, { mediaId: `media-${RUN}-${mediaSeq}` });
+        return send(200, {
+          mediaId: `media-${RUN}-${mediaSeq}`,
+          mediaUrl: `https://cdn.example.test/media-${RUN}-${mediaSeq}.png`,
+        });
       });
       return;
     }

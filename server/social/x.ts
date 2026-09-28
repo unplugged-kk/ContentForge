@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
@@ -178,6 +179,58 @@ function buildXQuickHeaders(token: string): Record<string, string> {
   };
 }
 
+/**
+ * xQuick write endpoints (POST /x/tweets, POST /x/media) require a unique
+ * `Idempotency-Key` on every intended write; a missing header is rejected with
+ * HTTP 400 `missing_idempotency_key`. One key is generated per logical write and
+ * only reused for an exact network replay. `json: false` omits the JSON
+ * content-type for multipart media uploads (fetch sets the boundary itself).
+ */
+function buildXQuickWriteHeaders(token: string, idempotencyKey: string, json = true): Record<string, string> {
+  const headerName = process.env.XQUIK_AUTH_HEADER?.trim() || process.env.XQUICK_AUTH_HEADER?.trim() || "x-api-key";
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    [headerName]: token,
+    "Idempotency-Key": idempotencyKey,
+  };
+  if (json) headers["Content-Type"] = "application/json";
+  return headers;
+}
+
+function newIdempotencyKey(prefix: string): string {
+  return `${prefix}-${randomUUID()}`;
+}
+
+function fileNameForMime(mime: string): string {
+  const subtype = mime.includes("/") ? mime.split("/")[1].split(";")[0].trim() : "bin";
+  return `upload.${subtype === "jpeg" ? "jpg" : subtype || "bin"}`;
+}
+
+/** Read the reusable media fields from an upload response or write-action record. */
+function extractXQuickMediaFields(data: any): { mediaId: string | null; mediaUrl: string | null } {
+  const configuredId = getPathValue(data, process.env.XQUIK_MEDIA_ID_PATH || process.env.XQUICK_MEDIA_ID_PATH);
+  const mediaId =
+    configuredId ??
+    data?.mediaId ??
+    data?.media_id ??
+    data?.result?.mediaId ??
+    data?.result?.media_id ??
+    data?.result?.id ??
+    data?.data?.mediaId ??
+    data?.data?.media_id ??
+    null;
+  const mediaUrl =
+    data?.mediaUrl ??
+    data?.media_url ??
+    data?.result?.mediaUrl ??
+    data?.result?.media_url ??
+    data?.result?.url ??
+    data?.data?.mediaUrl ??
+    data?.data?.media_url ??
+    null;
+  return { mediaId: mediaId ? String(mediaId) : null, mediaUrl: mediaUrl ? String(mediaUrl) : null };
+}
+
 async function getXQuickApiConfig(ownerUserId?: number | null): Promise<{ baseUrl: string; token: string } | null> {
   const account = ownerUserId == null
     ? await storage.getConnectedAccount("x")
@@ -203,17 +256,19 @@ async function getXQuickClientConfig(ownerUserId?: number | null): Promise<{ bas
 
 function extractXQuickPostId(data: XQuickPostResponse): string | null {
   const configured = getPathValue(data, process.env.XQUIK_POST_ID_PATH || process.env.XQUICK_POST_ID_PATH);
+  // The real create-tweet response carries BOTH `id` (the *write-action* id) and
+  // the published tweet id (`tweetId` or `result.id`). Prefer the tweet id so a
+  // write-action id is never mistaken for a tweet id / status URL.
   const id =
     configured ??
-    data.id ??
     data.tweetId ??
-    data.postId ??
-    data.data?.id ??
-    data.data?.tweetId ??
-    data.data?.postId ??
     data.result?.id ??
     data.result?.tweetId ??
-    data.result?.postId;
+    data.data?.tweetId ??
+    data.data?.result?.id ??
+    data.data?.result?.tweetId ??
+    (data.id && data.id !== data.writeActionId ? data.id : undefined) ??
+    (data.data?.id && data.data?.id !== (data.data as XQuickPostResponse)?.writeActionId ? data.data.id : undefined);
   return id ? String(id) : null;
 }
 
@@ -234,17 +289,20 @@ function buildXQuickPostPayload(
   account: string,
   text: string,
   lastId: string | undefined,
-  mediaIds: string[] = [],
+  mediaUrls: string[] = [],
 ): Record<string, unknown> {
   const body: {
     account: string;
     text: string;
     reply_to_tweet_id?: string;
-    media_ids?: string[];
+    media?: string[];
   } = { account, text };
   if (lastId) body.reply_to_tweet_id = lastId;
-  // Media attaches to the FIRST unit only (a single-image post does not chain).
-  if (mediaIds.length > 0) body.media_ids = mediaIds;
+  // Create Tweet accepts public media URLs in `media` — never `media_ids`
+  // (that field is DMs-only and is rejected here). Media attaches to the FIRST
+  // unit only (a single-image post does not chain).
+  const usable = mediaUrls.filter((u) => typeof u === "string" && u.length > 0);
+  if (usable.length > 0) body.media = usable;
   return body;
 }
 
@@ -254,7 +312,7 @@ async function postViaXQuick(
 ): Promise<XQuickPostResponse> {
   const res = await fetch(joinUrl(config.baseUrl, getXQuickPostEndpoint()), {
     method: "POST",
-    headers: buildXQuickHeaders(config.token),
+    headers: buildXQuickWriteHeaders(config.token, newIdempotencyKey("tweet")),
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
   });
@@ -270,7 +328,9 @@ async function postViaXQuick(
   if (!res.ok) {
     throw new Error(body?.message || body?.error || bodyText || `xQuick API returned HTTP ${res.status}`);
   }
-  if (res.status === 202 && body?.writeActionId && !body?.tweetId) {
+  // A write is deferred when the API answers 202 (or marks the record
+  // non-terminal) with a durable write-action id and no tweet id yet.
+  if ((res.status === 202 || body?.terminal === false) && body?.writeActionId && !body?.tweetId) {
     return pollXQuickWriteAction(config, String(body.writeActionId));
   }
   return body;
@@ -301,24 +361,37 @@ export type XWriteActionStatus =
   | { status: "failed"; message: string }
   | { status: "pending" };
 
-/** One non-throwing status check against xQuick's write-action endpoint. */
-async function checkXQuickWriteAction(
+/** Fetch one write-action record (throws on non-2xx). */
+async function fetchXQuickWriteActionRecord(
   config: { baseUrl: string; token: string },
   writeActionId: string,
-): Promise<XWriteActionStatus> {
+): Promise<any> {
   const endpoint = getXQuickWriteActionEndpoint().replace("{id}", encodeURIComponent(writeActionId));
   const res = await fetch(joinUrl(config.baseUrl, endpoint), {
     headers: buildXQuickHeaders(config.token),
     signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
   });
-  const body = (await res.json().catch(() => ({}))) as XQuickPostResponse;
+  const body = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) {
     throw new Error(body?.message || body?.error || `xQuick write-action status returned HTTP ${res.status}`);
   }
-  if (body.status === "success" && body.tweetId) {
-    return { status: "success", tweetId: body.tweetId, url: body.url ?? null };
+  return body;
+}
+
+/** One non-throwing status check against xQuick's write-action endpoint. */
+async function checkXQuickWriteAction(
+  config: { baseUrl: string; token: string },
+  writeActionId: string,
+): Promise<XWriteActionStatus> {
+  const body = (await fetchXQuickWriteActionRecord(config, writeActionId)) as XQuickPostResponse;
+  if (body.status === "success") {
+    const tweetId = extractXQuickPostId(body);
+    if (tweetId) return { status: "success", tweetId, url: body.url ?? null };
+    return { status: "pending" };
   }
-  if (body.status === "failed") return { status: "failed", message: body.message || "xQuick write action failed." };
+  if (body.status === "failed" || body.status === "expired") {
+    return { status: "failed", message: body.message || `xQuick write action ${body.status}.` };
+  }
   return { status: "pending" };
 }
 
@@ -340,6 +413,26 @@ async function pollXQuickWriteAction(
     writeActionId,
     `xQuick write action ${writeActionId} is still pending after ${maxAttempts} checks.`,
   );
+}
+
+/** Poll a deferred media upload until it yields a media url or fails. */
+async function pollXQuickMediaWriteAction(
+  config: { baseUrl: string; token: string },
+  writeActionId: string,
+): Promise<any> {
+  const maxAttempts = Number(process.env.XQUIK_WRITE_POLL_ATTEMPTS ?? process.env.XQUICK_WRITE_POLL_ATTEMPTS ?? 6);
+  const delayMs = Number(process.env.XQUIK_WRITE_POLL_DELAY_MS ?? process.env.XQUICK_WRITE_POLL_DELAY_MS ?? 2_000);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(delayMs);
+    const body = await fetchXQuickWriteActionRecord(config, writeActionId);
+    if (extractXQuickMediaFields(body).mediaUrl) return body;
+    if (body.status === "failed" || body.status === "expired") {
+      throw new Error(body.message || `xQuick media upload ${body.status}.`);
+    }
+  }
+
+  throw new Error(`xQuick media upload ${writeActionId} is still pending after ${maxAttempts} checks.`);
 }
 
 /**
@@ -394,7 +487,7 @@ export async function fetchTweetTextByIdViaOfficialApi(
 /** Post a thread or single tweet to X through xQuick. Tweet texts must be non-empty, ≤280 chars each. */
 export async function postContentToX(
   texts: string[],
-  options: { mediaIds?: string[]; ownerUserId?: number | null } = {},
+  options: { mediaUrls?: string[]; ownerUserId?: number | null } = {},
 ): Promise<XPublishResult> {
   const config = await getXQuickClientConfig(options.ownerUserId);
   if (!config) {
@@ -403,14 +496,14 @@ export async function postContentToX(
     );
   }
 
-  const mediaIds = (options.mediaIds ?? []).filter((id) => typeof id === "string" && id.length > 0);
+  const mediaUrls = (options.mediaUrls ?? []).filter((u) => typeof u === "string" && u.length > 0);
 
   // Step 1: clean input
   let tweets = texts.map((t) => t.trim()).filter(Boolean);
   if (tweets.length === 0) {
     // A media-only post (no caption/text) is legitimate; a text-less post with
     // no media is not.
-    if (mediaIds.length === 0) throw new Error("No tweet text to post.");
+    if (mediaUrls.length === 0) throw new Error("No tweet text to post.");
     tweets = [""];
   }
 
@@ -441,7 +534,7 @@ export async function postContentToX(
       config.account,
       tweets[index].slice(0, 280),
       lastId,
-      index === 0 ? mediaIds : [],
+      index === 0 ? mediaUrls : [],
     );
     const sent = await postViaXQuick(config, payload);
     const id = extractXQuickPostId(sent);
@@ -457,34 +550,33 @@ export async function postContentToX(
 }
 
 /**
- * Upload one media attachment to X via xQuick and return the provider media id.
+ * Upload one media attachment to X via xQuick and return the reusable public
+ * `mediaUrl` (used in Create Tweet's `media` array) plus the provider `mediaId`
+ * (used only for DMs).
  *
- * This is a *transport* step distinct from post creation: a failed upload leaves
- * no post behind, so the publication layer treats it as a classified failure
- * (retry or terminal), never as an ambiguous outcome. xQuick exposes no
- * client-supplied media-upload idempotency key, so a retry may re-upload; a
- * duplicate media object with no post is harmless. The publication's own
- * idempotency identity is never derived from this id.
+ * The real endpoint takes `multipart/form-data` (`account` + `file`) or a JSON
+ * `{ account, url }` — not an inline base64 field — and requires a fresh
+ * `Idempotency-Key`. This is a *transport* step distinct from post creation: a
+ * failed upload leaves no post behind, so the publication layer treats it as a
+ * classified failure (retry or terminal), never as an ambiguous outcome. The
+ * publication's own idempotency identity is never derived from this id.
  */
 export async function uploadMediaToX(media: {
   bytes: Buffer;
   mime: string;
   altText?: string | null;
-}, ownerUserId?: number | null): Promise<string> {
+}, ownerUserId?: number | null): Promise<{ mediaId: string | null; mediaUrl: string }> {
   const config = await getXQuickClientConfig(ownerUserId);
   if (!config) throw new Error("XQUICK_CONFIG_MISSING");
 
-  const body: Record<string, unknown> = {
-    account: config.account,
-    media: media.bytes.toString("base64"),
-    media_type: media.mime,
-  };
-  if (media.altText) body.alt_text = media.altText;
+  const form = new FormData();
+  form.append("account", config.account);
+  form.append("file", new Blob([media.bytes], { type: media.mime }), fileNameForMime(media.mime));
 
   const res = await fetch(joinUrl(config.baseUrl, getXQuickMediaEndpoint()), {
     method: "POST",
-    headers: buildXQuickHeaders(config.token),
-    body: JSON.stringify(body),
+    headers: buildXQuickWriteHeaders(config.token, newIdempotencyKey("media"), false),
+    body: form,
     signal: AbortSignal.timeout(Number(process.env.XQUIK_TIMEOUT_MS ?? process.env.XQUICK_TIMEOUT_MS ?? 30_000)),
   });
   const bodyText = await res.text();
@@ -500,20 +592,14 @@ export async function uploadMediaToX(media: {
     throw new Error(parsed?.message || parsed?.error || bodyText || `xQuick media upload returned HTTP ${res.status}`);
   }
 
-  const configured = getPathValue(parsed, process.env.XQUIK_MEDIA_ID_PATH || process.env.XQUICK_MEDIA_ID_PATH);
-  const id =
-    configured ??
-    parsed?.mediaId ??
-    parsed?.media_id ??
-    parsed?.id ??
-    parsed?.data?.mediaId ??
-    parsed?.data?.media_id ??
-    parsed?.data?.id ??
-    parsed?.result?.mediaId ??
-    parsed?.result?.media_id ??
-    parsed?.result?.id;
-  if (!id) throw new Error("XQUIK_MEDIA_ID_MISSING");
-  return String(id);
+  // Deferred upload: poll the write action until it yields a media url.
+  if ((res.status === 202 || parsed?.terminal === false) && parsed?.writeActionId && !extractXQuickMediaFields(parsed).mediaUrl) {
+    parsed = await pollXQuickMediaWriteAction(config, String(parsed.writeActionId));
+  }
+
+  const fields = extractXQuickMediaFields(parsed);
+  if (!fields.mediaUrl) throw new Error("XQUIK_MEDIA_URL_MISSING");
+  return { mediaId: fields.mediaId, mediaUrl: fields.mediaUrl };
 }
 
 export async function publishPostToX(

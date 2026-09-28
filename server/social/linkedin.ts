@@ -13,7 +13,16 @@
 
 import { storage } from "../storage";
 
-const LINKEDIN_VERSION = "202401";
+/**
+ * `LinkedIn-Version` is a YYYYMM date. LinkedIn keeps each version for about a
+ * year and rejects retired ones; `202401` is LinkedIn's own example of a
+ * deprecated version that errors, so it must not be the default. Override with
+ * `LINKEDIN_API_VERSION` when LinkedIn retires this one.
+ */
+export function getLinkedInApiVersion(): string {
+  return process.env.LINKEDIN_API_VERSION?.trim() || "202609";
+}
+
 const RESTLI_PROTOCOL_VERSION = "2.0.0";
 
 type LinkedInConfig = { baseUrl: string; token: string; authorUrn: string };
@@ -36,12 +45,12 @@ async function getLinkedInConfig(ownerUserId?: number | null): Promise<LinkedInC
   return { baseUrl: getLinkedInBaseUrl(), token, authorUrn };
 }
 
-function buildHeaders(token: string): Record<string, string> {
+export function buildLinkedInHeaders(token: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
     Authorization: `Bearer ${token}`,
-    "LinkedIn-Version": LINKEDIN_VERSION,
+    "LinkedIn-Version": getLinkedInApiVersion(),
     "X-Restli-Protocol-Version": RESTLI_PROTOCOL_VERSION,
   };
 }
@@ -101,7 +110,7 @@ export async function postTextToLinkedIn(text: string, ownerUserId?: number | nu
   try {
     res = await fetch(`${config.baseUrl}/rest/posts`, {
       method: "POST",
-      headers: buildHeaders(config.token),
+      headers: buildLinkedInHeaders(config.token),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs()),
     });
@@ -145,7 +154,7 @@ export async function reconcileLinkedInPost(hint: {
 
   const params = new URLSearchParams({ q: "author", author: config.authorUrn, count: "10" });
   const res = await fetch(`${config.baseUrl}/rest/posts?${params}`, {
-    headers: buildHeaders(config.token),
+    headers: buildLinkedInHeaders(config.token),
     signal: AbortSignal.timeout(timeoutMs()),
   });
   if (!res.ok) return null;

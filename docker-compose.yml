@@ -113,12 +113,42 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    volumes:
+      # Persist user-uploaded and generated media across container recreation.
+      - contentforge_uploads:/app/uploads
+      # Persist .scratch state (cert budgets, fal request ids, evidence).
+      - contentforge_scratch:/app/.scratch
     logging:
       driver: json-file
       options:
         max-size: "20m"
         max-file: "5"
 
+  # Cloudflare Tunnel ingress (optional). Enable with:
+  #   docker compose --profile tunnel up -d
+  # Requires TUNNEL_TOKEN in .env (Cloudflare Zero Trust → Networks → Tunnels).
+  # This exposes ONLY the app; Postgres and internal ports stay private.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: contentforge-tunnel
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   contentforge_pg_data:
     name: contentforge_pg_data
+  contentforge_uploads:
+    name: contentforge_uploads
+  contentforge_scratch:
+    name: contentforge_scratch

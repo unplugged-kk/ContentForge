@@ -15,7 +15,7 @@ import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
-import { getThreadsConfigSummary, verifyThreadsAccessToken } from "./social/threads";
+import { getThreadsConfigSummary, threadsTokenExpiryFromNow, verifyThreadsAccessToken } from "./social/threads";
 import { getInstagramConfigSummary, verifyInstagramAccessToken, isProfessionalAccountType } from "./social/instagram";
 import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
@@ -2048,6 +2048,9 @@ Each tweet under ${charLimit} characters.` },
           username: usernameResolved,
           displayName: typeof profileData.name === "string" ? profileData.name : username || undefined,
           accessToken,
+          // Threads long-lived tokens last ~60 days; record the expiry so the
+          // publish path can refresh it before it lapses.
+          tokenExpiresAt: threadsTokenExpiryFromNow(),
           isActive: true,
           profileData,
         });

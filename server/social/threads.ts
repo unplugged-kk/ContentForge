@@ -214,6 +214,9 @@ export async function getThreadsConfigSummary(ownerUserId?: number | null): Prom
     connectedUsername: account?.username ?? null,
     connectedUserId: account?.userId ?? null,
     authorizationUrlReady: Boolean(threadsAuthorizationUrl()),
+    tokenExpiresAt: account?.tokenExpiresAt ?? null,
+    tokenExpiring: isThreadsTokenExpiring(account?.tokenExpiresAt),
+    tokenRefreshReady: Boolean(process.env.THREADS_APP_SECRET?.trim()),
     providerIdempotency: false,
   };
 }
@@ -233,6 +236,105 @@ async function getThreadsConfig(ownerUserId?: number | null): Promise<ThreadsCon
   const userId = account?.username?.trim() || envUser;
   if (!token) return null;
   return { graphBase: getThreadsGraphBaseUrl(), token, userId };
+}
+
+/** Threads long-lived tokens last ~60 days; a refresh renews the whole window. */
+export const THREADS_LONG_LIVED_TOKEN_TTL_SECONDS = 60 * 24 * 60 * 60;
+/** Refresh when the stored token is within this window of its expiry. */
+export const THREADS_TOKEN_REFRESH_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function threadsTokenExpiryFromNow(ttlSeconds = THREADS_LONG_LIVED_TOKEN_TTL_SECONDS): Date {
+  return new Date(Date.now() + ttlSeconds * 1000);
+}
+
+/** True only when an expiry is known and close: an unknown expiry never forces a refresh. */
+export function isThreadsTokenExpiring(
+  tokenExpiresAt: Date | string | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (tokenExpiresAt === null || tokenExpiresAt === undefined) return false;
+  const ms = tokenExpiresAt instanceof Date ? tokenExpiresAt.getTime() : Date.parse(String(tokenExpiresAt));
+  if (!Number.isFinite(ms)) return false;
+  return ms - now <= THREADS_TOKEN_REFRESH_THRESHOLD_MS;
+}
+
+export type ThreadsToken = { accessToken: string; expiresInSeconds: number };
+
+export function parseThreadsTokenResponse(payload: unknown): ThreadsToken | null {
+  if (!payload || typeof payload !== "object") return null;
+  const token = (payload as { access_token?: unknown }).access_token;
+  if (typeof token !== "string" || !token.trim()) return null;
+  const raw = Number((payload as { expires_in?: unknown }).expires_in);
+  const expiresInSeconds = Number.isFinite(raw) && raw > 0 ? raw : THREADS_LONG_LIVED_TOKEN_TTL_SECONDS;
+  return { accessToken: token.trim(), expiresInSeconds };
+}
+
+/**
+ * Exchange a short-lived Threads token for a 60-day long-lived token:
+ * GET {oauthHost}/access_token?grant_type=th_exchange_token&client_secret=…&access_token=…
+ * (developers.facebook.com/docs/threads/get-started/long-lived-tokens).
+ */
+export async function exchangeThreadsLongLivedToken(shortLivedToken: string): Promise<ThreadsToken> {
+  const clientSecret = process.env.THREADS_APP_SECRET?.trim();
+  if (!clientSecret) throw new Error("THREADS_APP_SECRET_MISSING");
+  const params = new URLSearchParams({
+    grant_type: "th_exchange_token",
+    client_secret: clientSecret,
+    access_token: shortLivedToken,
+  });
+  const { ok, status, json, text } = await graphJson(`${getThreadsOAuthHost()}/access_token?${params}`, {
+    method: "GET",
+  });
+  if (!ok) throw new Error(`Threads token exchange failed: ${graphErrorMessage(status, json, text)}`);
+  const token = parseThreadsTokenResponse(json);
+  if (!token) throw new Error("THREADS_TOKEN_EXCHANGE_MALFORMED");
+  return token;
+}
+
+/**
+ * Refresh a long-lived Threads token, renewing its 60-day window:
+ * GET {oauthHost}/refresh_access_token?grant_type=th_refresh_token&access_token=…
+ */
+export async function refreshThreadsLongLivedToken(longLivedToken: string): Promise<ThreadsToken> {
+  const params = new URLSearchParams({ grant_type: "th_refresh_token", access_token: longLivedToken });
+  const { ok, status, json, text } = await graphJson(`${getThreadsOAuthHost()}/refresh_access_token?${params}`, {
+    method: "GET",
+  });
+  if (!ok) throw new Error(`Threads token refresh failed: ${graphErrorMessage(status, json, text)}`);
+  const token = parseThreadsTokenResponse(json);
+  if (!token) throw new Error("THREADS_TOKEN_REFRESH_MALFORMED");
+  return token;
+}
+
+/**
+ * Refresh the owner's stored Threads token when it is within the refresh
+ * threshold, persisting the new token and expiry. Best-effort — any failure is
+ * swallowed so a publish still attempts with the existing token.
+ */
+export async function ensureThreadsTokenFresh(ownerUserId?: number | null): Promise<boolean> {
+  if (ownerUserId === null || ownerUserId === undefined) return false;
+  let account;
+  try {
+    account = await storage.getConnectedAccountForOwner("threads", ownerUserId);
+  } catch {
+    return false;
+  }
+  if (!account?.accessToken) return false;
+  if (!isThreadsTokenExpiring(account.tokenExpiresAt)) return false;
+  try {
+    const refreshed = await refreshThreadsLongLivedToken(account.accessToken);
+    await storage.upsertConnectedAccount({
+      platform: "threads",
+      userId: ownerUserId,
+      username: account.username ?? undefined,
+      accessToken: refreshed.accessToken,
+      tokenExpiresAt: threadsTokenExpiryFromNow(refreshed.expiresInSeconds),
+      isActive: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function withToken(body: URLSearchParams, token: string): URLSearchParams {
@@ -313,6 +415,9 @@ export async function postTextToThreads(
 ): Promise<ThreadsPostResult> {
   const invalid = validateThreadsText(text);
   if (invalid) throw new Error(invalid);
+
+  // Renew the stored long-lived token when it is close to expiry (best-effort).
+  await ensureThreadsTokenFresh(ownerUserId);
 
   const config = await getThreadsConfig(ownerUserId);
   if (!config) throw new Error("THREADS_CONFIG_MISSING");

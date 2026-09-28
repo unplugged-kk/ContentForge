@@ -254,9 +254,9 @@ export function createXChannelAdapter(): ChannelAdapter {
     }
 
     const attachment = media[0];
-    let mediaId: string;
+    let uploaded: { mediaId: string | null; mediaUrl: string };
     try {
-      mediaId = await uploadMediaToX({
+      uploaded = await uploadMediaToX({
         bytes: attachment.bytes,
         mime: attachment.mime,
         altText: attachment.altText,
@@ -277,7 +277,7 @@ export function createXChannelAdapter(): ChannelAdapter {
 
     try {
       const result = await postContentToX([mediaTextFor(request.format, request.payload)], {
-        mediaIds: [mediaId],
+        mediaUrls: [uploaded.mediaUrl],
         ownerUserId: request.ownerUserId,
       });
       return {
@@ -286,7 +286,7 @@ export function createXChannelAdapter(): ChannelAdapter {
         externalId: result.tweetIds.join(","),
         externalUrl: result.urls[0] ?? null,
         publishedAt: new Date(),
-        metrics: { unitCount: result.tweetIds.length, mediaCount: 1, username: result.username },
+        metrics: { unitCount: result.tweetIds.length, mediaCount: 1, mediaId: uploaded.mediaId, username: result.username },
       };
     } catch (error) {
       // Same ambiguity contract as a text post: the media is uploaded, the post
