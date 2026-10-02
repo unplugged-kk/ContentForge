@@ -26,6 +26,9 @@ COPY package*.json ./
 # Install production dependencies only
 RUN npm ci --omit=dev
 
+# yt-dlp powers the transcript-first video intake (captions only, no download).
+RUN apk add --no-cache yt-dlp
+
 # Copy built files and migrations from builder
 COPY --from=builder /app/dist ./dist
 

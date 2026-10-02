@@ -235,6 +235,10 @@ app.use((req, res, next) => {
   const { createDecisionRouter } = await import("./decision/routes");
   app.use("/api/decision", createDecisionRouter());
 
+  // Video intake API (Tier 0). Transcripts only — no model calls.
+  const { createVideoRouter } = await import("./research/videoRoutes");
+  app.use("/api/video", createVideoRouter());
+
   // Story API. `ResearchJob → Story` is a cheap read of durable research: it
   // never enqueues and never re-runs research.
   const { createDefaultStoryRouter } = await import("./story/routes");

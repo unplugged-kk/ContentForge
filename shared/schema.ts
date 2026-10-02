@@ -709,6 +709,77 @@ export const researchAnalyses = pgTable(
   ],
 );
 
+// ── Video source intelligence (transcript-first) ─────────────────────────────
+// A transcript is ingested once, keyed by `transcript_hash`, and reused: the
+// same video never re-runs the pipeline. Chunks and claims hang off the source.
+
+export const videoSources = pgTable(
+  "video_sources",
+  {
+    id: serial("id").primaryKey(),
+    /** YouTube video id (stable identity). */
+    videoId: varchar("video_id", { length: 40 }).notNull(),
+    url: text("url").notNull(),
+    lang: varchar("lang", { length: 20 }),
+    /** subs | auto-subs */
+    transcriptSource: varchar("transcript_source", { length: 20 }).notNull().default("subs"),
+    /** Cache key: hash(videoId, lang, normalized text). */
+    transcriptHash: varchar("transcript_hash", { length: 64 }).notNull().unique(),
+    charCount: integer("char_count").notNull().default(0),
+    durationMs: integer("duration_ms"),
+    cueCount: integer("cue_count").notNull().default(0),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("video_sources_video_idx").on(table.videoId)],
+);
+
+export const videoChunks = pgTable(
+  "video_chunks",
+  {
+    id: serial("id").primaryKey(),
+    sourceId: integer("source_id")
+      .notNull()
+      .references(() => videoSources.id, { onDelete: "cascade" }),
+    idx: integer("idx").notNull(),
+    startMs: integer("start_ms").notNull().default(0),
+    endMs: integer("end_ms").notNull().default(0),
+    text: text("text").notNull(),
+    charCount: integer("char_count").notNull().default(0),
+    hash: varchar("hash", { length: 64 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_chunks_source_idx_uq").on(table.sourceId, table.idx),
+    uniqueIndex("video_chunks_source_hash_uq").on(table.sourceId, table.hash),
+  ],
+);
+
+export const videoClaims = pgTable(
+  "video_claims",
+  {
+    id: serial("id").primaryKey(),
+    sourceId: integer("source_id")
+      .notNull()
+      .references(() => videoSources.id, { onDelete: "cascade" }),
+    chunkId: integer("chunk_id").references(() => videoChunks.id, { onDelete: "set null" }),
+    claim: text("claim").notNull(),
+    confidence: decimal("confidence", { precision: 5, scale: 4 }),
+    extractionModel: varchar("extraction_model", { length: 80 }),
+    sourceUrl: text("source_url"),
+    timestampMs: integer("timestamp_ms"),
+    /** unverified | supported | conflicting | unsupported */
+    verification: varchar("verification", { length: 20 }).notNull().default("unverified"),
+    conflicting: jsonb("conflicting").notNull().default([]),
+    risk: varchar("risk", { length: 20 }),
+    extractedAt: timestamp("extracted_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("video_claims_source_idx").on(table.sourceId),
+    index("video_claims_chunk_idx").on(table.chunkId),
+  ],
+);
+
 export const insertResearchJobSchema = createInsertSchema(researchJobs).omit({
   id: true,
   createdAt: true,
