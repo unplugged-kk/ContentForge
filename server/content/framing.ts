@@ -5,6 +5,10 @@
  * The policy owns the allowed target set (format × channel): Jev may only
  * NARROW it, never invent a pair. One call per run, and fail-open — a decision
  * outage, a refusal or an unusable answer leaves the policy's targets untouched.
+ *
+ * Jev's `choice` contract (verified against the live API): `instructions` is a
+ * STRING and `criteria` is an OBJECT whose KEYS are the candidate answers — its
+ * keys are the option set, and `choice` echoes one back.
  */
 
 import { jevConfigured, jevDecide, type JevQuestion } from "../decision/jev";
@@ -22,7 +26,22 @@ export interface FramingPort {
   selectTargets(input: FramingInput): Promise<FramingTarget[] | null>;
 }
 
-const MAX_INSIGHT_CHARS = 1500;
+const MAX_INSIGHT_CHARS = 1200;
+
+/** Human hints for the formats the registry actually offers. */
+const FORMAT_HINTS: Record<string, string> = {
+  x_post: "a single short post (max ~280 characters)",
+  x_thread: "a multi-post thread (2-5 posts)",
+  x_article: "a long-form note post",
+  linkedin_post: "a single LinkedIn post",
+  threads_post: "a single Threads post",
+  image: "a single image with a caption",
+  video: "a short video",
+};
+
+export function formatHint(format: string): string {
+  return FORMAT_HINTS[format] ?? format;
+}
 
 export function framingEnabled(): boolean {
   return process.env.JEV_FRAMING === "1" && jevConfigured();
@@ -39,33 +58,35 @@ export function formatsByChannel(targets: readonly FramingTarget[]): Map<string,
   return byChannel;
 }
 
+/** Channels where there is a genuine choice to make. Order is deterministic. */
+export function framingChannels(
+  targets: readonly FramingTarget[],
+): Array<{ channel: string; formats: string[] }> {
+  return Array.from(formatsByChannel(targets))
+    .filter(([, formats]) => formats.length >= 2)
+    .map(([channel, formats]) => ({ channel, formats }));
+}
+
 /** One `choice` question per channel that actually has a choice to make. */
 export function buildFramingQuestions(input: FramingInput): Record<string, JevQuestion> {
   const questions: Record<string, JevQuestion> = {};
-  let i = 0;
-  for (const [channel, formats] of Array.from(formatsByChannel(input.targets))) {
-    if (formats.length < 2) continue;
+  const story = `"${input.storyTitle}" — ${input.insightBody.slice(0, MAX_INSIGHT_CHARS)}`;
+
+  framingChannels(input.targets).forEach(({ channel, formats }, i) => {
+    const criteria: Record<string, string> = {};
+    for (const format of formats) criteria[format] = formatHint(format);
     questions[`ch${i}`] = {
       type: "choice",
-      instructions: {
-        story: {
-          title: input.storyTitle,
-          insightBody: input.insightBody.slice(0, MAX_INSIGHT_CHARS),
-        },
-        channel,
-        formats,
-        question:
-          `Channel "${channel}" accepts exactly one of these formats: ${formats.join(", ")}. ` +
-          `Which SINGLE format best fits this story? Answer with exactly one of them.`,
-      },
-      criteria: { channel, formats },
+      instructions:
+        `For the story ${story} — on channel "${channel}", ` +
+        `which SINGLE format best fits this story? Choose exactly one.`,
+      criteria,
     };
-    i += 1;
-  }
+  });
   return questions;
 }
 
-/** Map Jev's free-text choice back onto an allowed format. */
+/** Map Jev's choice back onto an allowed format. */
 export function matchFormat(choice: string, formats: readonly string[]): string | null {
   const c = choice.trim().toLowerCase();
   if (!c) return null;
@@ -83,20 +104,18 @@ export function selectFramedTargets(
   input: FramingInput,
   answers: Record<string, { type?: string; choice?: unknown }>,
 ): FramingTarget[] | null {
-  const questions = buildFramingQuestions(input);
-  const keys = Object.keys(questions);
-  if (keys.length === 0) return null;
+  const channels = framingChannels(input.targets);
+  if (channels.length === 0) return null;
 
   const chosen = new Map<string, string>();
-  for (const key of keys) {
-    const { channel, formats } = questions[key].criteria as { channel: string; formats: string[] };
-    const answer = answers[key];
+  channels.forEach(({ channel, formats }, i) => {
+    const answer = answers[`ch${i}`];
     const picked =
       answer && answer.type === "choice" && typeof answer.choice === "string"
         ? matchFormat(answer.choice, formats)
         : null;
     if (picked) chosen.set(channel, picked);
-  }
+  });
   if (chosen.size === 0) return null;
 
   return input.targets.filter((t) => {
@@ -115,7 +134,10 @@ export function createJevFraming(): FramingPort {
         allowedTargets: input.targets,
       };
       const response = await jevDecide(state, questions);
-      return selectFramedTargets(input, response.answers as Record<string, { type?: string; choice?: unknown }>);
+      return selectFramedTargets(
+        input,
+        response.answers as Record<string, { type?: string; choice?: unknown }>,
+      );
     },
   };
 }

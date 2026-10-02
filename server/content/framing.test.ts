@@ -20,7 +20,11 @@ describe("buildFramingQuestions", () => {
   it("asks only channels that actually have a choice", () => {
     const q = buildFramingQuestions(story);
     assert.deepEqual(Object.keys(q), ["ch0"]);
-    assert.deepEqual((q.ch0.criteria as any).formats, ["x_post", "x_thread"]);
+    // Jev's contract: instructions is a STRING, criteria is an OBJECT whose keys
+    // are the candidate answers (verified against the live API).
+    assert.equal(typeof q.ch0.instructions, "string");
+    assert.deepEqual(Object.keys(q.ch0.criteria as object), ["x_post", "x_thread"]);
+    assert.match(q.ch0.instructions as string, /x_thread|exactly one/);
   });
 
   it("asks nothing when every channel has a single format", () => {
