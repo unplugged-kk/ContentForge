@@ -71,6 +71,14 @@ const POLICIES = {
     flag: "JEV_OPPORTUNITY_SCORE",
     description: "How good a content opportunity is (Jev signals, code weights)",
   },
+  quality_gate: {
+    id: "quality-gate",
+    version: "v1",
+    fallback: "fail_closed_hold",
+    minConfidence: 0.4,
+    flag: "JEV_CONTENT_GATE",
+    description: "Is a generated artifact good enough to submit for review?",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;
@@ -116,6 +124,13 @@ export function opportunityBandThresholds(): { high: number; medium: number } {
   return {
     high: envNum("JEV_OPPORTUNITY_HIGH", 0.66),
     medium: envNum("JEV_OPPORTUNITY_MEDIUM", 0.4),
+  };
+}
+
+export function qualityThresholds(): { approve: number; revise: number } {
+  return {
+    approve: envNum("JEV_QUALITY_APPROVE", 0.7),
+    revise: envNum("JEV_QUALITY_REVISE", 0.45),
   };
 }
 

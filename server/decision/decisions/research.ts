@@ -106,6 +106,11 @@ export const researchTriageDefinition: DecisionDefinition<TriageDecision> = {
     };
   },
 
+  /** Keeping candidates is permissive: an unsure answer must not do it. */
+  isPermissive(decision: unknown) {
+    return (decision as TriageDecision).action === "proceed";
+  },
+
   /** Fail-open: an outage keeps every candidate (never over-block research). */
   fallback(input: DecisionBuildInput) {
     const all = (input.state.candidates ?? []).map((_candidate, index) => index);

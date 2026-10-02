@@ -138,8 +138,18 @@ export async function decide<T = unknown>(
     model = response.model;
 
     const outcome = definition.parse(build, response);
+
+    // Invalid decisions never reach a caller: the schema throws, and the
+    // declared fallback applies.
+    const decision = validateDecision(input.type, outcome.decision) as T;
+
+    // A low-confidence answer may not take a PERMISSIVE action (a keep, an
+    // approve). Conservative outcomes — a drop, a reject, a hold — are safe to
+    // honour at any confidence, so they are not downgraded to the fallback.
+    const permissive = definition.isPermissive ? definition.isPermissive(decision) : true;
     if (
       policy.minConfidence > 0 &&
+      permissive &&
       outcome.confidence !== undefined &&
       outcome.confidence < policy.minConfidence
     ) {
@@ -149,9 +159,6 @@ export async function decide<T = unknown>(
       return finish(f.decision, f);
     }
 
-    // Invalid decisions never reach a caller: the schema throws, and the
-    // declared fallback applies.
-    const decision = validateDecision(input.type, outcome.decision) as T;
     return finish(decision, {
       fallback: false,
       reasons: outcome.reasons,

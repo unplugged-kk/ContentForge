@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 import { decide, type EngineDeps } from "./engine";
 import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
-import type { OpportunityScoreDecision, ResearchDepthDecision, TriageDecision } from "./schemas";
+import type { OpportunityScoreDecision, QualityGateDecision, ResearchDepthDecision, TriageDecision } from "./schemas";
 
 // ── doubles ──────────────────────────────────────────────────────────────────
 function noul(value: number): JevAnswer {
@@ -218,6 +218,68 @@ describe("decide — opportunity_score", () => {
       deps({ jevDecide: async () => { throw new Error("ECONNREFUSED"); } }),
     );
     assert.deepEqual(result.decision, { score: null, band: "unknown" });
+    assert.equal(result.fallback, true);
+  });
+});
+
+// ── quality gate ─────────────────────────────────────────────────────────────
+describe("decide — quality_gate", () => {
+  const quality = (dimensions: number[], publishWorthy: number): JevResponse =>
+    response({
+      specific: noul(dimensions[0]),
+      original: noul(dimensions[1]),
+      clear: noul(dimensions[2]),
+      audience_fit: noul(dimensions[3]),
+      publish_worthy: noul(publishWorthy),
+    });
+
+  const QUALITY_STATE = {
+    platform: { channel: "x", format: "x_post", maxCharacters: 280 },
+    quality: { signals: { boilerplate: 0.1 }, flags: [] },
+  };
+
+  it("approves strong content", async () => {
+    const result = await decide<QualityGateDecision>(
+      { type: "quality_gate", state: QUALITY_STATE, refs: { artifactId: 9 } },
+      deps({ jevDecide: async () => quality([0.9, 0.9, 0.9, 0.9], 0.85) }),
+    );
+    assert.equal(result.decision.outcome, "approve");
+    assert.equal(result.fallback, false);
+    assert.equal(result.policyId, "quality-gate");
+  });
+
+  it("revises middling content", async () => {
+    const result = await decide<QualityGateDecision>(
+      { type: "quality_gate", state: QUALITY_STATE },
+      deps({ jevDecide: async () => quality([0.5, 0.5, 0.6, 0.5], 0.5) }),
+    );
+    assert.equal(result.decision.outcome, "revise");
+  });
+
+  it("rejects weak content — and a conservative rejection is not downgraded by low confidence", async () => {
+    const result = await decide<QualityGateDecision>(
+      { type: "quality_gate", state: QUALITY_STATE },
+      deps({ jevDecide: async () => quality([0.1, 0.05, 0.2, 0.1], 0.05) }),
+    );
+    assert.equal(result.decision.outcome, "reject");
+    assert.equal(result.fallback, false, "a rejection needs no confidence to be honoured");
+  });
+
+  it("holds when the judgment is unreadable (fail-closed, never a rejection)", async () => {
+    const result = await decide<QualityGateDecision>(
+      { type: "quality_gate", state: QUALITY_STATE },
+      deps({ jevDecide: async () => response({}) }),
+    );
+    assert.deepEqual(result.decision, { outcome: "hold", score: null });
+    assert.equal(result.fallback, true);
+  });
+
+  it("holds when Jev is unavailable", async () => {
+    const result = await decide<QualityGateDecision>(
+      { type: "quality_gate", state: QUALITY_STATE },
+      deps({ jevDecide: async () => { throw new Error("timeout"); } }),
+    );
+    assert.equal(result.decision.outcome, "hold");
     assert.equal(result.fallback, true);
   });
 });

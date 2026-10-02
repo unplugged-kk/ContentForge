@@ -13,6 +13,7 @@ import type { DecisionType } from "./policies";
 import type { ContentForgeState } from "./state";
 import { researchDepthDefinition, researchTriageDefinition } from "./decisions/research";
 import { opportunityScoreDefinition } from "./decisions/opportunity";
+import { qualityGateDefinition } from "./decisions/quality";
 
 /** Entity references a decision can be attached to (all optional). */
 export interface DecisionRefs {
@@ -45,6 +46,12 @@ export interface DecisionDefinition<T> {
   buildQuestions(input: DecisionBuildInput): Record<string, JevQuestion>;
   /** Map Jev's answers onto the typed decision. Throwing ⇒ the fallback applies. */
   parse(input: DecisionBuildInput, response: JevResponse): DecisionOutcome<T>;
+  /**
+   * Whether this decision lets something THROUGH (a keep, an approve). A
+   * low-confidence answer may not take a permissive action; conservative
+   * outcomes (drop, reject, hold) are safe to honour either way. Default: true.
+   */
+  isPermissive?(decision: unknown): boolean;
   /** The declared value when Jev is unavailable, unusable, or below confidence. */
   fallback(input: DecisionBuildInput, reason: string): T;
 }
@@ -53,6 +60,7 @@ export const DECISION_REGISTRY: Record<DecisionType, DecisionDefinition<unknown>
   research_triage: researchTriageDefinition,
   research_depth: researchDepthDefinition,
   opportunity_score: opportunityScoreDefinition,
+  quality_gate: qualityGateDefinition,
 };
 
 export function getDecisionDefinition(type: DecisionType): DecisionDefinition<unknown> {

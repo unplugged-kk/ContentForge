@@ -28,6 +28,11 @@ export interface ArtifactDeps {
   artifacts: ContentStoragePort;
   /** Optional so existing tests that only persist artifacts stay unchanged. */
   learning?: LearningRecorder;
+  /**
+   * Optional advisory quality gate, consulted on `draft → in_review`. Absent ⇒
+   * submission behaves exactly as it did before the Decision OS existed.
+   */
+  qualityGate?: import("./qualityGate").QualityGatePort;
 }
 
 export class ArtifactNotFoundError extends Error {
@@ -45,6 +50,21 @@ export class ArtifactStateError extends Error {
   ) {
     super(`Artifact ${artifactId} is "${readiness}" and cannot be ${action}`);
     this.name = "ArtifactStateError";
+  }
+}
+
+/** The quality gate blocked a draft from being submitted for review. */
+export class QualityGateBlockedError extends Error {
+  constructor(
+    readonly artifactId: number,
+    readonly outcome: "revise" | "reject",
+    readonly reasons: string[],
+    readonly policyVersion: string,
+  ) {
+    super(
+      `Artifact ${artifactId} was not submitted for review: the quality gate returned "${outcome}" (policy ${policyVersion}). ${reasons.join("; ")}`,
+    );
+    this.name = "QualityGateBlockedError";
   }
 }
 
@@ -255,6 +275,29 @@ export async function submitArtifactForReview(
   if (artifact.readiness !== "draft") {
     throw new ArtifactStateError(artifactId, artifact.readiness, "submitted for review");
   }
+
+  // Advisory quality gate. `revise`/`reject` stop the draft from reaching human
+  // review; `approve`/`hold` do not — `hold` means the gate could not evaluate
+  // the content, and a gate outage must not block a human. Either way this is a
+  // soft check: it can never make unapproved content publishable.
+  if (deps.qualityGate) {
+    let review: Awaited<ReturnType<typeof deps.qualityGate.review>> | null = null;
+    try {
+      review = await deps.qualityGate.review({
+        artifactId,
+        userId: artifact.userId,
+        format: artifact.format,
+        channel: artifact.channel,
+        payload: artifact.payload,
+      });
+    } catch {
+      review = null; // an unusable gate defers to the human, never blocks them
+    }
+    if (review && (review.outcome === "revise" || review.outcome === "reject")) {
+      throw new QualityGateBlockedError(artifactId, review.outcome, review.reasons, review.policyVersion);
+    }
+  }
+
   const updated = await deps.artifacts.setArtifactReadiness(artifactId, "in_review", null);
   if (!updated) throw new ArtifactNotFoundError(artifactId);
   return updated;

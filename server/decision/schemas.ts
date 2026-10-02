@@ -49,11 +49,27 @@ export const opportunityScoreDecisionSchema = z.object({
 });
 export type OpportunityScoreDecision = z.infer<typeof opportunityScoreDecisionSchema>;
 
+// ── quality ──────────────────────────────────────────────────────────────────
+/**
+ * `hold` is the fail-closed outcome: the gate could not evaluate the content, so
+ * it neither approves nor condemns it. It never auto-approves.
+ */
+export const QUALITY_OUTCOMES = ["approve", "revise", "reject", "hold"] as const;
+export type QualityOutcome = (typeof QUALITY_OUTCOMES)[number];
+
+export const qualityGateDecisionSchema = z.object({
+  outcome: z.enum(QUALITY_OUTCOMES),
+  /** Composite of the quality dimensions; null when the gate could not evaluate. */
+  score: z.number().min(0).max(1).nullable(),
+});
+export type QualityGateDecision = z.infer<typeof qualityGateDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
   research_depth: researchDepthDecisionSchema,
   opportunity_score: opportunityScoreDecisionSchema,
+  quality_gate: qualityGateDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(

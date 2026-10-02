@@ -68,7 +68,9 @@ import {
   ArtifactNotFoundError,
   ArtifactStateError,
   InvalidArtifactPayloadError,
+  QualityGateBlockedError,
 } from "./artifact";
+import { createContentQualityGate } from "./qualityGate";
 import {
   archiveTemplate,
   archiveVoice,
@@ -135,6 +137,11 @@ export interface ContentApiDeps {
   enqueuePublication: (publication: Publication) => Promise<boolean>;
   enqueueVisual: (generation: VisualGeneration) => Promise<boolean>;
   enqueueVideoRepurpose?: (job: VideoRepurposingJob) => Promise<boolean>;
+  /**
+   * Optional quality gate, consulted when a draft artifact is submitted for
+   * review. Absent ⇒ submission behaves exactly as it did before.
+   */
+  qualityGate?: import("./qualityGate").QualityGatePort;
   /** Optional so existing test doubles that build `ContentApiDeps` by hand are unaffected. */
   style?: import("./styleService").StyleServiceDeps;
   enqueueStyleAnalysis?: (analysis: import("@shared/schema").StyleAnalysis) => Promise<boolean>;
@@ -971,11 +978,21 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         if (!existing || isForeignRow(existing, getUserId(req))) {
           return res.status(404).json({ message: "Artifact not found" });
         }
-        const artifact = await handler(id, { artifacts: deps.content, learning: deps.learning });
+        const artifact = await handler(id, {
+          artifacts: deps.content,
+          learning: deps.learning,
+          qualityGate: deps.qualityGate,
+        });
         return res.json(serializeArtifact(artifact));
       } catch (error) {
         if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
         if (error instanceof ArtifactStateError) return res.status(409).json({ message: error.message });
+        if (error instanceof QualityGateBlockedError) {
+          return res.status(409).json({
+            message: error.message,
+            qualityGate: { outcome: error.outcome, reasons: error.reasons, policyVersion: error.policyVersion },
+          });
+        }
         if (error instanceof InvalidArtifactPayloadError) return res.status(422).json({ message: error.message });
         return next(error);
       }
@@ -2307,6 +2324,8 @@ export async function createDefaultContentRouter(): Promise<Router> {
 
   return createContentRouter({
     content: contentStorage,
+    // Present only when the decision layer and JEV_CONTENT_GATE are both on.
+    qualityGate: createContentQualityGate(),
     opportunities: { opportunities: contentStorage, stories: storyStorage },
     generation: generationDeps,
     chat: chatDeps,
