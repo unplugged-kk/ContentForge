@@ -1,20 +1,22 @@
 /**
- * Opportunity scoring — the ContentForge-side half of the `opportunity_score`
- * decision, and the missing consumer for the `opportunities.score` /
- * `scoreBreakdown` columns (they existed but nothing ever computed them).
+ * Opportunity advisory — the ContentForge-side half of the `opportunity_score`
+ * and `content_strategy` decisions, and the missing writer for three columns
+ * that existed but that nothing ever computed: `opportunities.score`,
+ * `score_breakdown`, and (via strategy) `audience` / `angle`.
  *
- * The decision layer supplies the judgment; this seam supplies the EVIDENCE:
- * the deterministic expertise alignment (is this topic inside the creator's
- * standing?) plus the topic and platform context. A conversation about
- * expertise that never reaches the decision is worthless, so the alignment goes
- * into the state Jev judges and into the stored breakdown.
+ * The decision layer supplies judgment; this seam supplies the EVIDENCE — the
+ * deterministic expertise alignment (is this topic inside the creator's
+ * standing?) plus the bounded candidate sets Jev may choose from. A conversation
+ * about expertise that never reaches the decision is worthless, so the alignment
+ * goes into the state Jev judges and into the stored breakdown.
  *
- * Advisory by construction: it returns a score, and the caller decides whether
- * to store it. It never blocks creating an Opportunity.
+ * Advisory by construction: it returns values and the caller decides whether to
+ * store them. It never blocks creating an Opportunity.
  */
 
 import { decide } from "../decision/engine";
-import type { OpportunityScoreDecision } from "../decision/schemas";
+import { decisionTypeEnabled } from "../decision/policies";
+import type { ContentStrategyDecision, OpportunityScoreDecision } from "../decision/schemas";
 import {
   buildExpertiseProfile,
   expertiseAlignment,
@@ -30,7 +32,7 @@ export interface OpportunityScoringInput {
   objective: string;
   format: string;
   channel: string;
-  /** Story context — widens the expertise comparison beyond the concept line. */
+  /** Story context — widens the expertise comparison and supplies angle candidates. */
   title?: string;
   angles?: string[];
 }
@@ -39,6 +41,9 @@ export interface OpportunityScoreOutcome {
   /** null ⇒ no score could be computed. Never fabricated. */
   score: number | null;
   breakdown: JsonRecord;
+  /** From `content_strategy`, when that decision is enabled and answered. */
+  audience?: string | null;
+  angle?: string | null;
 }
 
 export interface OpportunityScoringPort {
@@ -50,6 +55,8 @@ export interface OpportunityScoringDeps {
   decide?: typeof decide;
   /** Supplies the creator's expertise profile; defaults to an empty one. */
   loadProfile?: (userId: number | null | undefined) => Promise<ExpertiseProfile>;
+  /** Whether to also ask the strategy decision. Defaults to its own flag. */
+  strategyEnabled?: () => boolean;
 }
 
 export function createJevOpportunityScoring(
@@ -57,6 +64,7 @@ export function createJevOpportunityScoring(
 ): OpportunityScoringPort {
   const run = deps.decide ?? decide;
   const loadProfile = deps.loadProfile ?? (async () => buildExpertiseProfile());
+  const strategyEnabled = deps.strategyEnabled ?? (() => decisionTypeEnabled("content_strategy"));
 
   return {
     async score(input: OpportunityScoringInput): Promise<OpportunityScoreOutcome> {
@@ -67,36 +75,67 @@ export function createJevOpportunityScoring(
         angles: input.angles,
       });
 
-      const result = await run<OpportunityScoreDecision>({
-        type: "opportunity_score",
-        state: {
-          topic: { title: input.concept, query: input.objective, angles: input.angles },
-          expertise: {
-            domains: profile.domains,
-            alignment: alignment.alignment,
-            confidence: profile.confidence,
-          },
-          platform: { channel: input.channel, format: input.format },
+      const state = {
+        topic: { title: input.concept, query: input.objective, angles: input.angles },
+        expertise: {
+          domains: profile.domains,
+          goals: profile.goals,
+          alignment: alignment.alignment,
+          confidence: profile.confidence,
         },
+        audience: { options: profile.audiences },
+        platform: { channel: input.channel, format: input.format },
+      };
+
+      const scored = await run<OpportunityScoreDecision>({
+        type: "opportunity_score",
+        state,
         refs: { storyId: input.storyId },
         userId: input.userId ?? null,
       });
+      const score = scored.decision as OpportunityScoreDecision;
 
-      const decision = result.decision as OpportunityScoreDecision;
-      return {
-        score: decision.score,
-        breakdown: {
-          band: decision.band,
-          expertise: {
-            alignment: alignment.alignment,
-            band: expertiseBand(alignment.alignment),
-            matched: alignment.matched.slice(0, 5),
-            confidence: profile.confidence,
-          },
-          policy: `${result.policyId}@${result.policyVersion}`,
-          fallback: result.fallback,
+      const breakdown: JsonRecord = {
+        band: score.band,
+        expertise: {
+          alignment: alignment.alignment,
+          // The deterministic band, kept beside Jev's judgment below so the two
+          // can be compared when a policy is evaluated.
+          band: expertiseBand(alignment.alignment),
+          matched: alignment.matched.slice(0, 5),
+          confidence: profile.confidence,
         },
+        policy: `${scored.policyId}@${scored.policyVersion}`,
+        fallback: scored.fallback,
       };
+
+      let audience: string | null = null;
+      let angle: string | null = null;
+      if (strategyEnabled()) {
+        try {
+          const strategyResult = await run<ContentStrategyDecision>({
+            type: "content_strategy",
+            state,
+            refs: { storyId: input.storyId },
+            userId: input.userId ?? null,
+          });
+          const strategy = strategyResult.decision as ContentStrategyDecision;
+          audience = strategy.audience;
+          angle = strategy.angle;
+          breakdown.strategy = {
+            angle: strategy.angle,
+            audience: strategy.audience,
+            goal: strategy.goal,
+            expertise: strategy.expertise,
+            policy: `${strategyResult.policyId}@${strategyResult.policyVersion}`,
+            fallback: strategyResult.fallback,
+          };
+        } catch {
+          /* advisory only: the Opportunity is still created */
+        }
+      }
+
+      return { score: score.score, breakdown, audience, angle };
     },
   };
 }

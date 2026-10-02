@@ -117,9 +117,97 @@ function harness(scoring?: OpportunityScoringPort) {
 
 const BASE = { concept: "Kubernetes cost", objective: "practitioner insight", format: "x_post", channel: "x" };
 
-function fixedScoring(outcome: { score: number | null; breakdown: Record<string, unknown> }): OpportunityScoringPort {
+function fixedScoring(outcome: {
+  score: number | null;
+  breakdown: Record<string, unknown>;
+  audience?: string | null;
+  angle?: string | null;
+}): OpportunityScoringPort {
   return { score: async () => outcome };
 }
+
+describe("createJevOpportunityScoring + content strategy", () => {
+  const strategyResult = {
+    decision: { angle: "consolidation", audience: "platform engineers", goal: "authority", expertise: "core" },
+    reasons: ["strategy"],
+    policyId: "content-strategy",
+    policyVersion: "v1",
+    decisionType: "content_strategy",
+    fallback: false,
+    level: "soft" as const,
+  };
+
+  it("carries the strategy outcome into audience/angle and the breakdown", async () => {
+    const port = createJevOpportunityScoring({
+      loadProfile: async () => PROFILE,
+      strategyEnabled: () => true,
+      decide: (async (input: Record<string, any>) =>
+        input.type === "content_strategy" ? strategyResult : engineResult(0.5, "medium")) as never,
+    });
+
+    const outcome = await port.score({
+      storyId: 1,
+      concept: "Kubernetes cost",
+      objective: "o",
+      format: "x_post",
+      channel: "x",
+      angles: ["consolidation", "cost"],
+    });
+
+    assert.equal(outcome.audience, "platform engineers");
+    assert.equal(outcome.angle, "consolidation");
+    const strategy = outcome.breakdown.strategy as Record<string, unknown>;
+    assert.equal(strategy.goal, "authority");
+    assert.equal(strategy.expertise, "core");
+    assert.equal(strategy.policy, "content-strategy@v1");
+  });
+
+  it("does not ask the strategy question when its flag is off", async () => {
+    const calls: string[] = [];
+    const port = createJevOpportunityScoring({
+      loadProfile: async () => PROFILE,
+      strategyEnabled: () => false,
+      decide: (async (input: Record<string, any>) => {
+        calls.push(input.type);
+        return engineResult(0.5, "medium");
+      }) as never,
+    });
+
+    const outcome = await port.score({
+      storyId: 1,
+      concept: "c",
+      objective: "o",
+      format: "x_post",
+      channel: "x",
+    });
+
+    assert.deepEqual(calls, ["opportunity_score"], "one decision call, not two");
+    assert.equal(outcome.audience, null);
+    assert.equal(outcome.breakdown.strategy, undefined);
+  });
+
+  it("still returns the score when the strategy call fails", async () => {
+    const port = createJevOpportunityScoring({
+      loadProfile: async () => PROFILE,
+      strategyEnabled: () => true,
+      decide: (async (input: Record<string, any>) => {
+        if (input.type === "content_strategy") throw new Error("strategy unavailable");
+        return engineResult(0.5, "medium");
+      }) as never,
+    });
+
+    const outcome = await port.score({
+      storyId: 1,
+      concept: "c",
+      objective: "o",
+      format: "x_post",
+      channel: "x",
+    });
+
+    assert.equal(outcome.score, 0.5);
+    assert.equal(outcome.audience, null);
+  });
+});
 
 describe("createOpportunityFromStory + scoring", () => {
   it("leaves the score null when no scoring port is wired (unchanged behaviour)", async () => {
@@ -156,5 +244,28 @@ describe("createOpportunityFromStory + scoring", () => {
     assert.ok(opportunity);
     assert.equal(inserted.length, 1);
     assert.equal(inserted[0].score, null, "an advisory score never blocks or invents a value");
+  });
+
+  it("fills audience and angle from the strategy when the caller omits them", async () => {
+    const { deps, inserted } = harness(
+      fixedScoring({
+        score: 0.4,
+        breakdown: { band: "medium" },
+        audience: "platform engineers",
+        angle: "consolidation",
+      }),
+    );
+    await createOpportunityFromStory(3, BASE, deps);
+    assert.equal(inserted[0].audience, "platform engineers");
+    assert.equal(inserted[0].angle, "consolidation");
+  });
+
+  it("lets a caller-supplied audience and angle win", async () => {
+    const { deps, inserted } = harness(
+      fixedScoring({ score: 0.4, breakdown: {}, audience: "SREs", angle: "cost" }),
+    );
+    await createOpportunityFromStory(3, { ...BASE, audience: "founders", angle: "hiring" }, deps);
+    assert.equal(inserted[0].audience, "founders");
+    assert.equal(inserted[0].angle, "hiring");
   });
 });

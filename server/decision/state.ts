@@ -25,6 +25,8 @@ export const STATE_BOUNDS = {
   maxHistory: 20,
   maxAngles: 10,
   maxDomains: 20,
+  maxAudiences: 6,
+  maxGoals: 6,
   maxFlags: 20,
   maxHashInputChars: 60_000,
 } as const;
@@ -47,9 +49,10 @@ export interface ContentForgeState {
   topic?: { title?: string; query?: string; angles?: string[] };
   research?: { jobId?: number; sourceCount?: number; evidence?: StateEvidence[] };
   candidates?: StateCandidate[];
-  audience?: { primary?: string; description?: string };
+  /** `options` are the bounded audience candidates a strategy choice may pick from. */
+  audience?: { primary?: string; description?: string; options?: string[] };
   reach?: Record<string, number>;
-  expertise?: { domains?: string[]; alignment?: number; confidence?: string };
+  expertise?: { domains?: string[]; goals?: string[]; alignment?: number; confidence?: string };
   contentHistory?: Array<{ title?: string; format?: string; channel?: string }>;
   performance?: {
     byChannel?: Record<string, number>;
@@ -180,6 +183,7 @@ export function normalizeState(input: unknown): ContentForgeState {
   const audience = record(raw.audience, (a) => ({
     primary: str(a.primary, STATE_BOUNDS.maxShortChars),
     description: str(a.description),
+    options: strArray(a.options, STATE_BOUNDS.maxAudiences),
   }));
   if (audience) state.audience = audience;
 
@@ -188,6 +192,7 @@ export function normalizeState(input: unknown): ContentForgeState {
 
   const expertise = record(raw.expertise, (e) => ({
     domains: strArray(e.domains, STATE_BOUNDS.maxDomains),
+    goals: strArray(e.goals, STATE_BOUNDS.maxGoals),
     alignment: num(e.alignment),
     confidence: str(e.confidence, STATE_BOUNDS.maxShortChars),
   }));

@@ -12,7 +12,14 @@ import { decide, type EngineDeps } from "./engine";
 import { getDecisionDefinition } from "./registry";
 import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
-import type { OpportunityScoreDecision, QualityGateDecision, ResearchDepthDecision, TriageDecision } from "./schemas";
+import type {
+  ContentStrategyDecision,
+  OpportunityScoreDecision,
+  QualityGateDecision,
+  ResearchDepthDecision,
+  TriageDecision,
+} from "./schemas";
+import { normalizeState } from "./state";
 
 // ── doubles ──────────────────────────────────────────────────────────────────
 function noul(value: number): JevAnswer {
@@ -290,6 +297,84 @@ describe("decide — quality_gate", () => {
     );
     assert.equal(result.decision.outcome, "hold");
     assert.equal(result.fallback, true);
+  });
+});
+
+// ── content strategy ─────────────────────────────────────────────────────────
+describe("decide — content_strategy", () => {
+  const STRATEGY_STATE = {
+    topic: { title: "Kubernetes cost", angles: ["cost", "developer experience", "platform ownership"] },
+    audience: { options: ["platform engineers", "SREs"] },
+    expertise: { domains: ["Kubernetes cost"], goals: ["authority", "recruiting"] },
+  };
+
+  it("asks only choices that actually exist, with the options as criteria keys", () => {
+    const questions = getDecisionDefinition("content_strategy").buildQuestions({
+      state: normalizeState(STRATEGY_STATE),
+    });
+    assert.deepEqual(Object.keys(questions).sort(), ["angle", "audience", "expertise", "goal"]);
+    assert.deepEqual(Object.keys(questions.angle.criteria as object), [
+      "cost",
+      "developer experience",
+      "platform ownership",
+    ]);
+    assert.equal(typeof questions.angle.instructions, "string");
+  });
+
+  it("does not ask a one-option question", () => {
+    const questions = getDecisionDefinition("content_strategy").buildQuestions({
+      state: normalizeState({
+        topic: { title: "t", angles: ["only one"] },
+        audience: { options: [] },
+        expertise: { goals: [] },
+      }),
+    });
+    assert.deepEqual(Object.keys(questions), ["expertise"], "only the always-answerable question remains");
+  });
+
+  it("maps a full set of answers and averages their confidence", async () => {
+    const result = await decide<ContentStrategyDecision>(
+      { type: "content_strategy", state: STRATEGY_STATE, refs: { storyId: 4 } },
+      deps({
+        jevDecide: async () =>
+          response({
+            angle: choice("cost", 0.8),
+            audience: choice("platform engineers", 0.7),
+            goal: choice("authority", 0.6),
+            expertise: choice("core", 0.9),
+          }),
+      }),
+    );
+    assert.equal(result.fallback, false);
+    assert.deepEqual(result.decision, {
+      angle: "cost",
+      audience: "platform engineers",
+      goal: "authority",
+      expertise: "core",
+    });
+    assert.ok((result.confidence ?? 0) > 0.7 && (result.confidence ?? 0) <= 0.9);
+  });
+
+  it("leaves an unanswered field null rather than inventing one", async () => {
+    const result = await decide<ContentStrategyDecision>(
+      { type: "content_strategy", state: STRATEGY_STATE },
+      deps({ jevDecide: async () => response({ expertise: choice("adjacent", 0.6) }) }),
+    );
+    assert.deepEqual(result.decision, {
+      angle: null,
+      audience: null,
+      goal: null,
+      expertise: "adjacent",
+    });
+  });
+
+  it("falls back to choosing nothing when no answer is usable", async () => {
+    const result = await decide<ContentStrategyDecision>(
+      { type: "content_strategy", state: STRATEGY_STATE },
+      deps({ jevDecide: async () => response({ angle: choice("not one of them", 0.9) }) }),
+    );
+    assert.equal(result.fallback, true);
+    assert.deepEqual(result.decision, { angle: null, audience: null, goal: null, expertise: null });
   });
 });
 

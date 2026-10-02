@@ -64,12 +64,33 @@ export const qualityGateDecisionSchema = z.object({
 });
 export type QualityGateDecision = z.infer<typeof qualityGateDecisionSchema>;
 
+// ── strategy ─────────────────────────────────────────────────────────────────
+export const EXPERTISE_BANDS = ["core", "adjacent", "outside"] as const;
+export type ExpertiseBandValue = (typeof EXPERTISE_BANDS)[number];
+
+/**
+ * One bounded strategy call covers several related choices (lead angle, audience,
+ * goal, expertise band) rather than four separate round-trips. Every field is
+ * nullable: an unanswered choice stays null instead of being invented, and the
+ * caller keeps whatever it already had.
+ */
+export const contentStrategyDecisionSchema = z.object({
+  /** The Story angle to lead with — chosen from the Story's own angles. */
+  angle: z.string().min(1).max(500).nullable(),
+  /** The audience to target — chosen from the audiences the profile declares. */
+  audience: z.string().min(1).max(500).nullable(),
+  goal: z.string().min(1).max(500).nullable(),
+  expertise: z.enum(EXPERTISE_BANDS).nullable(),
+});
+export type ContentStrategyDecision = z.infer<typeof contentStrategyDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
   research_depth: researchDepthDecisionSchema,
   opportunity_score: opportunityScoreDecisionSchema,
   quality_gate: qualityGateDecisionSchema,
+  content_strategy: contentStrategyDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(

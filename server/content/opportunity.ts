@@ -145,9 +145,11 @@ export async function createOpportunityFromStory(
   if (!story) throw new StoryNotFoundError(storyId);
   if (story.status === "archived") throw new StoryNotUsableError(storyId, story.status);
 
-  // Advisory scoring. A caller-supplied score always wins; a scoring failure
-  // never blocks creating the Opportunity (it simply leaves the score null).
+  // Advisory scoring + strategy. Caller-supplied values always win; a failure
+  // never blocks creating the Opportunity (it simply leaves the fields unset).
   let computedScore: number | null = null;
+  let computedAudience: string | null = null;
+  let computedAngle: string | null = null;
   let computedBreakdown: JsonRecord | undefined;
   if (deps.scoring) {
     try {
@@ -162,6 +164,8 @@ export async function createOpportunityFromStory(
         angles: story.angles ?? [],
       });
       computedScore = outcome.score;
+      computedAudience = outcome.audience ?? null;
+      computedAngle = outcome.angle ?? null;
       computedBreakdown = outcome.breakdown;
     } catch {
       /* advisory only: the Opportunity is still created */
@@ -173,8 +177,8 @@ export async function createOpportunityFromStory(
     storyId,
     concept: body.concept,
     objective: body.objective,
-    audience: body.audience ?? null,
-    angle: body.angle ?? null,
+    audience: body.audience ?? computedAudience,
+    angle: body.angle ?? computedAngle,
     format: body.format,
     channel: body.channel,
     status: "proposed",

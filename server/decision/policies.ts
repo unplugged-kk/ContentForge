@@ -79,6 +79,14 @@ const POLICIES = {
     flag: "JEV_CONTENT_GATE",
     description: "Is a generated artifact good enough to submit for review?",
   },
+  content_strategy: {
+    id: "content-strategy",
+    version: "v1",
+    fallback: "deterministic",
+    minConfidence: 0,
+    flag: "JEV_CONTENT_STRATEGY",
+    description: "Which lead angle, audience and goal a candidate direction takes",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;
