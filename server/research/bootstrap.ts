@@ -21,6 +21,7 @@ import {
 } from "./providers/youtube";
 import { createHnProvider, HN_PROVIDER_ID, loadHnProviderConfig } from "./providers/hn";
 import { createWebProvider, loadWebProviderConfig, WEB_PROVIDER_ID } from "./providers/web";
+import { createVideoProvider, loadVideoProviderConfig, VIDEO_PROVIDER_ID } from "./providers/video";
 import { createLast30DaysProvider, LAST30DAYS_PROVIDER_ID, last30daysConfigured } from "./providers/last30days";
 
 /** Idempotent: registers the built-in provider set once. */
@@ -39,6 +40,9 @@ export function registerBuiltinProviders(): void {
   }
   if (!hasProvider(WEB_PROVIDER_ID)) {
     registerProvider(createWebProvider({ loadConfig: loadWebProviderConfig }));
+  }
+  if (!hasProvider(VIDEO_PROVIDER_ID)) {
+    registerProvider(createVideoProvider({ loadConfig: loadVideoProviderConfig }));
   }
   if (last30daysConfigured() && !hasProvider(LAST30DAYS_PROVIDER_ID)) {
     registerProvider(createLast30DaysProvider());
