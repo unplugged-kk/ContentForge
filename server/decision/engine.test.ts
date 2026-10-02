@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decide, type EngineDeps } from "./engine";
+import { getDecisionDefinition } from "./registry";
 import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
 import type { OpportunityScoreDecision, QualityGateDecision, ResearchDepthDecision, TriageDecision } from "./schemas";
@@ -190,7 +191,7 @@ describe("decide — opportunity_score", () => {
     assert.ok((result.signals?.audience_relevance as number) === 0.9);
   });
 
-  it("falls back to an unknown band when confidence is below the policy minimum", async () => {
+  it("still records a modest band when confidence is low (conservative, not permissive)", async () => {
     const keys = [
       "audience_relevance",
       "novelty",
@@ -207,9 +208,17 @@ describe("decide — opportunity_score", () => {
       deps({ jevDecide: async () => response(answers) }),
     );
 
-    assert.equal(result.fallback, true);
-    assert.deepEqual(result.decision, { score: null, band: "unknown" });
-    assert.match(result.reasons[0], /confidence/);
+    assert.equal(result.fallback, false, "a conservative band is worth recording even when unsure");
+    assert.equal(result.decision.band, "medium");
+    assert.equal(result.decision.score, 0.4);
+  });
+
+  it("only a HIGH band is treated as the permissive claim", async () => {
+    const definition = getDecisionDefinition("opportunity_score");
+    assert.equal(definition.isPermissive?.({ band: "high", score: 0.9 }), true);
+    assert.equal(definition.isPermissive?.({ band: "medium", score: 0.5 }), false);
+    assert.equal(definition.isPermissive?.({ band: "low", score: 0.2 }), false);
+    assert.equal(definition.isPermissive?.({ band: "unknown", score: null }), false);
   });
 
   it("never fabricates a score when Jev is unavailable", async () => {

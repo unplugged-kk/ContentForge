@@ -76,4 +76,13 @@ export const opportunityScoreDefinition: DecisionDefinition<OpportunityScoreDeci
   fallback(_input: DecisionBuildInput) {
     return { score: null, band: "unknown" as const };
   },
+
+  /**
+   * Only claiming HIGH potential is a permissive act. A modest or low band is
+   * conservative information — worth recording even when the answer is unsure —
+   * so only a shaky "high" is withheld.
+   */
+  isPermissive(decision: unknown) {
+    return (decision as OpportunityScoreDecision).band === "high";
+  },
 };
