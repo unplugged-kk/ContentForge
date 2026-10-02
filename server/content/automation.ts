@@ -441,6 +441,13 @@ export interface AutomationDeps {
   enqueueAutomationRun: (run: AutomationRun) => Promise<boolean>;
   /** Phase 14: same learning corpus as manual approval. */
   learning?: import("./learning/record").LearningRecorder;
+  /**
+   * Optional bounded framing decision (Jev): may NARROW the policy's target set
+   * to the formats that best fit the derived Story — it can never invent a
+   * format × channel pair, and it can never fail the run (absent, refusing or
+   * throwing ⇒ the policy's targets stand).
+   */
+  framing?: import("./framing").FramingPort;
 }
 
 // ── policy service ────────────────────────────────────────────────────────────
@@ -969,7 +976,29 @@ async function runFanoutStep(run: AutomationRun, deps: AutomationDeps): Promise<
   const story = await deps.stories.getStoryByAutomationRun(run.id);
   if (!story) throw JobFailure.permanent(`automation run ${run.id} has no Story`);
 
-  const targets = boundAutomationTargets(snapshot.targets, snapshot.generationConfig, snapshot.limits);
+  let targets = boundAutomationTargets(snapshot.targets, snapshot.generationConfig, snapshot.limits);
+
+  // Optional bounded framing (Jev): narrow the policy's allowed targets down to
+  // the format that best fits THIS Story. Narrow-only (Jev cannot add a pair its
+  // policy never allowed) and fail-open (any failure keeps the policy's set), so
+  // a decision outage can never stall an automation run.
+  if (deps.framing && targets.length > 1) {
+    try {
+      const selected = await deps.framing.selectTargets({
+        storyTitle: story.title,
+        insightBody: story.insightBody,
+        targets: targets.map((t) => ({ format: t.format, channel: t.channel })),
+      });
+      if (selected && selected.length > 0) {
+        const allowed = new Set(selected.map((t) => `${t.channel}::${t.format}`));
+        const narrowed = targets.filter((t) => allowed.has(`${t.channel}::${t.format}`));
+        if (narrowed.length > 0) targets = narrowed;
+      }
+    } catch {
+      /* fail-open: the policy's targets stand */
+    }
+  }
+
   const result = await repurposeStory(
     story.id,
     { requestKey: `automation-run-${run.id}`, targets },

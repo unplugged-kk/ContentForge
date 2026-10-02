@@ -30,6 +30,7 @@ import {
   dispatchAutomationDueRuns,
   type AutomationDeps,
 } from "./automation";
+import { createJevFraming, framingEnabled } from "./framing";
 import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 import { createDatabaseContextReader } from "./context";
 import {
@@ -587,6 +588,9 @@ export const automationDeps: AutomationDeps = {
     return !result.deduplicated;
   },
   enqueueAutomationRun: enqueueAutomationRunJob,
+  // Bounded framing decision: Jev may narrow a policy's allowed formats to the
+  // one that best fits the derived Story. Off unless JEV_FRAMING=1.
+  ...(framingEnabled() ? { framing: createJevFraming() } : {}),
   learning: learningRecorder,
 };
 
