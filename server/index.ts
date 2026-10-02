@@ -136,6 +136,13 @@ app.use((req, res, next) => {
     END$$;
   `);
 
+  // Behind Cloudflare Tunnel / a reverse proxy, trust exactly one hop when
+  // TRUST_PROXY=1 so req.secure and req.ip reflect the client. Required for a
+  // Secure session cookie to be set when TLS terminates at the edge.
+  if (process.env.TRUST_PROXY === "1") {
+    app.set("trust proxy", 1);
+  }
+
   const PgStore = connectPg(session);
   app.use(
     session({

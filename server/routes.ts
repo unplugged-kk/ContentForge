@@ -2515,6 +2515,11 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
+      // Single-operator hardening: on a publicly reachable instance, sign-up can be
+      // closed with REGISTRATION_DISABLED=1 so only existing accounts can log in.
+      if (process.env.REGISTRATION_DISABLED === "1") {
+        return res.status(403).json({ message: "Registration is disabled on this instance." });
+      }
       const { email, password, name } = req.body;
       if (!email || !password || !name) return res.status(400).json({ message: "Email, password, and name are required" });
       if (password.length < 6) return res.status(400).json({ message: "Password must be at least 6 characters" });
