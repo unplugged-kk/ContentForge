@@ -301,7 +301,7 @@ the visual direction.
 
 ## 8. What "done" means for an implementation agent
 
-1. It read this file and `docs/design-coordinator-synthesis.md` §3 for its own row.
+1. It read this file and `docs/archive/audits/design-coordinator-synthesis.md` §3 for its own row.
 2. It touched only files it owns.
 3. It preserved behaviour: same data, same routes, same API calls, same user-facing
    capability. Structural change only.

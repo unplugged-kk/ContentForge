@@ -1,50 +1,45 @@
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+# Working in ContentForge
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+Navigation rules for coding agents. Keep this file short — it is injected into
+every session, so every line here costs tokens.
 
-### When to use graph tools FIRST
+## Read these first
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
+- **`CURRENT_ARCHITECTURE.md`** — the authoritative architecture doc (dated,
+  "as built, not as documented"). Read it before any architecture question.
+- **`docs/README.md`** — the index of every other doc, each tagged `CURRENT`
+  or `HISTORICAL`. Anything tagged HISTORICAL describes a past phase and may
+  contradict the code. Do not treat it as current.
+- **`docs/archive/`** — frozen history (pre-June plans, phase reports). Open
+  only to answer "what did we do in phase N".
 
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+## Use the graph before grepping
 
-### Key Tools
+This repo is indexed. Prefer graph lookups over `grep`/`read_file` — they
+return exact `file:line` spans and cost a fraction of the tokens.
 
-| Tool | Use when |
-|------|----------|
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
+- **graft** (works today, no key): `graft ask "<question>" --source`,
+  `graft skeleton <file>`, `graft callers <symbol>`, `graft grep "<literal>"`.
+  MCP equivalents: `graft_find_code`, `graft_file_api`, `graft_trace_calls`,
+  `graft_find_all`, `graft_repo_map`. If `graft/` is missing, run `make graph`.
+- **code-review-graph** (must be built once per clone): call
+  `build_or_update_graph_tool`, then `embed_graph_tool`, before trusting
+  `semantic_search_nodes`. Until then its index is stale and keyword-only.
+  **It does NOT auto-update via hooks** — rebuild it after large changes, or
+  run `make graph`.
+- **graphify is not maintained here.** `graphify-out/` is stale and
+  gitignored. Ignore it.
 
-### Workflow
+`make orient` prints the repo map plus the doc index — one cheap call to get
+your bearings in a fresh session.
 
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+## Filenames are ambiguous — always use full paths
 
-## graphify
-
-This project has a graphify knowledge graph at graphify-out/.
-
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+This tree has 14 `index.ts`, 13 `routes.ts`, 6 `storage.ts`, 5 `service.ts`,
+and 5 `http.ts`. A bare filename tells you nothing. When reading, grepping, or
+discussing a file, use the repo-relative path (`server/content/storage.ts`, not
+`storage.ts`), and read a file once — a file you have already read stays in
+context.
 
 <!-- graft:start -->
 ## Graft — repo context graph

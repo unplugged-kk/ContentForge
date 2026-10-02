@@ -1,3 +1,10 @@
+# ContentForge — agent notes
+
+Navigation rules live in **`AGENTS.md`** (see it for the canonical docs,
+`docs/README.md`, and the ambiguous-filename rule). Short version:
+`CURRENT_ARCHITECTURE.md` is authoritative, `docs/README.md` indexes the rest,
+and `make graph` / `make orient` build and orient the graphs.
+
 <!-- graft:start -->
 ## Graft — repo context graph
 

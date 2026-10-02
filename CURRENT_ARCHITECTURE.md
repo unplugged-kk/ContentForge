@@ -1,7 +1,7 @@
 # ContentForge — Current Architecture (as built, not as documented)
 
 **Date:** 2026-10-02 · **Mode:** read-only audit, no code modified · **Source of truth:** the code.
-**Supersedes:** `JEV-OPPORTUNITY-AUDIT.md` (2026-09-20). Reuses its JC-01…JC-11 candidate table.
+**Supersedes:** `docs/archive/JEV-OPPORTUNITY-AUDIT.md` (2026-09-20). Reuses its JC-01…JC-11 candidate table.
 **Companion:** `JEV_DECISION_MAP.md`.
 
 ---
@@ -141,4 +141,4 @@ Tables that matter for a decision layer: `researchJobs/Sources/Evidence/Analyses
 ## 9. The two structural problems a decision layer must not inherit
 
 1. **The decision surface is split.** The canonical lifecycle is already deterministic and nearly decision-free; the *actual* decisions live in the legacy monolith (`routes.ts`, `discoverRefresh.ts`, `autopilot.ts`, `marketPulse.ts`, `shared/agent-ui.ts`). A decision layer wired only into the canonical chain would decide almost nothing that matters; wired only into the legacy chain it would fight code that is deliberately heuristic. Both must be covered, and the coverage must be explicit per candidate.
-2. **Prior art exists and is half-implemented.** `JEV-ARCHITECTURE.md` (facade sketch), `JEV-CANDIDATES.md` (JC-01…JC-11 + Tier 4), `JEV-MIGRATION-PLAN.md` (phased rollout) were written as design-only, and `server/decision/*` + `triageGate` + `framing` now implement a slice of them. Any new work must extend that code rather than start a parallel one.
+2. **Prior art exists and is half-implemented.** `docs/archive/JEV-ARCHITECTURE.md` (facade sketch), `docs/archive/JEV-CANDIDATES.md` (JC-01…JC-11 + Tier 4), `docs/archive/JEV-MIGRATION-PLAN.md` (phased rollout) were written as design-only, and `server/decision/*` + `triageGate` + `framing` now implement a slice of them. Any new work must extend that code rather than start a parallel one.

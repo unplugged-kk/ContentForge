@@ -1,6 +1,6 @@
 # ContentForge — Jev Decision Map
 
-**Date:** 2026-10-02 · **Companion:** `CURRENT_ARCHITECTURE.md` · **Supersedes:** `JEV-ARCHITECTURE.md`, `JEV-CANDIDATES.md`, `JEV-MIGRATION-PLAN.md` (design-only, 2026-09-20), reusing their JC-01…JC-11 table.
+**Date:** 2026-10-02 · **Companion:** `CURRENT_ARCHITECTURE.md` · **Supersedes:** `docs/archive/JEV-ARCHITECTURE.md`, `docs/archive/JEV-CANDIDATES.md`, `docs/archive/JEV-MIGRATION-PLAN.md` (design-only, 2026-09-20), reusing their JC-01…JC-11 table.
 
 The rule this map encodes:
 

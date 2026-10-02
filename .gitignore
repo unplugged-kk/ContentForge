@@ -22,7 +22,11 @@ vite.config.ts.*
 .claude/
 .cursor/
 .codex/
-.mcp.json
+
+# NOTE: .mcp.json is intentionally TRACKED. It registers the code-review-graph
+# and graft MCP servers that AGENTS.md relies on. Keeping it ignored meant every
+# fresh clone/worktree silently lost the "use the graph first" tooling.
+# Do not add secrets here; it is committed.
 
 # code-review-graph
 .code-review-graph/
