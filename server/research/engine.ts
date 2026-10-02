@@ -97,6 +97,19 @@ export interface ResearchEngineDeps {
   logSink?: LogSink;
   now?: () => Date;
   seo?: SeoProviderPort;
+  /**
+   * Optional triage gate. When present, only the sources it keeps continue to
+   * evidence derivation and analysis; a missing/failing gate is fail-open.
+   */
+  triage?: ResearchTriagePort;
+}
+
+/** Decides which collected sources are worth continuing (Jev, in production). */
+export interface ResearchTriagePort {
+  gate(
+    sources: NormalizedSource[],
+    ctx: { query?: string },
+  ): Promise<{ kept: NormalizedSource[]; dropped: NormalizedSource[] } | null>;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -267,6 +280,26 @@ export class ResearchEngine {
       const windowed = filterByWindow(deduped, resolvedWindow);
       const kept = windowed.slice(0, budget.maxSources);
 
+      // Optional triage gate (wired at composition when JEV_RESEARCH_GATE=1):
+      // only sources worth pursuing continue to evidence/analysis. Fail-open.
+      let gated = kept;
+      let triageDropped: NormalizedSource[] = [];
+      if (this.deps.triage && kept.length > 0) {
+        try {
+          const outcome = await this.deps.triage.gate(kept, { query: input.query });
+          if (outcome) {
+            gated = outcome.kept;
+            triageDropped = outcome.dropped;
+          }
+        } catch (error) {
+          this.log(
+            { correlationId, jobId: job.id, error: describeError(error) },
+            "research triage gate failed; continuing without it",
+          );
+        }
+      }
+      const droppedCount = dropped.length + triageDropped.length;
+
       // Zero sources survived: distinguish "every provider failed" (a recoverable
       // job failure that the queue should retry/reschedule) from "providers ran
       // but produced nothing usable" (a permanent outcome). Locked Ticket 04 §2;
@@ -310,14 +343,14 @@ export class ResearchEngine {
 
       // Persist sources, then derive evidence against the stored ids so
       // provenance survives (Ticket 04 §5).
-      const stored: StoredSource[] = await this.deps.storage.insertSources(job.id, kept);
+      const stored: StoredSource[] = await this.deps.storage.insertSources(job.id, gated);
 
-      const derived: DerivedEvidence[] = deriveEvidence(kept);
+      const derived: DerivedEvidence[] = deriveEvidence(gated);
       if (input.authorStatement) {
         derived.push(authorStatementEvidence(input.authorStatement, this.now()));
       }
 
-      const validity = validateResearch({ sources: kept, evidence: derived });
+      const validity = validateResearch({ sources: gated, evidence: derived });
       if (!validity.valid) {
         const message = `Research produced no usable evidence (${validity.reasons.join(", ")})`;
         await this.deps.storage.markFailed(job.id, "permanent", message, diagnostics);
@@ -327,9 +360,9 @@ export class ResearchEngine {
           correlationId,
           status: "failed",
           reused: false,
-          sourceCount: kept.length,
+          sourceCount: gated.length,
           evidenceCount: 0,
-          droppedCount: dropped.length,
+          droppedCount,
           dropped,
           diagnostics,
           failureClass: "permanent",
@@ -357,7 +390,7 @@ export class ResearchEngine {
 
       const analysis = analyzeResearch({
         query: input.query ?? "",
-        sources: kept,
+        sources: gated,
         diagnostics,
         summary: collectionSummary,
         window: resolvedWindow,
@@ -377,9 +410,9 @@ export class ResearchEngine {
         {
           correlationId,
           jobId: job.id,
-          sourceCount: kept.length,
+          sourceCount: gated.length,
           evidenceCount,
-          droppedCount: dropped.length,
+          droppedCount,
           providers: input.providerIds.length,
           quality: analysis.quality,
         },
@@ -391,9 +424,9 @@ export class ResearchEngine {
         correlationId,
         status: "complete",
         reused: false,
-        sourceCount: kept.length,
+        sourceCount: gated.length,
         evidenceCount,
-        droppedCount: dropped.length,
+        droppedCount,
         dropped,
         diagnostics,
         analysis,
