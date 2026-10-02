@@ -15,6 +15,7 @@ import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
 import type {
   ContentStrategyDecision,
   OpportunityScoreDecision,
+  PublishGateDecision,
   QualityGateDecision,
   ResearchDepthDecision,
   TriageDecision,
@@ -375,6 +376,71 @@ describe("decide — content_strategy", () => {
     );
     assert.equal(result.fallback, true);
     assert.deepEqual(result.decision, { angle: null, audience: null, goal: null, expertise: null });
+  });
+});
+
+// ── publish gate ─────────────────────────────────────────────────────────────
+describe("decide — publish_gate", () => {
+  const PUBLISH_STATE = {
+    platform: { channel: "x", format: "x_post", maxCharacters: 280 },
+    quality: { signals: { boilerplate: 0.1 }, flags: [] },
+  };
+
+  const judgement = (ready: number, distinct: number, fit: number): JevResponse =>
+    response({
+      ready_now: noul(ready),
+      distinct_from_recent: noul(distinct),
+      platform_fit: noul(fit),
+    });
+
+  it("publishes only when everything clears the bar", async () => {
+    const result = await decide<PublishGateDecision>(
+      { type: "publish_gate", state: PUBLISH_STATE, refs: { artifactId: 3 } },
+      deps({ jevDecide: async () => judgement(0.9, 0.8, 0.9) }),
+    );
+    assert.equal(result.decision.outcome, "publish");
+    assert.equal(result.fallback, false);
+    assert.equal(result.policyId, "publish-gate");
+  });
+
+  it("holds when it is neither clearly ready nor clearly unfit", async () => {
+    const result = await decide<PublishGateDecision>(
+      { type: "publish_gate", state: PUBLISH_STATE },
+      deps({ jevDecide: async () => judgement(0.5, 0.5, 0.5) }),
+    );
+    assert.equal(result.decision.outcome, "hold");
+  });
+
+  it("rejects clearly unfit content — and low confidence does not soften it", async () => {
+    const result = await decide<PublishGateDecision>(
+      { type: "publish_gate", state: PUBLISH_STATE },
+      deps({ jevDecide: async () => judgement(0.1, 0.15, 0.2) }),
+    );
+    assert.equal(result.decision.outcome, "reject");
+    assert.equal(result.fallback, false, "a conservative rejection needs no confidence");
+  });
+
+  it("holds — never publishes — when the judgment is unreadable", async () => {
+    const result = await decide<PublishGateDecision>(
+      { type: "publish_gate", state: PUBLISH_STATE },
+      deps({ jevDecide: async () => response({}) }),
+    );
+    assert.deepEqual(result.decision, { outcome: "hold", score: null });
+    assert.equal(result.fallback, true);
+  });
+
+  it("holds — never publishes — when Jev is unavailable", async () => {
+    const result = await decide<PublishGateDecision>(
+      { type: "publish_gate", state: PUBLISH_STATE },
+      deps({
+        jevDecide: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+      }),
+    );
+    assert.equal(result.decision.outcome, "hold");
+    assert.equal(result.fallback, true);
+    assert.match(result.reasons[0], /failed/);
   });
 });
 

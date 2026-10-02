@@ -84,6 +84,20 @@ export const contentStrategyDecisionSchema = z.object({
 });
 export type ContentStrategyDecision = z.infer<typeof contentStrategyDecisionSchema>;
 
+// ── publishing ───────────────────────────────────────────────────────────────
+/**
+ * `hold` = a human must decide. It never auto-approves, which is precisely what
+ * an unattended path needs: no answer cannot become a publish.
+ */
+export const PUBLISH_OUTCOMES = ["publish", "hold", "reject"] as const;
+export type PublishOutcome = (typeof PUBLISH_OUTCOMES)[number];
+
+export const publishGateDecisionSchema = z.object({
+  outcome: z.enum(PUBLISH_OUTCOMES),
+  score: z.number().min(0).max(1).nullable(),
+});
+export type PublishGateDecision = z.infer<typeof publishGateDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
@@ -91,6 +105,7 @@ export const DECISION_SCHEMAS = {
   opportunity_score: opportunityScoreDecisionSchema,
   quality_gate: qualityGateDecisionSchema,
   content_strategy: contentStrategyDecisionSchema,
+  publish_gate: publishGateDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(

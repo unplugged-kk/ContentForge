@@ -12,8 +12,8 @@
  * mirrors `performance_signals` aggregates.
  */
 
-import { createHash } from "node:crypto";
 import type { HardConstraints } from "./validator";
+import { canonicalJson, sha256 } from "../utils/hash";
 
 export const STATE_BOUNDS = {
   maxStringChars: 2000,
@@ -256,17 +256,7 @@ export function normalizeState(input: unknown): ContentForgeState {
 }
 
 // ── hashing ──────────────────────────────────────────────────────────────────
-/** Deterministic JSON (sorted keys) so a state always hashes identically. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
-}
-
 export function hashState(state: ContentForgeState): string {
   const canonical = canonicalJson(state).slice(0, STATE_BOUNDS.maxHashInputChars);
-  return createHash("sha256").update(canonical).digest("hex");
+  return sha256(canonical);
 }

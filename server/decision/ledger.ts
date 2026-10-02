@@ -55,6 +55,17 @@ export interface DecisionLedgerPort {
     actual: Record<string, unknown>,
     at?: Date,
   ): Promise<DecisionLedgerRow | undefined>;
+  /**
+   * Attach an observed outcome to EVERY decision that referenced this entity.
+   * A publication is the outcome of several decisions (a publish gate, an
+   * opportunity score, a strategy call), so the loop closes on all of them at
+   * once. Returns how many rows were updated.
+   */
+  attachOutcomeByRef(
+    ref: { publicationId?: number; artifactId?: number },
+    actual: Record<string, unknown>,
+    at?: Date,
+  ): Promise<number>;
 }
 
 export function newDecisionId(): string {

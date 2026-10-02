@@ -87,6 +87,14 @@ const POLICIES = {
     flag: "JEV_CONTENT_STRATEGY",
     description: "Which lead angle, audience and goal a candidate direction takes",
   },
+  publish_gate: {
+    id: "publish-gate",
+    version: "v1",
+    fallback: "fail_closed_hold",
+    minConfidence: 0.4,
+    flag: "JEV_PUBLISH_GATE",
+    description: "May this be auto-approved and queued for publication without a human?",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;
@@ -139,6 +147,17 @@ export function qualityThresholds(): { approve: number; revise: number } {
   return {
     approve: envNum("JEV_QUALITY_APPROVE", 0.7),
     revise: envNum("JEV_QUALITY_REVISE", 0.45),
+  };
+}
+
+/**
+ * `reject` is the only outcome that actively blocks; `hold` means "a human must
+ * decide", which is where an unattended path stops anyway.
+ */
+export function publishThresholds(): { publish: number; reject: number } {
+  return {
+    publish: envNum("JEV_PUBLISH_APPROVE", 0.7),
+    reject: envNum("JEV_PUBLISH_REJECT", 0.35),
   };
 }
 

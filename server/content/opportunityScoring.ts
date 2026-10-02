@@ -23,6 +23,7 @@ import {
   expertiseBand,
   type ExpertiseProfile,
 } from "../intelligence/expertise";
+import { reachSignalRecord, type ReachSignals } from "../intelligence/reach";
 import type { JsonRecord } from "./storage";
 
 export interface OpportunityScoringInput {
@@ -55,6 +56,8 @@ export interface OpportunityScoringDeps {
   decide?: typeof decide;
   /** Supplies the creator's expertise profile; defaults to an empty one. */
   loadProfile?: (userId: number | null | undefined) => Promise<ExpertiseProfile>;
+  /** Supplies reach evidence from our own history; omitted ⇒ no reach evidence. */
+  loadReach?: (userId: number | null | undefined) => Promise<ReachSignals | null>;
   /** Whether to also ask the strategy decision. Defaults to its own flag. */
   strategyEnabled?: () => boolean;
 }
@@ -64,6 +67,7 @@ export function createJevOpportunityScoring(
 ): OpportunityScoringPort {
   const run = deps.decide ?? decide;
   const loadProfile = deps.loadProfile ?? (async () => buildExpertiseProfile());
+  const loadReach = deps.loadReach ?? (async () => null);
   const strategyEnabled = deps.strategyEnabled ?? (() => decisionTypeEnabled("content_strategy"));
 
   return {
@@ -75,6 +79,15 @@ export function createJevOpportunityScoring(
         angles: input.angles,
       });
 
+      // Reach evidence is optional: without history there is nothing honest to
+      // report, and the decision must not be handed a fabricated zero.
+      let reach: ReachSignals | null = null;
+      try {
+        reach = (await loadReach(input.userId)) ?? null;
+      } catch {
+        reach = null;
+      }
+
       const state = {
         topic: { title: input.concept, query: input.objective, angles: input.angles },
         expertise: {
@@ -85,6 +98,7 @@ export function createJevOpportunityScoring(
         },
         audience: { options: profile.audiences },
         platform: { channel: input.channel, format: input.format },
+        ...(reach ? { reach: reachSignalRecord(reach) } : {}),
       };
 
       const scored = await run<OpportunityScoreDecision>({
@@ -107,6 +121,16 @@ export function createJevOpportunityScoring(
         },
         policy: `${scored.policyId}@${scored.policyVersion}`,
         fallback: scored.fallback,
+        ...(reach
+          ? {
+              reach: {
+                historical_performance: reach.historical_performance,
+                reach_potential: reach.reach_potential,
+                sampleSize: reach.sampleSize,
+                confidence: reach.confidence,
+              },
+            }
+          : {}),
       };
 
       let audience: string | null = null;

@@ -15,6 +15,7 @@ import { researchDepthDefinition, researchTriageDefinition } from "./decisions/r
 import { opportunityScoreDefinition } from "./decisions/opportunity";
 import { qualityGateDefinition } from "./decisions/quality";
 import { contentStrategyDefinition } from "./decisions/strategy";
+import { publishGateDefinition } from "./decisions/publishing";
 
 /** Entity references a decision can be attached to (all optional). */
 export interface DecisionRefs {
@@ -63,6 +64,7 @@ export const DECISION_REGISTRY: Record<DecisionType, DecisionDefinition<unknown>
   opportunity_score: opportunityScoreDefinition,
   quality_gate: qualityGateDefinition,
   content_strategy: contentStrategyDefinition,
+  publish_gate: publishGateDefinition,
 };
 
 export function getDecisionDefinition(type: DecisionType): DecisionDefinition<unknown> {

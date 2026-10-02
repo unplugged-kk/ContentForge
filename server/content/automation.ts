@@ -448,6 +448,12 @@ export interface AutomationDeps {
    * throwing ⇒ the policy's targets stand).
    */
   framing?: import("./framing").FramingPort;
+  /**
+   * Optional publish gate, consulted ONLY on the unattended path
+   * (`settleTrustedArtifact`). `hold`/`reject` leave the artifact for a human;
+   * absent ⇒ trusted automation behaves exactly as before.
+   */
+  publishGate?: import("./publishGate").PublishGatePort;
 }
 
 // ── policy service ────────────────────────────────────────────────────────────
@@ -1184,6 +1190,29 @@ async function settleTrustedArtifact(
 ): Promise<number | null> {
   let artifact: Artifact | undefined = await deps.content.getArtifact(artifactId);
   if (!artifact) return null;
+
+  // Unattended approval is the one place a model may say "not without a human".
+  // A hold/reject simply stops here: the artifact stays where it is and lands in
+  // the review queue, which is exactly where a break in automation belongs. It
+  // cannot override readiness, ownership or any other hard constraint — those
+  // are enforced below and in the Artifact domain.
+  if (deps.publishGate) {
+    let review: Awaited<ReturnType<typeof deps.publishGate.review>> | null = null;
+    try {
+      review = await deps.publishGate.review({
+        artifactId,
+        userId: artifact.userId,
+        format: artifact.format,
+        channel: artifact.channel,
+        payload: artifact.payload,
+      });
+    } catch {
+      review = null; // an unusable gate holds: it never auto-approves
+    }
+    if (!review || review.outcome !== "publish") {
+      return null;
+    }
+  }
 
   if (artifact.readiness === "draft") {
     artifact = await submitArtifactForReview(artifactId, {

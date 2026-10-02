@@ -31,9 +31,16 @@ import {
   type AutomationDeps,
 } from "./automation";
 import { createJevFraming, framingEnabled } from "./framing";
+import { createContentPublishGate } from "./publishGate";
+import { attachPublicationOutcome } from "../decision/outcomes";
+import { decisionLedger } from "../decision/service";
+import { eq } from "drizzle-orm";
+import { performanceSignals } from "@shared/schema";
 import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 import { createDatabaseContextReader } from "./context";
 import { buildExpertiseProfile } from "../intelligence/expertise";
+import { computeReachSignals } from "../intelligence/reach";
+import { computeAnalyticsSummary } from "./learning/summary";
 import { decisionTypeEnabled } from "../decision/policies";
 import { createJevOpportunityScoring } from "./opportunityScoring";
 import {
@@ -571,8 +578,30 @@ export const opportunityScoring = decisionTypeEnabled("opportunity_score")
           audienceDescription: profile?.audienceDescription,
         });
       },
+      // Reach evidence comes from our own measured history. Absent history ⇒
+      // null, never a zero that would read as "this account reaches nobody".
+      loadReach: async (userId) => {
+        if (!userId) return null;
+        try {
+          const summary = await computeAnalyticsSummary(db, userId);
+          return computeReachSignals({
+            publishedCount: summary.publishedCount,
+            byChannel: summary.byChannel,
+            metricTotals: summary.metricTotals,
+          });
+        } catch {
+          return null;
+        }
+      },
     })
   : undefined;
+
+/**
+ * Unattended-approval gate (Phase 5). Present only when the decision layer and
+ * JEV_PUBLISH_GATE are both on. A `hold` leaves the artifact in the human review
+ * queue instead of auto-approving it — never the other way round.
+ */
+export const publishGate = createContentPublishGate();
 
 /**
  * Automation composition root. Every dependency here is an EXISTING primitive —
@@ -619,6 +648,9 @@ export const automationDeps: AutomationDeps = {
   // Bounded framing decision: Jev may narrow a policy's allowed formats to the
   // one that best fits the derived Story. Off unless JEV_FRAMING=1.
   ...(framingEnabled() ? { framing: createJevFraming() } : {}),
+  // Unattended-approval gate: off unless the decision layer and JEV_PUBLISH_GATE
+  // are both on. A hold leaves the artifact for a human, never auto-approves.
+  ...(publishGate ? { publishGate } : {}),
   learning: learningRecorder,
 };
 
@@ -654,6 +686,35 @@ export function registerAnalyticsRefreshJob(
         { publicationId: result.publicationId, status: result.status, created: result.created, reused: result.reused },
         "analytics refresh complete",
       );
+
+      // Close the decision feedback loop: attach the observed outcome to every
+      // decision that fed this publication (publish gate, opportunity score,
+      // strategy). Best-effort by construction — recording an outcome must never
+      // disturb the metrics pipeline it hangs off.
+      const attached = await attachPublicationOutcome(payload.publicationId, {
+        ledger: decisionLedger,
+        loadMetrics: async (publicationId) => {
+          const rows = await db
+            .select({
+              metric: performanceSignals.metric,
+              value: performanceSignals.value,
+              availability: performanceSignals.availability,
+            })
+            .from(performanceSignals)
+            .where(eq(performanceSignals.publicationId, publicationId));
+          return rows.map((row) => ({
+            metric: row.metric,
+            value: row.value === null ? null : Number(row.value),
+            availability: row.availability,
+          }));
+        },
+      });
+      if (attached > 0) {
+        ctx.logger.info(
+          { publicationId: payload.publicationId, decisionsUpdated: attached },
+          "decision outcomes attached",
+        );
+      }
     },
   };
   registerJob(definition);

@@ -5,7 +5,7 @@
  * database (the same shape `automationStorage.ts` uses).
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { jevDecisions } from "@shared/schema";
@@ -117,5 +117,38 @@ export class DatabaseDecisionLedger implements DecisionLedgerPort {
       .where(eq(jevDecisions.decisionId, decisionId))
       .returning();
     return row ? toRow(row) : undefined;
+  }
+
+  async attachOutcomeByRef(
+    ref: { publicationId?: number; artifactId?: number },
+    actual: Record<string, unknown>,
+    at: Date = new Date(),
+  ): Promise<number> {
+    // Select-then-update rather than a jsonb WHERE: the ref columns are queried
+    // as text, which keeps this portable and lets the caller learn the count.
+    const matches: number[] = [];
+    if (ref.publicationId !== undefined) {
+      const rows = await this.database
+        .select({ id: jevDecisions.id })
+        .from(jevDecisions)
+        .where(sql`${jevDecisions.refs}->>'publicationId' = ${String(ref.publicationId)}`);
+      for (const row of rows) matches.push(row.id);
+    }
+    if (ref.artifactId !== undefined) {
+      const rows = await this.database
+        .select({ id: jevDecisions.id })
+        .from(jevDecisions)
+        .where(sql`${jevDecisions.refs}->>'artifactId' = ${String(ref.artifactId)}`);
+      for (const row of rows) matches.push(row.id);
+    }
+    const ids = Array.from(new Set(matches));
+    if (ids.length === 0) return 0;
+
+    const updated = await this.database
+      .update(jevDecisions)
+      .set({ actual, actualAt: at })
+      .where(inArray(jevDecisions.id, ids))
+      .returning({ id: jevDecisions.id });
+    return updated.length;
   }
 }

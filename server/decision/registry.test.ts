@@ -11,7 +11,6 @@ import { describe, it } from "node:test";
 import { DECISION_TYPES, decisionPolicy } from "./policies";
 import { DECISION_REGISTRY, getDecisionDefinition } from "./registry";
 import { validateDecision, type TriageDecision } from "./schemas";
-import { agreementRate } from "./shadow";
 
 describe("decision registry", () => {
   it("covers every declared decision type", () => {
@@ -80,14 +79,5 @@ describe("decision schemas", () => {
     assert.throws(() => validateDecision("research_depth", { depth: "medium" }));
     assert.throws(() => validateDecision("opportunity_score", { score: 2, band: "high" }));
     assert.throws(() => validateDecision("opportunity_score", { score: 0.5, band: "extreme" }));
-  });
-});
-
-describe("shadow agreement", () => {
-  it("is 1 for identical sets, 0 for disjoint, and a Jaccard in between", () => {
-    assert.equal(agreementRate([0, 1], [0, 1]), 1);
-    assert.equal(agreementRate([0, 1], [2, 3]), 0);
-    assert.equal(agreementRate([0, 1], [1, 2]), 0.3333);
-    assert.equal(agreementRate([], []), 1);
   });
 });
