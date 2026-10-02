@@ -13,6 +13,7 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
+import { describeRoutes } from "./ai/router";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
 import { getThreadsConfigSummary, threadsTokenExpiryFromNow, verifyThreadsAccessToken } from "./social/threads";
@@ -517,6 +518,10 @@ export async function registerRoutes(
   });
 
   // ── AI USAGE DASHBOARD ────────────────────────────────────────────────────────
+  app.get("/api/ai/routing", (_req, res) => {
+    res.json({ routes: describeRoutes() });
+  });
+
   app.get("/api/ai-usage/dashboard", async (req, res) => {
     try {
       const days = Number(req.query.days ?? 30);
