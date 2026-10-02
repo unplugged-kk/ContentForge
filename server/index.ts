@@ -231,6 +231,10 @@ app.use((req, res, next) => {
   const { createDefaultResearchRouter } = await import("./research/routes");
   app.use("/api/research", await createDefaultResearchRouter());
 
+  // Decision API (Jev). Decides only — never creates research/opportunities/posts.
+  const { createDecisionRouter } = await import("./decision/routes");
+  app.use("/api/decision", createDecisionRouter());
+
   // Story API. `ResearchJob → Story` is a cheap read of durable research: it
   // never enqueues and never re-runs research.
   const { createDefaultStoryRouter } = await import("./story/routes");
