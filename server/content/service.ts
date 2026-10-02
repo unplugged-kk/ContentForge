@@ -33,6 +33,9 @@ import {
 import { createJevFraming, framingEnabled } from "./framing";
 import { createGatewayChatIntent, createGatewayGenerationModel } from "./model";
 import { createDatabaseContextReader } from "./context";
+import { buildExpertiseProfile } from "../intelligence/expertise";
+import { decisionTypeEnabled } from "../decision/policies";
+import { createJevOpportunityScoring } from "./opportunityScoring";
 import {
   runGenerationJob,
   type GenerationDeps,
@@ -545,6 +548,31 @@ export async function enqueueAutomationRunJob(run: AutomationRun): Promise<boole
   });
   return !result.deduplicated;
 }
+
+/**
+ * Advisory Opportunity scoring (Phase 4). Present only when the decision layer
+ * and JEV_OPPORTUNITY_SCORE are both on, so a default deployment creates
+ * Opportunities exactly as it always did — with `score` null.
+ *
+ * The expertise profile comes from the same reader ContextAssembly uses, so the
+ * evidence a decision rests on and the context generation receives cannot drift.
+ */
+const expertiseReader = createDatabaseContextReader(db);
+
+export const opportunityScoring = decisionTypeEnabled("opportunity_score")
+  ? createJevOpportunityScoring({
+      loadProfile: async (userId) => {
+        if (!userId) return buildExpertiseProfile();
+        const profile = await expertiseReader.getUserProfile(userId);
+        return buildExpertiseProfile({
+          niche: profile?.niche,
+          pillars: profile?.messagingPillars,
+          goals: profile?.contentGoals,
+          audienceDescription: profile?.audienceDescription,
+        });
+      },
+    })
+  : undefined;
 
 /**
  * Automation composition root. Every dependency here is an EXISTING primitive —

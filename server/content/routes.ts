@@ -142,6 +142,11 @@ export interface ContentApiDeps {
    * review. Absent ⇒ submission behaves exactly as it did before.
    */
   qualityGate?: import("./qualityGate").QualityGatePort;
+  /**
+   * Optional advisory Opportunity scoring (Phase 4). Absent ⇒ Opportunities are
+   * created exactly as before, with `score` null.
+   */
+  opportunityScoring?: import("./opportunityScoring").OpportunityScoringPort;
   /** Optional so existing test doubles that build `ContentApiDeps` by hand are unaffected. */
   style?: import("./styleService").StyleServiceDeps;
   enqueueStyleAnalysis?: (analysis: import("@shared/schema").StyleAnalysis) => Promise<boolean>;
@@ -538,7 +543,10 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!story || isForeignRow(story, getUserId(req))) {
         return res.status(404).json({ message: "Story not found" });
       }
-      const opportunity = await createOpportunityFromStory(storyId, rest, deps.opportunities);
+      const opportunity = await createOpportunityFromStory(storyId, rest, {
+        ...deps.opportunities,
+        scoring: deps.opportunityScoring,
+      });
       return res.status(201).json(serializeOpportunity(opportunity));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
@@ -2305,6 +2313,7 @@ export async function createDefaultContentRouter(): Promise<Router> {
       chatDeps,
       styleServiceDeps,
       learningRecorder,
+      opportunityScoring,
       registerContentJobs,
       GENERATION_RUN_JOB_TYPE,
       PUBLICATION_RUN_JOB_TYPE,
@@ -2326,6 +2335,8 @@ export async function createDefaultContentRouter(): Promise<Router> {
     content: contentStorage,
     // Present only when the decision layer and JEV_CONTENT_GATE are both on.
     qualityGate: createContentQualityGate(),
+    // Present only when the decision layer and JEV_OPPORTUNITY_SCORE are both on.
+    opportunityScoring,
     opportunities: { opportunities: contentStorage, stories: storyStorage },
     generation: generationDeps,
     chat: chatDeps,

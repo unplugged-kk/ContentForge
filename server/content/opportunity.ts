@@ -13,7 +13,7 @@
 import { z } from "zod";
 import type { Opportunity, Story } from "@shared/schema";
 import type { OpportunityStatus } from "@shared/schema";
-import type { ContentStoragePort } from "./storage";
+import type { ContentStoragePort, JsonRecord } from "./storage";
 import { channelSupportsFormat, hasChannelAdapter } from "./adapters";
 import { hasFormatProfile } from "./formatProfiles";
 
@@ -27,6 +27,11 @@ export interface StoryPort {
 export interface OpportunityDeps {
   opportunities: ContentStoragePort;
   stories: StoryPort;
+  /**
+   * Optional advisory scoring. Present only when the decision layer and its flag
+   * are on; absent ⇒ an Opportunity is created exactly as before, with no score.
+   */
+  scoring?: import("./opportunityScoring").OpportunityScoringPort;
 }
 
 /**
@@ -140,6 +145,29 @@ export async function createOpportunityFromStory(
   if (!story) throw new StoryNotFoundError(storyId);
   if (story.status === "archived") throw new StoryNotUsableError(storyId, story.status);
 
+  // Advisory scoring. A caller-supplied score always wins; a scoring failure
+  // never blocks creating the Opportunity (it simply leaves the score null).
+  let computedScore: number | null = null;
+  let computedBreakdown: JsonRecord | undefined;
+  if (deps.scoring) {
+    try {
+      const outcome = await deps.scoring.score({
+        storyId,
+        userId: story.userId ?? null,
+        concept: body.concept,
+        objective: body.objective,
+        format: body.format,
+        channel: body.channel,
+        title: story.title,
+        angles: story.angles ?? [],
+      });
+      computedScore = outcome.score;
+      computedBreakdown = outcome.breakdown;
+    } catch {
+      /* advisory only: the Opportunity is still created */
+    }
+  }
+
   return deps.opportunities.insertOpportunity({
     userId: story.userId ?? null,
     storyId,
@@ -150,8 +178,13 @@ export async function createOpportunityFromStory(
     format: body.format,
     channel: body.channel,
     status: "proposed",
-    score: body.score === undefined ? null : String(body.score),
-    scoreBreakdown: body.scoreBreakdown ?? {},
+    score:
+      body.score === undefined
+        ? computedScore === null
+          ? null
+          : String(computedScore)
+        : String(body.score),
+    scoreBreakdown: body.scoreBreakdown ?? computedBreakdown ?? {},
     proposer: body.proposer,
     chatKey: body.chatKey ?? null,
     repurposeKey: body.repurposeKey ?? null,
