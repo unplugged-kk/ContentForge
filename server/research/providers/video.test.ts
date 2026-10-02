@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { JobFailure } from "../../jobs/failures";
 import type { Transcript } from "../transcript";
-import { buildVideoSource, createVideoProvider } from "./video";
+import { buildVideoNoteSource, buildVideoSource, createVideoProvider } from "./video";
 
 const transcript: Transcript = {
   videoId: "abc123XYZ_-",
@@ -66,6 +66,26 @@ describe("createVideoProvider.search", () => {
       () => provider.backends[0].search!(ctx(), { text: "https://youtu.be/abc123XYZ_-" }),
       (e: unknown) => e instanceof JobFailure && /no caption track/.test((e as Error).message),
     );
+  });
+
+  it("uses the Gemini notes fallback for a captionless video when wired", async () => {
+    const provider = createVideoProvider({
+      available: async () => true,
+      fetchTranscript: async () => null,
+      videoNotes: async () => ({ text: "Core thesis: nodes are expensive. Claims: Karpenter cuts cost 40%.", model: "gemini-3.8-flash" }),
+    });
+    const sources = await provider.backends[0].search!(ctx(), { text: "https://youtu.be/abc123XYZ_-" });
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].ref.kind, "youtube-notes");
+    assert.equal(sources[0].backend, "gemini-video");
+    assert.equal(sources[0].metadata?.fallback, "gemini-video");
+    assert.match(sources[0].content?.text ?? "", /Karpenter/);
+  });
+
+  it("buildVideoNoteSource marks provenance", () => {
+    const s = buildVideoNoteSource("https://youtu.be/x", "x", { text: "notes", model: "m" });
+    assert.equal(s.metadata?.model, "m");
+    assert.equal(s.ref.kind, "youtube-notes");
   });
 
   it("fails permanently when yt-dlp is unavailable", async () => {

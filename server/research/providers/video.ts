@@ -1,12 +1,15 @@
 /**
- * Video provider — YouTube transcript intake as a first-class research source.
+ * Video provider — YouTube intake as a first-class research source.
  *
  * Mirrors the `web` provider: it reads videos it is *given* (durably via
  * `VIDEO_RESEARCH_URLS` or a request-scoped provider config) or that a directed
- * query itself supplies as a YouTube URL. Captions only — no video download and
- * no model calls; the transcript becomes a `NormalizedSource` with the text in
- * `content`, so the canonical pipeline derives evidence from it like any other
- * source.
+ * query itself supplies as a YouTube URL.
+ *
+ * Transcript-first: captions are fetched with yt-dlp and become a
+ * `NormalizedSource` (text in `content`), so the canonical pipeline derives
+ * evidence like any other source. When a video has no caption track, an
+ * **opt-in** Gemini video-understanding fallback (`VIDEO_GEMINI_FALLBACK=1`)
+ * produces a notes brief; otherwise the video fails closed.
  */
 
 import { z } from "zod";
@@ -23,6 +26,7 @@ import type {
 import { buildExcerpt, canonicalizeUrl, computeSourceHash, normalizeText } from "../normalize";
 import type { Transcript } from "../transcript";
 import { fetchYouTubeTranscript, ytDlpAvailable, youTubeIdFromUrl } from "../transcript/fetch";
+import { geminiVideoFallbackEnabled, geminiVideoNotes } from "../transcript/geminiVideo";
 import { envList } from "./providerUrls";
 
 export const VIDEO_PROVIDER_ID = "video";
@@ -35,9 +39,13 @@ export const videoProviderConfigSchema = z.object({
 
 export type VideoProviderConfig = z.infer<typeof videoProviderConfigSchema>;
 
+export type VideoNotes = { text: string; model: string };
+
 export interface VideoProviderDeps {
   fetchTranscript: (url: string) => Promise<Transcript | null>;
   available: () => Promise<boolean>;
+  /** Video-notes fallback for captionless videos (opt-in; video-token priced). */
+  videoNotes?: (url: string) => Promise<VideoNotes>;
   loadConfig?: (ctx: { userId?: number | null }) => Promise<VideoProviderConfig>;
 }
 
@@ -80,10 +88,50 @@ export function buildVideoSource(url: string, transcript: Transcript): Normalize
   };
 }
 
+/** Pure: Gemini video notes (captionless fallback) → a normalized research source. */
+export function buildVideoNoteSource(url: string, videoId: string, notes: VideoNotes): NormalizedSource {
+  const canonicalUrl = canonicalizeUrl(watchUrl(videoId));
+  const text = normalizeText(notes.text);
+  return {
+    ref: {
+      provider: VIDEO_PROVIDER_ID,
+      kind: "youtube-notes",
+      nativeId: videoId,
+      canonicalUrl,
+    },
+    provider: VIDEO_PROVIDER_ID,
+    backend: "gemini-video",
+    providerVersion: VIDEO_PROVIDER_VERSION,
+    retrievalMethod: "model",
+    accessClass: "open",
+    canonicalUrl,
+    title: `YouTube ${videoId} (video notes)`,
+    author: null,
+    publishedAt: null,
+    retrievedAt: new Date().toISOString(),
+    excerpt: buildExcerpt(text),
+    content: { text, mime: "text/plain", length: text.length, truncated: false },
+    contentHash: computeSourceHash(canonicalUrl, text),
+    metadata: {
+      videoId,
+      fallback: "gemini-video",
+      model: notes.model,
+      requestUrl: url,
+    },
+  };
+}
+
 export function createVideoProvider(overrides: Partial<VideoProviderDeps> = {}): ProviderDefinition {
   const deps: VideoProviderDeps = {
     fetchTranscript: (url) => fetchYouTubeTranscript(url),
     available: () => ytDlpAvailable(),
+    // Only wired when explicitly enabled; captionless videos otherwise fail closed.
+    ...(geminiVideoFallbackEnabled()
+      ? {
+          videoNotes: (url: string) =>
+            geminiVideoNotes(url).then((n) => ({ text: n.text, model: n.model })),
+        }
+      : {}),
     ...overrides,
   };
 
@@ -122,11 +170,18 @@ export function createVideoProvider(overrides: Partial<VideoProviderDeps> = {}):
       for (const url of targets.slice(0, limit)) {
         try {
           const transcript = await deps.fetchTranscript(url);
-          if (!transcript) {
-            failures.push(`${url}: no caption track available`);
+          if (transcript) {
+            collected.push(buildVideoSource(url, transcript));
             continue;
           }
-          collected.push(buildVideoSource(url, transcript));
+          // No caption track: opt-in Gemini video understanding, else fail closed.
+          const videoId = youTubeIdFromUrl(url);
+          if (deps.videoNotes && videoId) {
+            const notes = await deps.videoNotes(url);
+            collected.push(buildVideoNoteSource(url, videoId, notes));
+            continue;
+          }
+          failures.push(`${url}: no caption track available`);
         } catch (error) {
           failures.push(`${url}: ${describeError(error)}`);
         }
@@ -139,8 +194,13 @@ export function createVideoProvider(overrides: Partial<VideoProviderDeps> = {}):
 
     async fetch(ctx: FetchContext, ref: SourceRef): Promise<NormalizedSource> {
       const transcript = await deps.fetchTranscript(ref.canonicalUrl);
-      if (!transcript) throw JobFailure.permanent(`no captions for ${ref.canonicalUrl}`);
-      return buildVideoSource(ref.canonicalUrl, transcript);
+      if (transcript) return buildVideoSource(ref.canonicalUrl, transcript);
+      const videoId = youTubeIdFromUrl(ref.canonicalUrl);
+      if (deps.videoNotes && videoId) {
+        const notes = await deps.videoNotes(ref.canonicalUrl);
+        return buildVideoNoteSource(ref.canonicalUrl, videoId, notes);
+      }
+      throw JobFailure.permanent(`no captions for ${ref.canonicalUrl}`);
     },
   };
 
@@ -149,7 +209,7 @@ export function createVideoProvider(overrides: Partial<VideoProviderDeps> = {}):
     contractVersion: "1",
     version: VIDEO_PROVIDER_VERSION,
     accessClass: "open",
-    description: "YouTube transcript intake (captions only; yt-dlp)",
+    description: "YouTube intake: captions (yt-dlp) with an opt-in Gemini video fallback",
     backends: [backend],
     configSchema: videoProviderConfigSchema,
     ...(deps.loadConfig ? { resolveConfig: (ctx) => deps.loadConfig!(ctx) } : {}),
