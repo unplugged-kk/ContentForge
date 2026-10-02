@@ -2462,3 +2462,57 @@ export const insertAutonomyDecisionSchema = createInsertSchema(autonomyDecisions
 export type AutonomyDecision = typeof autonomyDecisions.$inferSelect;
 export type InsertAutonomyDecision = z.infer<typeof insertAutonomyDecisionSchema>;
 
+/**
+ * Decision ledger (Jev Decision OS). Every decision the decision layer makes is
+ * recorded here with its policy identity, so "which policy produced this?" and
+ * "was it right?" are answerable from the database, never only from logs.
+ *
+ * Distinct from `autonomy_decisions`, which journals the autonomy controller
+ * alone: this covers every decision type and carries an input-state hash, a
+ * numeric confidence, a NOT NULL policy version, and the predicted/actual pair
+ * that closes the feedback loop.
+ */
+export const jevDecisions = pgTable(
+  "jev_decisions",
+  {
+    id: serial("id").primaryKey(),
+    /** Public, stable identifier (e.g. dec_...). */
+    decisionId: varchar("decision_id", { length: 60 }).notNull(),
+    userId: integer("user_id"),
+    decisionType: varchar("decision_type", { length: 60 }).notNull(),
+    policyId: varchar("policy_id", { length: 80 }).notNull(),
+    policyVersion: varchar("policy_version", { length: 40 }).notNull(),
+    /** sha256 of the normalized input state — makes a decision reproducible. */
+    inputStateHash: varchar("input_state_hash", { length: 64 }).notNull(),
+    decision: jsonb("decision").$type<Record<string, unknown>>().notNull().default({}),
+    confidence: decimal("confidence", { precision: 5, scale: 4 }),
+    reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+    signals: jsonb("signals").$type<Record<string, unknown>>().notNull().default({}),
+    /** true ⇒ Jev was not used or was unusable; a declared fallback produced the decision. */
+    fallback: boolean("fallback").notNull().default(false),
+    latencyMs: integer("latency_ms"),
+    model: varchar("model", { length: 80 }),
+    transport: varchar("transport", { length: 20 }),
+    /** Entity references: researchJobId, storyId, opportunityId, artifactId, publicationId, automationRunId. */
+    refs: jsonb("refs").$type<Record<string, unknown>>().notNull().default({}),
+    predicted: jsonb("predicted").$type<Record<string, unknown>>(),
+    actual: jsonb("actual").$type<Record<string, unknown>>(),
+    actualAt: timestamp("actual_at"),
+    correlationId: varchar("correlation_id", { length: 80 }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    uniqueIndex("jev_decisions_decision_id_uq").on(table.decisionId),
+    index("jev_decisions_type_created_idx").on(table.decisionType, table.createdAt),
+    index("jev_decisions_state_hash_idx").on(table.inputStateHash),
+    index("jev_decisions_user_idx").on(table.userId),
+  ],
+);
+
+export const insertJevDecisionSchema = createInsertSchema(jevDecisions).omit({
+  id: true,
+  createdAt: true,
+});
+export type JevDecision = typeof jevDecisions.$inferSelect;
+export type InsertJevDecision = z.infer<typeof insertJevDecisionSchema>;
+

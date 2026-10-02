@@ -9,6 +9,8 @@ import {
   type TriageContext,
 } from "./jev";
 import { intakeSummary, toCandidates } from "./intake";
+import { DECISION_TYPES, decisionEngineEnabled, describePolicies } from "./policies";
+import { decisionLedger } from "./service";
 
 /**
  * Decision API — Jev triage over discovered candidates.
@@ -43,7 +45,42 @@ export function createDecisionRouter(): Router {
         transport: jevTransport(),
         thresholds: triageThresholds(),
       },
+      engine: {
+        enabled: decisionEngineEnabled(),
+        types: DECISION_TYPES,
+      },
     });
+  });
+
+  /**
+   * The policy registry — identity only, never prompts or keys. This is how a
+   * decision in the ledger is traced back to the policy that produced it.
+   */
+  router.get("/policies", (_req, res) => {
+    res.json({ policies: describePolicies() });
+  });
+
+  /** The decision ledger. Read-only: the layer decides, it never executes. */
+  router.get("/decisions", async (req, res) => {
+    const requested = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
+    const decisionType = typeof req.query.type === "string" ? req.query.type : undefined;
+    try {
+      const decisions = await decisionLedger.list({ limit, decisionType });
+      res.json({ decisions });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
+    }
+  });
+
+  router.get("/decisions/:id", async (req, res) => {
+    try {
+      const decision = await decisionLedger.get(String(req.params.id));
+      if (!decision) return res.status(404).json({ message: "Decision not found" });
+      res.json({ decision });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
+    }
   });
 
   router.post("/triage", async (req, res) => {
