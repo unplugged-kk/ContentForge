@@ -292,9 +292,8 @@ export async function runDiscoverRefresh(ownerUserId: number): Promise<DiscoverR
   const allPillars = await storage.getPillars(ownerUserId);
   const pillarNames = allPillars.map((p) => p.name).join(", ");
 
-  const { content, usage, latency } = await aiCall(
-    [
-      {
+  const discoverMessages = [
+    {
         role: "system",
         content: `You are a content strategist for a senior Infrastructure Engineering Lead (11+ yrs), brand at the intersection of AI + DevOps + Platform Engineering. He posts 3x/day on X targeting engineers and tech leaders globally. AI/DevOps content gets highest engagement — prioritise that intersection. Key niches: Kubernetes, Kafka, MLOps, AIOps, Platform Engineering, SRE, IaC, FinOps, AI Agents.`,
       },
@@ -310,12 +309,30 @@ Return exactly 20 content ideas ranked by viral potential for an infrastructure/
 
 Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technical Angle > Emotional Trigger > Discussion Potential`,
       },
-    ],
-    true,
-  );
+  ];
 
+  // The model occasionally answers this large prompt with prose instead of the
+  // JSON it was asked for, which used to 500 the whole refresh. One bounded
+  // retry with an explicit "JSON only" nudge; if that also fails, the original
+  // error still stands.
+  let { content, usage, latency } = await aiCall(discoverMessages, true);
   await logAiUsage(usage, latency, "discover_ideas");
-  const parsed = safeJsonParse(content);
+  let parsed = safeJsonParse(content);
+  if (!parsed?.ideas) {
+    const retry = await aiCall(
+      [
+        ...discoverMessages,
+        {
+          role: "user",
+          content: "Return ONLY the JSON object described above — no prose, no markdown fences.",
+        },
+      ],
+      true,
+    );
+    await logAiUsage(retry.usage, retry.latency, "discover_ideas");
+    content = retry.content;
+    parsed = safeJsonParse(content);
+  }
 
   // JC-02 shadow (Phase 6): record which raw items the decision layer would
   // promote, beside the ranking the model produced. Fired BEFORE the legacy

@@ -24,10 +24,13 @@ the production instance, not inferred from tests.
 | `publish_gate` | publish-gate v1 | fail_closed_hold | JEV_PUBLISH_GATE | trusted auto-approval (`settleTrustedArtifact`) | IMPLEMENTED + unit-tested (flag off) |
 | `format_select` | format-select v1 | fail_open_keep | JEV_FRAMING | automation fan-out (`content/framing.ts`) | **VERIFIED LIVE** — narrowed `x_thread` out |
 | `viral_score` | viral-score v1 | deterministic | JEV_LEGACY_SCORING | `/api/viral/score` — **shadow only** (JC-01) | **VERIFIED LIVE** — Jev 0.6287 vs model 0.71, both sides in one row |
+| `discover_rank` | discover-rank v1 | deterministic | JEV_LEGACY_SCORING | `/api/discover/refresh` — **shadow only** (JC-02) | **VERIFIED LIVE** — 20 items scored, 12 promoted; recorded even when the legacy call 500s |
+| `agent_route` | agent-route v1 | deterministic | JEV_LEGACY_SCORING | `/api/agent/agui` + `/api/agent/runs` — **shadow only** (JC-03) | **VERIFIED LIVE** — agreed with the regex compiler exactly (research_topic + last_7d, conf 0.99) |
 
 **Instance state:** `JEV_DECISION_ENGINE_ENABLED=1`, `JEV_RESEARCH_GATE=1`,
-`JEV_FRAMING=1`; every other decision flag is `0`, so quality, publish,
-opportunity, strategy and depth remain inert.
+`JEV_FRAMING=1`; every other decision flag is `0` (quality, publish, opportunity,
+strategy, depth, and the three legacy shadows), so only the research boundary and
+framing are active in production.
 
 **Two rules learned in production, both now enforced:**
 1. A boundary is wired only when it is genuinely **enabled** (master switch AND
@@ -38,11 +41,17 @@ opportunity, strategy and depth remain inert.
    ledger read became owner-scoped. All seven now pass the owner through.
 
 **Superseded below:** §5's "Today" column, §9's flag table, and §11's phase list
-(phases 3, 4 and 5 are complete, and the feedback half of 7). **Phase 6 has
-begun**: JC-01 (viral scoring) now runs in shadow mode and is verifiable from the
-ledger; JC-02 (discover ranking) and JC-03 (agent intent routing) remain, and both
-still need golden sets before any cut-over. `publish_timing` was deliberately not
-built because it has no consumer.
+(phases 3, 4 and 5 are complete, and the feedback half of 7).
+
+**Phase 6 status — all three Tier-1 legacy candidates now run in SHADOW and are
+verified live:** JC-01 viral scoring, JC-02 discover ranking, JC-03 agent routing.
+Nothing acts on them. The remaining step for each is the CUT-OVER, and the plan's
+own gate for that is a golden set: `agreementRate` (in `decision/shadow.ts`)
+measures agreement between a decision's keep-set and a human/golden keep-set, but
+no labelled set exists yet. That is the one thing blocking this phase, and it is a
+decision about who produces those labels — not a coding gap.
+
+`publish_timing` was deliberately not built because it has no consumer.
 
 ---
 
