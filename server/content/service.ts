@@ -59,6 +59,7 @@ import { registerBuiltinChannelAdapters } from "./adapters";
 import { createLocalAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
+import { createGeminiImageProvider } from "./visualProviders/geminiImage";
 import { createMacosSayProvider } from "./visualProviders/macosSay";
 import { createElevenLabsProvider } from "./visualProviders/elevenlabs";
 import { createFalProvider } from "./visualProviders/fal";
@@ -117,6 +118,11 @@ export function registerBuiltinVisualProviders(): void {
   // (OpenAI, local/self-hosted, any compatible endpoint) is AI_BASE_URL
   // configuration, never a branch in this file.
   registerVisualProvider(createOpenAiImageProvider());
+  // Nano Banana (Gemini images). Registered, never the default — selection is
+  // explicit via `providerId`/`VISUAL_PROVIDER_ID`, so existing callers are
+  // unchanged. It is the only registered provider whose transport can actually
+  // return an image when the AI gateway has no images API.
+  registerVisualProvider(createGeminiImageProvider());
   registerVisualProvider(createFixtureVideoProvider());
   // Video Factory stays a separate system. This adapter is the only ContentForge
   // registration — selected explicitly via providerId `video-factory`. Default
