@@ -23,6 +23,7 @@ the production instance, not inferred from tests.
 | `quality_gate` | quality-gate v1 | fail_closed_hold | JEV_CONTENT_GATE | `submitArtifactForReview` | **VERIFIED LIVE** (409 reject on slop) |
 | `publish_gate` | publish-gate v1 | fail_closed_hold | JEV_PUBLISH_GATE | trusted auto-approval (`settleTrustedArtifact`) | IMPLEMENTED + unit-tested (flag off) |
 | `format_select` | format-select v1 | fail_open_keep | JEV_FRAMING | automation fan-out (`content/framing.ts`) | **VERIFIED LIVE** — narrowed `x_thread` out |
+| `viral_score` | viral-score v1 | deterministic | JEV_LEGACY_SCORING | `/api/viral/score` — **shadow only** (JC-01) | **VERIFIED LIVE** — Jev 0.6287 vs model 0.71, both sides in one row |
 
 **Instance state:** `JEV_DECISION_ENGINE_ENABLED=1`, `JEV_RESEARCH_GATE=1`,
 `JEV_FRAMING=1`; every other decision flag is `0`, so quality, publish,
@@ -37,9 +38,11 @@ opportunity, strategy and depth remain inert.
    ledger read became owner-scoped. All seven now pass the owner through.
 
 **Superseded below:** §5's "Today" column, §9's flag table, and §11's phase list
-(phases 3, 4 and 5 are complete, and the feedback half of 7; **Phase 6 — the
-JC-01/02/03 legacy migrations — is NOT started**, and `publish_timing` was
-deliberately not built because it has no consumer).
+(phases 3, 4 and 5 are complete, and the feedback half of 7). **Phase 6 has
+begun**: JC-01 (viral scoring) now runs in shadow mode and is verifiable from the
+ledger; JC-02 (discover ranking) and JC-03 (agent intent routing) remain, and both
+still need golden sets before any cut-over. `publish_timing` was deliberately not
+built because it has no consumer.
 
 ---
 
