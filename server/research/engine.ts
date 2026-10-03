@@ -123,6 +123,8 @@ export interface ResearchDepthPort {
     query?: string;
     kind: InitiationKind;
     providerCount: number;
+    /** The owner the decision belongs to, so the ledger can be owner-scoped. */
+    userId?: number;
   }): Promise<ResearchDepth | null>;
 }
 
@@ -224,7 +226,7 @@ export class ResearchEngine {
    * missing or failing port resolves to "standard" — research never stops
    * because a decision was unavailable.
    */
-  private async resolveDepth(input: ResearchRunInput): Promise<ResearchDepth> {
+  private async resolveDepth(job: ResearchJob, input: ResearchRunInput): Promise<ResearchDepth> {
     if (input.depth) return input.depth;
     if (!this.deps.depth) return "standard";
     try {
@@ -232,6 +234,7 @@ export class ResearchEngine {
         query: input.query,
         kind: input.kind,
         providerCount: input.providerIds.length,
+        ...(job.userId !== null && job.userId !== undefined ? { userId: job.userId } : {}),
       });
       return chosen ?? "standard";
     } catch (error) {
@@ -245,7 +248,7 @@ export class ResearchEngine {
     input: ResearchRunInput,
     correlationId: string,
   ): Promise<ResearchRunResult> {
-    const budget = depthBudget(await this.resolveDepth(input), input.limit);
+    const budget = depthBudget(await this.resolveDepth(job, input), input.limit);
     const timeoutMs = input.timeoutMs ?? budget.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = new Date(this.now().getTime() + timeoutMs);
     const resolvedWindow = resolveTimeWindow(

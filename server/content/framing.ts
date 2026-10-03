@@ -26,6 +26,8 @@ export interface FramingInput {
   targets: FramingTarget[];
   /** Attributed to the automation run that asked, when there is one. */
   runId?: number;
+  /** The owner the decision belongs to, so the ledger can be owner-scoped. */
+  userId?: number | null;
 }
 
 export interface FramingPort {
@@ -72,6 +74,7 @@ export function createJevFraming(deps: FramingDeps = {}): FramingPort {
           topic: { title: input.storyTitle, query: input.insightBody },
           targets,
         },
+        userId: input.userId ?? null,
         ...(input.runId ? { refs: { automationRunId: input.runId } } : {}),
       });
 

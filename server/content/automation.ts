@@ -995,6 +995,7 @@ async function runFanoutStep(run: AutomationRun, deps: AutomationDeps): Promise<
         insightBody: story.insightBody,
         targets: targets.map((t) => ({ format: t.format, channel: t.channel })),
         runId: run.id,
+        userId: run.userId,
       });
       if (selected && selected.length > 0) {
         const allowed = new Set(selected.map((t) => `${t.channel}::${t.format}`));

@@ -59,6 +59,7 @@ describe("createJevFraming", () => {
       insightBody: "Idle nodes trace to pod requests.",
       targets: TARGETS,
       runId: 9,
+      userId: 4,
     });
 
     assert.deepEqual(kept, [
@@ -67,6 +68,7 @@ describe("createJevFraming", () => {
     ]);
     assert.equal(calls[0].type, "format_select");
     assert.deepEqual(calls[0].refs, { automationRunId: 9 });
+    assert.equal(calls[0].userId, 4, "the decision is owner-attributable");
     assert.deepEqual(calls[0].state.targets, TARGETS);
     assert.equal(calls[0].state.topic.title, "Cost story");
   });

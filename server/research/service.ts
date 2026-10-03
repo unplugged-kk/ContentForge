@@ -47,6 +47,7 @@ const depth: ResearchDepthPort | undefined = decisionTypeEnabled("research_depth
         const result = await decide<ResearchDepthDecision>({
           type: "research_depth",
           state: { topic: { query: ctx.query } },
+          userId: ctx.userId ?? null,
         });
         return (result.decision as ResearchDepthDecision).depth;
       },
