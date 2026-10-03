@@ -31,7 +31,7 @@ up: ## local stack: build and start
 
 vps: ## VPS stack: build and start with the Cloudflare tunnel
 	@$(COMPOSE_VPS) up -d --build
-	@echo "ContentForge (VPS) → https://$${PUBLIC_HOSTNAME} (via tunnel)"
+	@echo "ContentForge (VPS) → https://$${PUBLIC_HOSTNAME:-$$(sed -n 's/^PUBLIC_HOSTNAME=//p' .env 2>/dev/null | head -1)} (via tunnel)"
 
 deploy-vps: ## on the VPS: pull main, then deploy
 	@git pull --ff-only origin main
