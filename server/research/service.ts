@@ -8,7 +8,6 @@
 
 import { db } from "../db";
 import type { LogSink } from "../jobs/logger";
-import { jevConfigured } from "../decision/jev";
 import { decide } from "../decision/engine";
 import { decisionTypeEnabled } from "../decision/policies";
 import type { ResearchDepthDecision } from "../decision/schemas";
@@ -32,10 +31,12 @@ const seoPort = {
 export const researchStorage = new DatabaseResearchStorage(db);
 export const providerExecutor = new ProviderExecutor({ logSink });
 
-// Opt-in Jev triage gate: only when explicitly enabled AND Jev is configured.
-// Otherwise research behaves exactly as before (fail-open).
-const triage =
-  process.env.JEV_RESEARCH_GATE === "1" && jevConfigured() ? createJevTriageGate() : undefined;
+// Opt-in triage gate. Wired only when this boundary is genuinely ENABLED —
+// `decisionTypeEnabled` requires both the master switch and JEV_RESEARCH_GATE —
+// so the gate's presence always means it will actually decide. Wiring it on a
+// flag alone would leave a boundary that looks active but silently returns the
+// engine's fail-open fallback.
+const triage = decisionTypeEnabled("research_triage") ? createJevTriageGate() : undefined;
 
 // Opt-in depth decision, on its OWN flag so it never activates as a side effect
 // of the triage gate. Asked only when a request does not specify a depth, and
