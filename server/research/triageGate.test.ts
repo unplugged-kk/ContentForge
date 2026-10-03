@@ -98,14 +98,15 @@ describe("createJevTriageGate", () => {
     }
   });
 
-  it("attributes the decision to the research job", async () => {
+  it("attributes the decision to the research job and its owner", async () => {
     const restore = jenv();
     try {
       const { run, calls } = engineReturning(keep([0], 1));
       const gate = createJevTriageGate({ decide: run });
-      await gate.gate([src(0)], { query: "k8s", jobId: 42 });
+      await gate.gate([src(0)], { query: "k8s", jobId: 42, userId: 7 });
       assert.equal(calls[0].type, "research_triage");
       assert.deepEqual(calls[0].refs, { researchJobId: 42 });
+      assert.equal(calls[0].userId, 7, "the decision is owner-attributable");
       assert.equal(calls[0].state.candidates.length, 1);
     } finally {
       restore();

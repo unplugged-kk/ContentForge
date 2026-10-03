@@ -50,6 +50,7 @@ export function createJevTriageGate(deps: TriageGateDeps = {}): ResearchTriagePo
       const result = await run<TriageDecision>({
         type: "research_triage",
         state: { candidates: candidatesFromSources(sources) },
+        userId: ctx.userId ?? null,
         ...(ctx.jobId ? { refs: { researchJobId: ctx.jobId } } : {}),
       });
 

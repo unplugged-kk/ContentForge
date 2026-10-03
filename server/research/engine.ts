@@ -113,7 +113,7 @@ export interface ResearchEngineDeps {
 export interface ResearchTriagePort {
   gate(
     sources: NormalizedSource[],
-    ctx: { query?: string; jobId?: number },
+    ctx: { query?: string; jobId?: number; userId?: number },
   ): Promise<{ kept: NormalizedSource[]; dropped: NormalizedSource[] } | null>;
 }
 
@@ -325,6 +325,9 @@ export class ResearchEngine {
           const outcome = await this.deps.triage.gate(kept, {
             query: input.query,
             jobId: job.id,
+            // Carried so the decision is attributable to its owner, exactly like
+            // every other owner-scoped row.
+            ...(job.userId !== null && job.userId !== undefined ? { userId: job.userId } : {}),
           });
           if (outcome) {
             gated = outcome.kept;

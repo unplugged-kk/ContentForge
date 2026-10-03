@@ -11,6 +11,7 @@ import {
 import { intakeSummary, toCandidates } from "./intake";
 import { DECISION_TYPES, decisionEngineEnabled, describePolicies } from "./policies";
 import { decisionLedger } from "./service";
+import { requireOwnerId } from "../middleware/userContext";
 
 /**
  * Decision API — Jev triage over discovered candidates.
@@ -66,7 +67,12 @@ export function createDecisionRouter(): Router {
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
     const decisionType = typeof req.query.type === "string" ? req.query.type : undefined;
     try {
-      const decisions = await decisionLedger.list({ limit, decisionType });
+      // Owner-scoped in the query, like every other read a caller can reach.
+      const decisions = await decisionLedger.list({
+        limit,
+        decisionType,
+        userId: requireOwnerId(req),
+      });
       res.json({ decisions });
     } catch (error: any) {
       res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
@@ -76,7 +82,9 @@ export function createDecisionRouter(): Router {
   router.get("/decisions/:id", async (req, res) => {
     try {
       const decision = await decisionLedger.get(String(req.params.id));
-      if (!decision) return res.status(404).json({ message: "Decision not found" });
+      if (!decision || (decision.userId !== null && decision.userId !== requireOwnerId(req))) {
+        return res.status(404).json({ message: "Decision not found" });
+      }
       res.json({ decision });
     } catch (error: any) {
       res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
