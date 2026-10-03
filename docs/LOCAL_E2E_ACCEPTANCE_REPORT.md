@@ -204,6 +204,22 @@ do not map onto the built architecture. Running them meaningfully needs the
 non-`fixture` agent backend plus a definition of "selected skill" in that layer.
 That is a scope/definitition question for the owner, not a missing key.
 
+### 4. Unrelated observation — one consistently failing unit test
+
+The full unit suite is **996/997 passing**. The one failure is
+`server/db.pool.test.ts:269` — *"survives an admin-terminated idle connection and
+reconnects"* — which surfaces an uncaught Postgres `57P01`
+(`terminating connection due to administrator command`) from the pool rather than
+absorbing it. It reproduces on every run (not a flake), and it is **not** caused
+by this change: this commit touches no pool or database code.
+
+Two readings, and they should be told apart before it is dismissed as debt:
+either the test's own `pg_terminate_backend` harness is wrong, or the pool really
+does leak an `error` event for a dropped idle connection — which would matter in
+production when a proxy or network kills an idle connection. **Left unfixed** per
+the standing instruction not to fix known debt opportunistically; recorded here
+so the suite is not mistaken for green.
+
 ## 10. Remaining verification gaps
 
 1. ~~Real image generation and image→artifact→review~~ — **since closed (see Addendum §1)**.
