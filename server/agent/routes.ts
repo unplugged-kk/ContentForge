@@ -160,6 +160,19 @@ export function createAgentRouter(deps: AgentRouteDeps): Router {
       const body = parsed.data;
       const backendId = body.backendId ?? deps.backend.id;
       const compiled = body.compilePlan ? compileWorkspaceIntent(body.objective) : null;
+
+      // JC-03 shadow (Phase 6) on the /runs routing entry point too.
+      if (compiled) {
+        void legacyShadows
+          .agentRoute({
+            objective: body.objective,
+            legacyTool: compiled[0]?.tool ?? null,
+            legacyPreset:
+              (compiled[0]?.arguments as { windowPreset?: string } | undefined)?.windowPreset ?? null,
+            userId: ownerId(req),
+          })
+          .catch(() => {});
+      }
       const first = compiled?.[0] ? [compiled[0]] : undefined;
       const { run, created } = await deps.runtime.createAndRun({
         ownerId: ownerId(req),

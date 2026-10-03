@@ -316,13 +316,12 @@ Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technica
 
   await logAiUsage(usage, latency, "discover_ideas");
   const parsed = safeJsonParse(content);
-  if (!parsed?.ideas) {
-    throw new Error("AI returned invalid response.");
-  }
 
   // JC-02 shadow (Phase 6): record which raw items the decision layer would
-  // promote, beside the ranking the model produced. Gated + swallowed, so it can
-  // neither delay the refresh nor change what gets written.
+  // promote, beside the ranking the model produced. Fired BEFORE the legacy
+  // validation on purpose — a record is most useful precisely when the legacy
+  // call failed, so a malformed answer must not suppress it. Gated + swallowed,
+  // so it can neither delay the refresh nor change what gets written.
   void legacyShadows
     .discoverRank({
       items: (Array.isArray(rawData) ? rawData : []).slice(0, 30).map((item: any, index: number) => ({
@@ -330,10 +329,14 @@ Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technica
         url: item?.url ?? undefined,
         source: item?.source ?? item?.sourceType ?? undefined,
       })),
-      llmIdeaCount: Array.isArray(parsed.ideas) ? parsed.ideas.length : null,
+      llmIdeaCount: Array.isArray(parsed?.ideas) ? parsed.ideas.length : null,
       userId: ownerUserId,
     })
     .catch(() => {});
+
+  if (!parsed?.ideas) {
+    throw new Error("AI returned invalid response.");
+  }
 
   const ideaRecords = parsed.ideas.map((idea: any, i: number) => {
     const matchedPillar = allPillars.find((p) =>
