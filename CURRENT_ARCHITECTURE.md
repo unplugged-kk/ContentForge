@@ -4,6 +4,11 @@
 **Supersedes:** `docs/archive/JEV-OPPORTUNITY-AUDIT.md` (2026-09-20). Reuses its JC-01…JC-11 candidate table.
 **Companion:** `JEV_DECISION_MAP.md`.
 
+> **Update (later than this audit):** the decision layer has since been built and
+> is deployed. `JEV_DECISION_MAP.md`'s "As-built status" section is authoritative
+> for what exists, what is wired, and what is verified live; §3 and §9 below
+> describe the pre-decision-layer state and are kept for the rationale.
+
 ---
 
 ## 1. Runtime shape

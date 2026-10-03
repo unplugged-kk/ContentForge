@@ -8,6 +8,41 @@ The rule this map encodes:
 
 ---
 
+## As-built status (AUTHORITATIVE — supersedes the phase plan and the tables below)
+
+Seven decision types are registered. Each has a policy id + version, a declared
+fallback class, its own flag, and a ledger row. "Verified live" means observed on
+the production instance, not inferred from tests.
+
+| Type | Policy | Fallback | Flag | Consumer | Status |
+|---|---|---|---|---|---|
+| `research_triage` | research-triage v1 | fail_open_keep | JEV_RESEARCH_GATE | research engine | **VERIFIED LIVE** — kept pursue **+ watch** (conf 0.648) |
+| `research_depth` | research-depth v1 | deterministic | JEV_RESEARCH_DEPTH | research engine, only when a request omits depth | IMPLEMENTED + unit-tested (flag off) |
+| `opportunity_score` | opportunity-score v1 | deterministic | JEV_OPPORTUNITY_SCORE | `createOpportunityFromStory` → fills `opportunities.score` | **VERIFIED LIVE** (score 0.470) |
+| `content_strategy` | content-strategy v1 | deterministic | JEV_CONTENT_STRATEGY | same port → fills `audience`/`angle` | **VERIFIED LIVE** (angle "cost per node") |
+| `quality_gate` | quality-gate v1 | fail_closed_hold | JEV_CONTENT_GATE | `submitArtifactForReview` | **VERIFIED LIVE** (409 reject on slop) |
+| `publish_gate` | publish-gate v1 | fail_closed_hold | JEV_PUBLISH_GATE | trusted auto-approval (`settleTrustedArtifact`) | IMPLEMENTED + unit-tested (flag off) |
+| `format_select` | format-select v1 | fail_open_keep | JEV_FRAMING | automation fan-out (`content/framing.ts`) | **VERIFIED LIVE** — narrowed `x_thread` out |
+
+**Instance state:** `JEV_DECISION_ENGINE_ENABLED=1`, `JEV_RESEARCH_GATE=1`,
+`JEV_FRAMING=1`; every other decision flag is `0`, so quality, publish,
+opportunity, strategy and depth remain inert.
+
+**Two rules learned in production, both now enforced:**
+1. A boundary is wired only when it is genuinely **enabled** (master switch AND
+   its own flag). Wiring on the flag alone produced a boundary that looked active
+   while silently returning the engine's fail-open fallback.
+2. **Every decision carries its owner.** Three ports (triage, framing, depth)
+   initially recorded `user_id NULL`, which made the row invisible once the
+   ledger read became owner-scoped. All seven now pass the owner through.
+
+**Superseded below:** §5's "Today" column, §9's flag table, and §11's phase list
+(phases 3, 4 and 5 are complete, and the feedback half of 7; **Phase 6 — the
+JC-01/02/03 legacy migrations — is NOT started**, and `publish_timing` was
+deliberately not built because it has no consumer).
+
+---
+
 ## 1. The engine
 
 ```ts
