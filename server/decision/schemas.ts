@@ -140,6 +140,24 @@ export const viralScoreDecisionSchema = z.object({
 });
 export type ViralScoreDecision = z.infer<typeof viralScoreDecisionSchema>;
 
+export const discoverRankDecisionSchema = z.object({
+  /** Indices of the raw items the decision layer would promote. */
+  promoted: z.array(z.number().int().nonnegative()).max(200),
+  perItem: z
+    .array(z.object({ index: z.number().int().nonnegative(), score: z.number().min(0).max(1) }))
+    .max(200),
+});
+export type DiscoverRankDecision = z.infer<typeof discoverRankDecisionSchema>;
+
+export const AGENT_WINDOW_PRESETS = ["today", "last_24h", "last_7d", "last_30d"] as const;
+
+export const agentRouteDecisionSchema = z.object({
+  /** Always one of the compiler's own tools, or null if it could not choose. */
+  firstTool: z.string().min(1).max(60).nullable(),
+  windowPreset: z.enum(AGENT_WINDOW_PRESETS).nullable(),
+});
+export type AgentRouteDecision = z.infer<typeof agentRouteDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
@@ -150,6 +168,8 @@ export const DECISION_SCHEMAS = {
   publish_gate: publishGateDecisionSchema,
   format_select: formatSelectDecisionSchema,
   viral_score: viralScoreDecisionSchema,
+  discover_rank: discoverRankDecisionSchema,
+  agent_route: agentRouteDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(

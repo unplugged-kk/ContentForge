@@ -11,10 +11,11 @@
  */
 
 import { shadowDecide } from "./shadow";
-import { decisionTypeEnabled } from "./policies";
+import { decisionTypeEnabled, type DecisionType } from "./policies";
 import type { DecisionRefs } from "./registry";
 import { LLM_OVERALL_KEY } from "./decisions/viral";
-import type { ViralScoreDecision } from "./schemas";
+import { MAX_RANK_ITEMS } from "./decisions/discover";
+import type { AgentRouteDecision, DiscoverRankDecision, ViralScoreDecision } from "./schemas";
 
 export interface ViralScoreShadowInput {
   /** The draft being scored. */
@@ -26,15 +27,30 @@ export interface ViralScoreShadowInput {
   refs?: DecisionRefs;
 }
 
+export interface DiscoverRankShadowInput {
+  items: Array<{ title: string; summary?: string; url?: string; source?: string }>;
+  /** How many ideas the legacy call produced, for the comparison. */
+  llmIdeaCount?: number | null;
+  userId?: number | null;
+}
+
+export interface AgentRouteShadowInput {
+  objective: string;
+  /** The regex compiler's own choice, for the comparison. */
+  legacyTool?: string | null;
+  legacyPreset?: string | null;
+  userId?: number | null;
+}
+
 export interface LegacyShadowDeps {
   /** Injected for tests; defaults to the real shadow entry point. */
   shadow?: typeof shadowDecide;
-  enabled?: (type: "viral_score") => boolean;
+  enabled?: (type: DecisionType) => boolean;
 }
 
 export function createLegacyShadows(deps: LegacyShadowDeps = {}) {
   const run = deps.shadow ?? shadowDecide;
-  const enabled = deps.enabled ?? ((type: "viral_score") => decisionTypeEnabled(type));
+  const enabled = deps.enabled ?? ((type: DecisionType) => decisionTypeEnabled(type));
 
   return {
     /**
@@ -61,6 +77,53 @@ export function createLegacyShadows(deps: LegacyShadowDeps = {}) {
         },
         userId: input.userId ?? null,
         ...(input.refs ? { refs: input.refs } : {}),
+      });
+
+      return result.decision;
+    },
+
+    /**
+     * JC-02 `/api/discover/refresh`. Records which raw items the decision layer
+     * would promote; the ranking the model produced is untouched.
+     */
+    async discoverRank(input: DiscoverRankShadowInput): Promise<DiscoverRankDecision | null> {
+      if (!enabled("discover_rank")) return null;
+
+      const flags =
+        typeof input.llmIdeaCount === "number" && Number.isFinite(input.llmIdeaCount)
+          ? [`legacy:ideas=${input.llmIdeaCount}`]
+          : [];
+
+      const result = await run<DiscoverRankDecision>({
+        type: "discover_rank",
+        state: {
+          candidates: input.items.slice(0, MAX_RANK_ITEMS),
+          quality: { flags },
+        },
+        userId: input.userId ?? null,
+      });
+
+      return result.decision;
+    },
+
+    /**
+     * JC-03 agent intent routing. Records which tool the decision layer would
+     * start with; the regex compiler's plan is untouched.
+     */
+    async agentRoute(input: AgentRouteShadowInput): Promise<AgentRouteDecision | null> {
+      if (!enabled("agent_route")) return null;
+
+      const flags: string[] = [];
+      if (input.legacyTool) flags.push(`legacy:tool=${input.legacyTool}`);
+      if (input.legacyPreset) flags.push(`legacy:preset=${input.legacyPreset}`);
+
+      const result = await run<AgentRouteDecision>({
+        type: "agent_route",
+        state: {
+          topic: { title: input.objective.slice(0, 200) },
+          quality: { flags },
+        },
+        userId: input.userId ?? null,
       });
 
       return result.decision;

@@ -8,6 +8,7 @@ import type { DiscoveredIdea } from "@shared/schema";
 import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runRssAutopostForBatch } from "./rssAutopost";
+import { legacyShadows } from "./decision/legacy";
 
 const rssParser = new Parser();
 
@@ -318,6 +319,21 @@ Rank by: AI/DevOps intersection weight (×1.3) > Value Density > Unique Technica
   if (!parsed?.ideas) {
     throw new Error("AI returned invalid response.");
   }
+
+  // JC-02 shadow (Phase 6): record which raw items the decision layer would
+  // promote, beside the ranking the model produced. Gated + swallowed, so it can
+  // neither delay the refresh nor change what gets written.
+  void legacyShadows
+    .discoverRank({
+      items: (Array.isArray(rawData) ? rawData : []).slice(0, 30).map((item: any, index: number) => ({
+        title: String(item?.title ?? `item-${index}`).slice(0, 200),
+        url: item?.url ?? undefined,
+        source: item?.source ?? item?.sourceType ?? undefined,
+      })),
+      llmIdeaCount: Array.isArray(parsed.ideas) ? parsed.ideas.length : null,
+      userId: ownerUserId,
+    })
+    .catch(() => {});
 
   const ideaRecords = parsed.ideas.map((idea: any, i: number) => {
     const matchedPillar = allPillars.find((p) =>

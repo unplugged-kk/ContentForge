@@ -114,6 +114,24 @@ const POLICIES = {
     flag: "JEV_LEGACY_SCORING",
     description: "How much viral potential a draft has (legacy scoring, shadow)",
   },
+  /** JC-02. Shadow-only. */
+  discover_rank: {
+    id: "discover-rank",
+    version: "v1",
+    fallback: "deterministic",
+    minConfidence: 0,
+    flag: "JEV_LEGACY_SCORING",
+    description: "Which raw trending items are worth ranking (legacy discover, shadow)",
+  },
+  /** JC-03. Shadow-only. */
+  agent_route: {
+    id: "agent-route",
+    version: "v1",
+    fallback: "deterministic",
+    minConfidence: 0,
+    flag: "JEV_LEGACY_SCORING",
+    description: "Which tool an operator objective should start with (agent intent, shadow)",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;

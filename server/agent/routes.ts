@@ -11,6 +11,7 @@ import { agentBackendConfig } from "./backends";
 import { timeplusConfig } from "./timeplus";
 import { stripOverrideKeys } from "./sanitize";
 import { compileWorkspaceIntent } from "./intent";
+import { legacyShadows } from "../decision/legacy";
 import { continueWorkspaceRun } from "./workspace";
 import { extractAguiObjective, writeSse } from "./agui-sse";
 import { toAguiProtocolEvents } from "@shared/agent-ui";
@@ -109,6 +110,19 @@ export function createAgentRouter(deps: AgentRouteDeps): Router {
     }
     try {
       const compiled = compileWorkspaceIntent(objective);
+
+      // JC-03 shadow (Phase 6): record which tool the decision layer would start
+      // with, beside the compiler's own choice. Gated + swallowed, so it can
+      // neither delay the run nor change the plan.
+      void legacyShadows
+        .agentRoute({
+          objective,
+          legacyTool: compiled[0]?.tool ?? null,
+          legacyPreset:
+            (compiled[0]?.arguments as { windowPreset?: string } | undefined)?.windowPreset ?? null,
+          userId: ownerId(req),
+        })
+        .catch(() => {});
       const backendId = deps.backend.id;
       const first = compiled[0] ? [compiled[0]] : [];
       const { run } = await deps.runtime.createAndRun({

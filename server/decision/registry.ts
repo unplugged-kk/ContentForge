@@ -18,6 +18,8 @@ import { contentStrategyDefinition } from "./decisions/strategy";
 import { publishGateDefinition } from "./decisions/publishing";
 import { formatSelectDefinition } from "./decisions/format";
 import { viralScoreDefinition } from "./decisions/viral";
+import { discoverRankDefinition } from "./decisions/discover";
+import { agentRouteDefinition } from "./decisions/agent";
 
 /** Entity references a decision can be attached to (all optional). */
 export interface DecisionRefs {
@@ -69,6 +71,8 @@ export const DECISION_REGISTRY: Record<DecisionType, DecisionDefinition<unknown>
   publish_gate: publishGateDefinition,
   format_select: formatSelectDefinition,
   viral_score: viralScoreDefinition,
+  discover_rank: discoverRankDefinition,
+  agent_route: agentRouteDefinition,
 };
 
 export function getDecisionDefinition(type: DecisionType): DecisionDefinition<unknown> {

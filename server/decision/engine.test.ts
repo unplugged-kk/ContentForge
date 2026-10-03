@@ -14,7 +14,9 @@ import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
 import {
   VIRAL_DIMENSIONS,
+  type AgentRouteDecision,
   type ContentStrategyDecision,
+  type DiscoverRankDecision,
   type FormatSelectDecision,
   type OpportunityScoreDecision,
   type PublishGateDecision,
@@ -522,6 +524,70 @@ describe("decide — viral_score", () => {
     assert.equal(result.fallback, true);
     assert.equal(result.decision.overall, null);
     assert.deepEqual(result.decision.dimensions, {});
+  });
+});
+
+// ── legacy: discover rank (JC-02, shadow) ────────────────────────────────────
+describe("decide — discover_rank", () => {
+  const ITEMS = [
+    { id: "r0", title: "Karpenter cuts idle nodes" },
+    { id: "r1", title: "Song lyrics" },
+  ];
+
+  const signals = (perItem: Array<[number, number]>): JevResponse => {
+    const answers: Record<string, JevAnswer> = {};
+    perItem.forEach(([relevance, novelty], index) => {
+      answers[`i${index}_relevance`] = noul(relevance);
+      answers[`i${index}_novelty`] = noul(novelty);
+    });
+    return response(answers);
+  };
+
+  it("promotes items that clear the threshold and echoes the legacy count", async () => {
+    const result = await decide<DiscoverRankDecision>(
+      {
+        type: "discover_rank",
+        state: { candidates: ITEMS, quality: { signals: {}, flags: ["legacy:ideas=20"] } },
+      },
+      deps({ jevDecide: async () => signals([[0.9, 0.8], [0.1, 0.2]]) }),
+    );
+    assert.equal(result.fallback, false);
+    assert.equal(result.policyId, "discover-rank");
+    assert.deepEqual(result.decision.promoted, [0]);
+    assert.equal(result.signals?.legacy, "legacy:ideas=20", "both sides are recorded");
+  });
+
+  it("promotes nothing rather than fabricating a ranking when unusable", async () => {
+    const result = await decide<DiscoverRankDecision>(
+      { type: "discover_rank", state: { candidates: ITEMS } },
+      deps({ jevDecide: async () => response({}) }),
+    );
+    assert.equal(result.fallback, true);
+    assert.deepEqual(result.decision.promoted, []);
+  });
+});
+
+// ── legacy: agent routing (JC-03, shadow) ────────────────────────────────────
+describe("decide — agent_route", () => {
+  it("selects only from the compiler's own tool set", async () => {
+    const result = await decide<AgentRouteDecision>(
+      { type: "agent_route", state: { topic: { title: "research kubernetes cost this week" } } },
+      deps({
+        jevDecide: async () =>
+          response({ tool: choice("research_topic", 0.8), window: choice("last_7d", 0.7) }),
+      }),
+    );
+    assert.equal(result.fallback, false);
+    assert.deepEqual(result.decision, { firstTool: "research_topic", windowPreset: "last_7d" });
+  });
+
+  it("discards a tool the registry never offered", async () => {
+    const result = await decide<AgentRouteDecision>(
+      { type: "agent_route", state: { topic: { title: "do something" } } },
+      deps({ jevDecide: async () => response({ tool: choice("delete_everything"), window: choice("none") }) }),
+    );
+    assert.equal(result.fallback, true, "an invented tool is not a route");
+    assert.deepEqual(result.decision, { firstTool: null, windowPreset: null });
   });
 });
 
