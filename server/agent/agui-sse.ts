@@ -1,10 +1,3 @@
-import type { AgentEvent } from "./types";
-import { formatSse, toAguiProtocolEvents } from "@shared/agent-ui";
-
-export function aguiSseFromEvents(events: AgentEvent[]): string {
-  return formatSse(toAguiProtocolEvents(events));
-}
-
 export function writeSse(res: { write: (chunk: string) => unknown }, event: Record<string, unknown>): void {
   res.write(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`);
 }

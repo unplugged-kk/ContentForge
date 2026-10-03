@@ -170,13 +170,6 @@ export function getCanonicalReviewUrl(artifactId: number): string {
 }
 
 /**
- * Returns canonical Schedule route.
- */
-export function getCanonicalScheduleUrl(): string {
-  return "/schedule";
-}
-
-/**
  * Humanizes tool names into concise, step-oriented labels.
  */
 export function humanizeToolName(toolName: string): { title: string; category: string } {

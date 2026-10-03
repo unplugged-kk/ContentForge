@@ -176,20 +176,6 @@ export function humanizeScope(scope: string): string {
 }
 
 /**
- * Canonical handoff URL to Review an artifact in Studio.
- */
-export function getCanonicalReviewUrl(artifactId: number): string {
-  return `/create?artifact=${artifactId}`;
-}
-
-/**
- * Canonical handoff URL to explore a topic in Sources.
- */
-export function getExploreTopicUrl(topic: string): string {
-  return `/sources?query=${encodeURIComponent(topic)}`;
-}
-
-/**
  * Canonical handoff URL to ask Agent about an observed pattern.
  */
 export function getAskAgentUrl(prompt?: string): string {

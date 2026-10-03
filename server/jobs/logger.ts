@@ -52,16 +52,3 @@ export function createJobLogger(
     error: (fields, message) => emit(fields, message),
   };
 }
-
-/** Build a logger that prefixes every line with the job's identity. */
-export function createJobScopedLogger(
-  fields: {
-    jobType: string;
-    jobId: string;
-    correlationId: string;
-    attempt: number;
-  },
-  sink?: LogSink,
-): JobLogger {
-  return createJobLogger(fields, "info", sink);
-}

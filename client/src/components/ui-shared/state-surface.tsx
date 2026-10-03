@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * This is an internal building block, not a component to consume directly: use
  * `EmptyState` for a true empty result and `ErrorState` for a failed read.
  */
-export const STATE_SURFACE_CLASS =
+const STATE_SURFACE_CLASS =
   "flex flex-col items-center justify-center gap-2 rounded-md border border-dashed p-8 text-center";
 
 export type StateSurfaceProps = React.HTMLAttributes<HTMLDivElement>;

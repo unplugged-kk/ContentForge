@@ -182,10 +182,6 @@ const FORMAT_CHANNEL_SPEC: Record<string, string> = {
   "video:instagram": "instagram_reel",
 };
 
-export function listVisualSpecs(): VisualSpec[] {
-  return [...SPECS];
-}
-
 export function getVisualSpec(id: string): VisualSpec | undefined {
   return byId.get(id);
 }
@@ -228,24 +224,6 @@ export function resolveVisualSpec(input: {
   }
   if (input.format === "video") return specForVideoAspectRatio(input.aspectRatio);
   return specForAspectRatio(input.aspectRatio);
-}
-
-export function dimensionsInRange(
-  width: number | null,
-  height: number | null,
-  maxDimension: number,
-): string[] {
-  const issues: string[] = [];
-  for (const [label, value] of [
-    ["width", width],
-    ["height", height],
-  ] as const) {
-    if (value === null) continue;
-    if (!Number.isInteger(value) || value <= 0 || value > maxDimension) {
-      issues.push(`${label} is out of range`);
-    }
-  }
-  return issues;
 }
 
 export function validateVariationCount(count: number): string | null {

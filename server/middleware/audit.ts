@@ -1,7 +1,7 @@
 import type { Request, RequestHandler, Response } from "express";
 import { db } from "../db";
 import { auditLogs } from "@shared/schema";
-import { createHash } from "crypto";
+import { sha256 } from "../utils/hash";
 
 /**
  * Audit log middleware. Records every non-safe HTTP request after the response
@@ -31,10 +31,6 @@ function methodAction(method: string): string {
     case "DELETE": return "delete";
     default: return method.toLowerCase();
   }
-}
-
-function sha256(s: string): string {
-  return createHash("sha256").update(s).digest("hex");
 }
 
 function shouldSkip(path: string): boolean {

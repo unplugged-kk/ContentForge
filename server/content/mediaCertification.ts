@@ -31,7 +31,7 @@ function budgetPath(env: NodeJS.ProcessEnv = process.env): string {
     || join(process.cwd(), ".scratch", "media-cert-budget.json");
 }
 
-function readBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
+export function readBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
   const path = budgetPath(env);
   if (!existsSync(path)) return { elevenlabsCalls: 0, falCalls: 0 };
   try {
@@ -175,8 +175,4 @@ export function recordFalCertificationCall(
   budget.falCalls += 1;
   if (certKey) budget.falCertKey = certKey;
   writeBudget(budget, env);
-}
-
-export function readMediaCertificationBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
-  return readBudget(env);
 }

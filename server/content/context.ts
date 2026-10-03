@@ -40,6 +40,7 @@ import { and, desc, eq, isNotNull, notInArray, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { contextVault, styleProfiles, userProfile } from "@shared/schema";
+import { canonicalJson, sha256 } from "../utils/hash";
 
 export type ContextSourceType = "profile" | "reference" | "style" | "voice" | "template" | "learning";
 
@@ -200,22 +201,6 @@ export function createDatabaseContextReader(
       return learningSummaryForContext(db, ownerId);
     },
   };
-}
-
-/** Deterministic, order-independent hash — same shape the rest of the domain already uses. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
-  return `{${entries.join(",")}}`;
-}
-
-async function sha256(text: string): Promise<string> {
-  const { createHash } = await import("node:crypto");
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 function truncate(text: string, max: number): string {

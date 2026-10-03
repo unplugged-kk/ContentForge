@@ -5,7 +5,6 @@ import {
   deriveRunOutcomeSummary,
   formatRelativeTime,
   getCanonicalReviewUrl,
-  getCanonicalScheduleUrl,
   humanizeToolName,
 } from "./agent-workspace-state";
 
@@ -104,10 +103,6 @@ describe("Agent Workspace State & Domain Helpers (Phase 28.2D)", () => {
   describe("canonical handoff URLs", () => {
     it("returns correct canonical review route for artifacts", () => {
       assert.equal(getCanonicalReviewUrl(42), "/create?artifact=42");
-    });
-
-    it("returns canonical schedule route", () => {
-      assert.equal(getCanonicalScheduleUrl(), "/schedule");
     });
   });
 

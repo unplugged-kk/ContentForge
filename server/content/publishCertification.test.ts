@@ -6,7 +6,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   assertYouTubeCertificationPublish,
   publishCertificationMode,
-  readPublishCertificationBudget,
+  readBudget,
   realPublishAllowed,
   recordYouTubeCertificationPublish,
   YOUTUBE_PUBLISH_CERT_KEY,
@@ -45,7 +45,7 @@ describe("publish certification budget", () => {
       certKey: YOUTUBE_PUBLISH_CERT_KEY,
     }, e));
     recordYouTubeCertificationPublish(YOUTUBE_PUBLISH_CERT_KEY, e);
-    assert.equal(readPublishCertificationBudget(e).youtubePublishes, 1);
+    assert.equal(readBudget(e).youtubePublishes, 1);
     assert.throws(
       () => assertYouTubeCertificationPublish({
         privacyStatus: "unlisted",

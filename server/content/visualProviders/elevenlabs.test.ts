@@ -219,8 +219,8 @@ describe("ElevenLabs provider contract", () => {
       /empty audio/,
     );
     // Budget was consumed before the HTTP call (crash-safe).
-    const { readMediaCertificationBudget } = await import("../mediaCertification");
-    assert.equal(readMediaCertificationBudget(env).elevenlabsCalls, 1);
+    const { readBudget } = await import("../mediaCertification");
+    assert.equal(readBudget(env).elevenlabsCalls, 1);
     assert.ok(createHash("sha256").update("x").digest("hex").length > 0);
   });
 });

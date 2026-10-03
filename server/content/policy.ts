@@ -16,13 +16,15 @@
  * can always answer "exactly what produced this Artifact?".
  */
 
-import { createHash } from "node:crypto";
 import type { ContentTemplate, GenerationPolicy, Opportunity, Story, Voice } from "@shared/schema";
 import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
 import { getFormatProfile, type FormatProfile } from "./formatProfiles";
 import { renderTemplateStructure, undeclaredVariables } from "./templateRender";
 import { EMPTY_CONTEXT_ASSEMBLY, type ContextAssembly, type ContextSourceRef } from "./context";
 import type { ContentStoragePort, JsonRecord } from "./storage";
+import { canonicalJson, sha256 } from "../utils/hash";
+
+export { canonicalJson };
 
 export class PolicyInputError extends Error {
   readonly issues: string[];
@@ -89,21 +91,6 @@ export interface ResolvedPolicy {
   created: boolean;
   /** Resolved context (Ticket 10) — carried through so `assembleEffectiveRequest` can render it. */
   context: ContextAssembly;
-}
-
-/** Stable JSON (sorted keys) so hashes are order-independent. */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
-  return `{${entries.join(",")}}`;
-}
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /** Content hash of a voice, so a voice edit produces a new policy revision. */

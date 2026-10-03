@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createJobScopedLogger, redact } from "./logger";
+import { createJobLogger, redact } from "./logger";
 
 describe("secret redaction", () => {
   it("redacts credential-shaped keys at the top level", () => {
@@ -46,8 +46,9 @@ describe("secret redaction", () => {
 describe("job logger", () => {
   it("emits single-line JSON carrying job identity", () => {
     const lines: string[] = [];
-    const logger = createJobScopedLogger(
+    const logger = createJobLogger(
       { jobType: "research.run", jobId: "j1", correlationId: "c1", attempt: 2 },
+      "info",
       (line) => lines.push(line),
     );
 
@@ -67,8 +68,9 @@ describe("job logger", () => {
 
   it("never writes a secret that a handler passes by mistake", () => {
     const lines: string[] = [];
-    const logger = createJobScopedLogger(
+    const logger = createJobLogger(
       { jobType: "t", jobId: "j", correlationId: "c", attempt: 1 },
+      "info",
       (line) => lines.push(line),
     );
 

@@ -1,4 +1,5 @@
 import { test, expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
+import { addThreadNumbering } from "../server/utils/threadUtils";
 
 // Phase 30.1: /api requires an authenticated session (authGate) and non-GET
 // requests require a CSRF token — the same contract as the real UI. This
@@ -26,21 +27,6 @@ test.afterAll(async () => {
   await api.dispose();
 });
 
-
-// Inline copy for unit testing — source of truth is server/utils/threadUtils.ts
-function addThreadNumbering(tweets: string[]): string[] {
-  if (tweets.length <= 1) return tweets;
-  const total = tweets.length;
-  return tweets.map((text, i) => {
-    const trimmed = text.trim();
-    if (/\n\n\d+\/\d+\s*$/.test(trimmed)) return trimmed;
-    const num = `${i + 1}/${total}`;
-    const withNum = `${trimmed}\n\n${num}`;
-    if (withNum.length <= 280) return withNum;
-    const maxBody = 280 - num.length - 2;
-    return `${trimmed.slice(0, maxBody)}\n\n${num}`;
-  });
-}
 
 test.describe("HTTP API auth boundary", () => {
   test("GET /api/auth/me without cookie returns 401", async ({ request }) => {

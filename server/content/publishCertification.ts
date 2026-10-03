@@ -23,7 +23,7 @@ function budgetPath(env: NodeJS.ProcessEnv = process.env): string {
     || join(process.cwd(), ".scratch", "publish-cert-budget.json");
 }
 
-function readBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
+export function readBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
   const path = budgetPath(env);
   if (!existsSync(path)) return { youtubePublishes: 0 };
   try {
@@ -108,8 +108,4 @@ export function recordYouTubeCertificationPublish(
   budget.youtubePublishes += 1;
   if (certKey) budget.youtubeCertKey = certKey;
   writeBudget(budget, env);
-}
-
-export function readPublishCertificationBudget(env: NodeJS.ProcessEnv = process.env): BudgetState {
-  return readBudget(env);
 }

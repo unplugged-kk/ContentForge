@@ -7,13 +7,13 @@
  * Generation still consumes style ONLY through ContextAssembly.
  */
 
-import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { references, styleAnalyses, styleObservations, styleProfiles } from "@shared/schema";
 import type { Reference, StyleAnalysis, StyleObservationRow, StyleProfile } from "@shared/schema";
 import { JobFailure, describeError } from "../jobs/failures";
+import { sha256 } from "../utils/hash";
 import {
   coerceAuthoredSourceType,
   getStyleAnalyzer,
@@ -308,10 +308,6 @@ export function createDatabaseStyleStorage(db: NodePgDatabase<typeof schema>): S
 
 export interface StyleServiceDeps {
   storage: StyleStoragePort;
-}
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 export function renderStylePromptSnippet(

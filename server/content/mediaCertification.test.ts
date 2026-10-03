@@ -11,7 +11,7 @@ import {
   FAL_CERT_KEY,
   mediaCertificationMode,
   paidMediaCallsAllowed,
-  readMediaCertificationBudget,
+  readBudget,
   recordElevenLabsCertificationCall,
   recordFalCertificationCall,
 } from "./mediaCertification";
@@ -59,7 +59,7 @@ describe("media certification budget", () => {
       certKey: ELEVENLABS_CERT_KEY,
     }, env));
     recordElevenLabsCertificationCall(ELEVENLABS_CERT_KEY, env);
-    assert.equal(readMediaCertificationBudget(env).elevenlabsCalls, 0);
+    assert.equal(readBudget(env).elevenlabsCalls, 0);
   });
 
   it("enforces ElevenLabs certification text/budget/idempotency key", () => {
@@ -76,7 +76,7 @@ describe("media certification budget", () => {
       certKey: ELEVENLABS_CERT_KEY,
     }, env));
     recordElevenLabsCertificationCall(ELEVENLABS_CERT_KEY, env);
-    assert.equal(readMediaCertificationBudget(env).elevenlabsCalls, 1);
+    assert.equal(readBudget(env).elevenlabsCalls, 1);
     assert.throws(
       () => assertElevenLabsCertificationRequest({
         text: "another",

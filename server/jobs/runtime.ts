@@ -30,7 +30,7 @@ import {
   describeError,
   dispositionFor,
 } from "./failures";
-import { createJobScopedLogger, type LogSink } from "./logger";
+import { createJobLogger, type LogSink } from "./logger";
 import {
   getJob,
   listJobs,
@@ -250,13 +250,14 @@ export class JobRuntime {
     envelope = withAttempt(envelope, attempt);
 
     const maxAttempts = job.retryLimit + 1;
-    const logger = createJobScopedLogger(
+    const logger = createJobLogger(
       {
         jobType: definition.jobType,
         jobId: job.id,
         correlationId: envelope.correlationId,
         attempt,
       },
+      "info",
       this.options.logSink,
     );
 

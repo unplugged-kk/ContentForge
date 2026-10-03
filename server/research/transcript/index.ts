@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "../../utils/hash";
 import { cuesToText, type TranscriptCue } from "./vtt";
 
 /**
@@ -29,10 +29,6 @@ export type TranscriptChunk = {
   charCount: number;
   hash: string;
 };
-
-function sha256(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
-}
 
 /** Cache key: a stable hash over (video, language, normalized text). */
 export function computeTranscriptHash(videoId: string, lang: string | null, text: string): string {

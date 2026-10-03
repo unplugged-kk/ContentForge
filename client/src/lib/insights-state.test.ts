@@ -8,8 +8,6 @@ import {
   formatStyleProvenance,
   formatChannelName,
   formatContentType,
-  getCanonicalReviewUrl,
-  getExploreTopicUrl,
   getAskAgentUrl,
   resolveInsightsTab,
 } from "./insights-state";
@@ -101,14 +99,6 @@ describe("Phase 28.2G: Insights State Helpers", () => {
   });
 
   describe("canonical handoff URLs", () => {
-    it("builds correct URL for Review in Studio", () => {
-      assert.equal(getCanonicalReviewUrl(42), "/create?artifact=42");
-    });
-
-    it("builds correct URL for Explore topic in Sources", () => {
-      assert.equal(getExploreTopicUrl("Kubernetes & Cloud"), "/sources?query=Kubernetes%20%26%20Cloud");
-    });
-
     it("builds correct URL for Ask Agent", () => {
       assert.equal(getAskAgentUrl(), "/agent");
       assert.equal(getAskAgentUrl("Analyze reach"), "/agent?prompt=Analyze%20reach");
