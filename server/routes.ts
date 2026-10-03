@@ -14,6 +14,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { ai, MODELS } from "./ai/config";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { describeRoutes } from "./ai/router";
+import { legacyShadows } from "./decision/legacy";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { fetchTweetTextByIdViaOfficialApi, getXPostingConfigSummary, getXArticlePublishCapability, tryPublishPostById, refreshXAnalytics, syncPostAnalyticsFromX, X_MONTHLY_READ_LIMIT, X_MONTHLY_WARN_THRESHOLD } from "./social/x";
 import { getThreadsConfigSummary, threadsTokenExpiryFromNow, verifyThreadsAccessToken } from "./social/threads";
@@ -2391,6 +2392,19 @@ Return JSON:
       });
 
       res.json({ ...score, parsed });
+
+      // JC-01 shadow (Phase 6). `/api/viral/score` keeps its own answer; the
+      // decision layer records what IT would have scored, so the two can be
+      // compared before any cut-over. The response is already flushed and the
+      // call is gated + swallowed, so this cannot add latency or change a result.
+      void legacyShadows
+        .viralScore({
+          content: postContent,
+          platform,
+          llmOverall: Number(parsed.overall_score),
+          userId: sessionUserId(req),
+        })
+        .catch(() => {});
     } catch (err: any) {
       console.error("Viral score error:", err);
       res.status(500).json({ message: "Failed to score content." });

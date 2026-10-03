@@ -12,14 +12,16 @@ import { decide, type EngineDeps } from "./engine";
 import { getDecisionDefinition } from "./registry";
 import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
-import type {
-  ContentStrategyDecision,
-  FormatSelectDecision,
-  OpportunityScoreDecision,
-  PublishGateDecision,
-  QualityGateDecision,
-  ResearchDepthDecision,
-  TriageDecision,
+import {
+  VIRAL_DIMENSIONS,
+  type ContentStrategyDecision,
+  type FormatSelectDecision,
+  type OpportunityScoreDecision,
+  type PublishGateDecision,
+  type QualityGateDecision,
+  type ResearchDepthDecision,
+  type TriageDecision,
+  type ViralScoreDecision,
 } from "./schemas";
 import { normalizeState } from "./state";
 
@@ -483,6 +485,43 @@ describe("decide — format_select", () => {
     );
     assert.equal(result.fallback, true);
     assert.equal(result.decision.kept.length, 3, "fail-open keeps the policy's targets whole");
+  });
+});
+
+// ── legacy: viral score (JC-01, shadow) ──────────────────────────────────────
+describe("decide — viral_score", () => {
+  const scores = (values: number[]): JevResponse => {
+    const answers: Record<string, JevAnswer> = {};
+    VIRAL_DIMENSIONS.forEach((dimension, index) => {
+      answers[dimension] = noul(values[index]);
+    });
+    return response(answers);
+  };
+
+  it("composes the overall in code and carries the model's own score for comparison", async () => {
+    const result = await decide<ViralScoreDecision>(
+      {
+        type: "viral_score",
+        state: { topic: { title: "draft" }, quality: { signals: { llm_overall_normalized: 0.72 }, flags: [] } },
+      },
+      deps({ jevDecide: async () => scores([0.8, 0.6, 0.5, 0.7, 0.9, 0.8, 0.4, 0.6]) }),
+    );
+
+    assert.equal(result.fallback, false);
+    assert.equal(result.policyId, "viral-score");
+    assert.ok(Math.abs((result.decision.overall ?? 0) - 0.6625) < 0.0005);
+    assert.equal(Object.keys(result.decision.dimensions).length, 8);
+    assert.equal(result.signals?.llm_overall_normalized, 0.72, "both sides are recorded");
+  });
+
+  it("reports a null overall rather than a fabricated score when unusable", async () => {
+    const result = await decide<ViralScoreDecision>(
+      { type: "viral_score", state: {} },
+      deps({ jevDecide: async () => response({}) }),
+    );
+    assert.equal(result.fallback, true);
+    assert.equal(result.decision.overall, null);
+    assert.deepEqual(result.decision.dimensions, {});
   });
 });
 

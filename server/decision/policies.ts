@@ -105,6 +105,15 @@ const POLICIES = {
     flag: "JEV_FRAMING",
     description: "Which of a policy's allowed formats to actually generate",
   },
+  /** JC-01. Shadow-only for now: it records a score and changes nothing. */
+  viral_score: {
+    id: "viral-score",
+    version: "v1",
+    fallback: "deterministic",
+    minConfidence: 0,
+    flag: "JEV_LEGACY_SCORING",
+    description: "How much viral potential a draft has (legacy scoring, shadow)",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;

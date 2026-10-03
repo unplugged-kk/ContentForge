@@ -115,6 +115,31 @@ export const formatSelectDecisionSchema = z.object({
 });
 export type FormatSelectDecision = z.infer<typeof formatSelectDecisionSchema>;
 
+// ── legacy (Phase 6) ─────────────────────────────────────────────────────────
+/**
+ * JC-01. Dimension keys deliberately match the legacy prompt's own keys
+ * (`hook_power`, `value_density`, …) so a shadow run can be compared with the
+ * model's scores without a translation layer.
+ */
+export const VIRAL_DIMENSIONS = [
+  "hook_power",
+  "value_density",
+  "emotional_trigger",
+  "shareability",
+  "uniqueness",
+  "readability",
+  "cta_strength",
+  "timeliness",
+] as const;
+export type ViralDimension = (typeof VIRAL_DIMENSIONS)[number];
+
+export const viralScoreDecisionSchema = z.object({
+  /** null ⇒ no score could be computed. Never fabricated. */
+  overall: z.number().min(0).max(1).nullable(),
+  dimensions: z.record(z.number().min(0).max(1)),
+});
+export type ViralScoreDecision = z.infer<typeof viralScoreDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
@@ -124,6 +149,7 @@ export const DECISION_SCHEMAS = {
   content_strategy: contentStrategyDecisionSchema,
   publish_gate: publishGateDecisionSchema,
   format_select: formatSelectDecisionSchema,
+  viral_score: viralScoreDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(
