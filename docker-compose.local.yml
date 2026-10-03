@@ -1,0 +1,17 @@
+# ContentForge — LOCAL overlay (your machine).
+#
+# Always used together with the base file. The Makefile does this for you:
+#
+#   make up        → docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#   make down / make ps / make logs
+#
+# Nothing here is required for safety — the base file already binds every
+# published port to loopback. This overlay exists so that a `.env` written for
+# the VPS (secure cookie, trust proxy) cannot leak into a local run and silently
+# cost you your session over plain HTTP.
+services:
+  app:
+    environment:
+      SESSION_COOKIE_SECURE: "0"
+      TRUST_PROXY: "0"
+      NODE_ENV: production

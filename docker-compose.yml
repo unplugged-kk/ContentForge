@@ -30,8 +30,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cfpass}
       POSTGRES_DB: ${POSTGRES_DB:-contentforge}
     ports:
-      # Exposed so you can inspect the local database with psql if you want to.
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bound to LOOPBACK on purpose. Locally this is still `localhost:5432` for
+      # psql; on a VPS it means Postgres is never reachable from the internet.
+      # `make up` (local) and `make vps` (VPS) layer an overlay on top of this
+      # file — see docker-compose.local.yml / docker-compose.vps.yml.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - contentforge_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -56,7 +59,9 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-3000}:5000"
+      # Loopback-bound too: cloudflared reaches the app over the compose network
+      # (`http://app:5000`), so the host port exists only for convenience.
+      - "127.0.0.1:${APP_PORT:-3000}:5000"
     # Real credentials come from the gitignored local .env — never from this
     # file, and never into git. `.env` takes precedence for anything set below
     # only where noted; DATABASE_URL is deliberately overridden to address the

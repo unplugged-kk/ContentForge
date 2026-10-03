@@ -119,7 +119,7 @@ Only **configuration**, never product code (per the brief):
 
 ## 8. Data created (local only)
 
-1 test user (+1 second user for isolation tests) · 5 research jobs · 1 video source with 33 chunks and 670 cues · 1 video claim · 3 stories · 2 opportunities · 2 generation jobs (1 failed, 1 succeeded) · 2 artifacts · 1 schedule (not due) · 2 decision-ledger rows · 1 dead-lettered job.
+1 test user (+1 second user for isolation tests) · 5 research jobs · 1 video source with 33 chunks and 670 cues · 1 video claim · 3 stories · 4 opportunities · 3 visual generations (1 real Nano Banana image succeeded, 1 failed on F3, 1 text generation succeeded) · 4 artifacts · 1 visual asset (`image/jpeg`, 1376×768, 399,888 bytes) · 1 schedule (not due) · 2 decision-ledger rows · 1 dead-lettered job.
 
 ## 9. Tests NOT run, and why
 
@@ -130,8 +130,8 @@ Only **configuration**, never product code (per the brief):
 | Phase 10 occurrence materialisation | Doing so would enqueue a **real publish** (unauthorised) |
 | Phase 5 failure paths (no captions / private / timeout / non-English) | Each needs another video/network fault; deferred to keep spend and runtime bounded |
 | Phase 14 memory profiling | Only latency measured (3–6 ms reads); no memory instrumentation present |
-| **Jev matrix J1–J10** | Jev is **unconfigured locally** (`TYPESAFE_API_KEY` absent) → every decision would return its declared fallback. Tested incidentally: triage fail-open, quality-gate hold-not-block, ledger fallback rows (§ Phase 2/7). A meaningful Jev audit requires a Jev key **and** a real agent backend (local default is `fixture`) |
-| Manual vs Jev comparison | Same blocker as the Jev matrix |
+| **Acceptance journeys J1–J7** (the UX journey map) | These are *journeys*, not Jev tests, and most end in a real publish or need real engagement data. J1/J2/J4/J5 were walked in earlier sessions, J3/J6 were read in code, J7 was exercised with injected failures. **J8–J10 do not exist** — an earlier draft of this report invented them (corrected in Addendum §3a) |
+| **Jev decision layer** (9 domains) | **RUN** — `TYPESAFE_API_KEY` is now configured and one real decision is verified (Addendum §3). The layer itself was always codified: `server/decision/decisions/` (agent, discover, format, opportunity, publishing, quality, research, strategy, viral), mounted at `/api/decision`, 8 test files + `ledger.dbtest.ts`, shadow mode for publishing |
 
 ## ADDENDUM — post-report work (owner-directed)
 
@@ -196,13 +196,31 @@ POST /api/decision/triage →
 This is the first **real** (non-fallback) decision-layer evidence in this report:
 it discriminates on-expertise from off-expertise content exactly as designed.
 
-**Still not run:** the full **J1–J10 matrix** and the manual-vs-Jev comparison.
-Those test *skill selection and orchestration*, which in this codebase is the
-**agent runtime**, not the Jev decision layer — Jev makes bounded typed decisions
-(triage, gates, framing, strategy) at specific boundaries, so J1–J10 as written
-do not map onto the built architecture. Running them meaningfully needs the
-non-`fixture` agent backend plus a definition of "selected skill" in that layer.
-That is a scope/definitition question for the owner, not a missing key.
+### 3a. CORRECTION — there is no "Jev matrix J1–J10"
+
+An earlier draft of this report — and my own first pass at this addendum —
+referred to a "Jev matrix J1–J10". That was wrong, and the error was **this
+report's**, not a gap in the product:
+
+- **J1–J7 are user journeys** (`docs/ux-audit/USER_JOURNEYS.md`): first run, daily
+  ritual, discovery→post, bring in a source, agent run→approved artifact, review
+  performance, recover from failure. They are not Jev tests and never were.
+- **J8, J9 and J10 do not exist** anywhere in the repository. The earlier draft
+  invented them by extending the journey numbering.
+- **No skill-selection layer exists**, and none was designed — there is no
+  `selectSkill` symbol and no `skills/decision/jev/`. The claim that the matrix
+  needed one was manufactured alongside the matrix itself.
+
+What *does* exist is the bounded decision layer, and it is already codified,
+wired, and now locally verified: nine decision domains
+(`server/decision/decisions/`), mounted at `/api/decision`
+(`server/index.ts:236`), with 8 unit test files plus `ledger.dbtest.ts`, shadow
+mode for the publishing decisions, and a real Jev decision confirmed above.
+
+The layer was never working *less* than the code shows. Before the key it
+returned its declared fallbacks (correct behaviour, honestly reported); with the
+key it returns real decisions. Nothing about the layer was missing or broken —
+only this report's description of it was.
 
 ### 4. Unrelated observation — one consistently failing unit test
 
@@ -226,6 +244,6 @@ so the suite is not mistaken for green.
 2. Any external publish (needs authorisation).
 3. Occurrence → publication → result transitions (needs a publish authorisation).
 4. Multi-target repurposing (X + LinkedIn) end-to-end — the brief's J6; not run.
-5. The full Jev matrix J1–J10 and the manual-vs-Jev comparison (see Addendum §3).
+5. Acceptance journeys J3 and J6 under real data — the decision layer itself is verified (Addendum §3).
 6. Long-transcript fidelity beyond the first excerpt (F6).
 7. Media durability across restart — **now confirmed as F3** (Addendum §2).

@@ -1,0 +1,19 @@
+# ContentForge — VPS overlay (the real deployment).
+#
+#   make vps            → docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile tunnel up -d --build
+#   make deploy-vps     → git pull --ff-only origin main, then the above
+#
+# Ingress is cloudflared only: the base file binds Postgres and the app to
+# loopback, and cloudflared reaches the app over the compose network
+# (`http://app:5000`). No port in this stack is reachable from the internet.
+#
+# There is no Railway here. The database is the `postgres` service in this stack,
+# on the `contentforge_pg_data` volume, and the application migrates it on boot.
+services:
+  app:
+    environment:
+      NODE_ENV: production
+      # Behind Cloudflare Tunnel the browser talks HTTPS, so the session cookie
+      # must be Secure and the app must trust the proxy's forwarded headers.
+      SESSION_COOKIE_SECURE: "1"
+      TRUST_PROXY: "1"

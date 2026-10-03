@@ -4,7 +4,12 @@ Operational runbook for the ContentForge deployment (OCI VPS + Docker Compose + 
 Verified against the live deployment on 2026-09-28.
 
 Public URL: **https://contentforge.kishorekumarbehera.com**
-Host: `ubuntu@129.159.224.196` (`hermes-nic`) · Repo: `/home/ubuntu/git/ContentForge` · Branch: `deploy/vps-dogfooding`
+Host: `ubuntu@129.159.224.196` (`hermes-nic`) · Repo: `/home/ubuntu/git/ContentForge` · Branch: **`main`**
+
+**Deployment is always from `main`.** There is no deploy branch and no Railway —
+pushing `main` deploys nothing by itself; the VPS pulls `main` and runs
+`make deploy-vps`. The database is the `postgres` service in this stack, on the
+`contentforge_pg_data` volume.
 
 ---
 
@@ -37,7 +42,10 @@ Internet → Cloudflare (DNS + WAF) → Cloudflare Tunnel → OCI VPS → Docker
 
 | File | Role |
 |---|---|
-| `docker-compose.yml` | the stack; `cloudflared` is behind the `tunnel` profile |
+| `docker-compose.yml` | the stack (base); `cloudflared` behind the `tunnel` profile; **every published port binds to loopback** |
+| `docker-compose.local.yml` | local overlay — plain HTTP, `TRUST_PROXY=0` (`make up`) |
+| `docker-compose.vps.yml` | VPS overlay — Secure cookie, `TRUST_PROXY=1`, tunnel (`make vps`) |
+| `Makefile` | `make up` · `make vps` · `make deploy-vps` · `make backup` · `make restore` |
 | `.env` | all config/secrets (gitignored; never committed) |
 | `Dockerfile` | multi-stage build (builder runs `npm run build` → `dist/`) |
 | `.dockerignore` | keeps `.env`, `node_modules`, `dist`, `.scratch`, `uploads`, docs/agent dirs out of the build |
@@ -53,7 +61,7 @@ Internet → Cloudflare (DNS + WAF) → Cloudflare Tunnel → OCI VPS → Docker
 | `SESSION_SECRET` | session signing (fail-closed in production) |
 | `ENCRYPTION_KEY` | at-rest encryption of provider tokens; **keep stable** |
 | `POSTGRES_USER/PASSWORD/DB` | DB credentials |
-| `POSTGRES_PORT`, `APP_PORT` | **set to `127.0.0.1:5432` / `127.0.0.1:3000`** so ports bind to loopback only |
+| `POSTGRES_PORT`, `APP_PORT` | host ports only; the **loopback binding lives in `docker-compose.yml`**, so `5432`/`3000` are fine |
 | `AI_BASE_URL`, `AI_API_KEY`, `AI_TEXT_MODEL`, `AI_TEXT_PREMIUM_MODEL`, `AI_VISION_MODEL`, `AI_IMAGE_MODEL` | AI provider |
 | `XQUIK_API_KEY`, `XQUIK_ACCOUNT` | X publishing (xQuick) |
 | `CLOUDFLARE_*`, `TUNNEL_TOKEN` | Cloudflare management + tunnel credential |
@@ -67,11 +75,11 @@ ssh ubuntu@129.159.224.196
 cd /home/ubuntu/git/ContentForge
 
 # start / apply .env changes (recreates changed services)
-docker compose --profile tunnel up -d
+make vps
 
 # status + logs
-docker compose --profile tunnel ps
-docker compose logs -f app
+make ps
+make logs
 
 # restart one service without touching data
 docker compose restart app
@@ -96,10 +104,10 @@ docker compose --profile tunnel ps           # all services healthy
 
 **Database**
 ```bash
-# backup
-docker exec contentforge-db pg_dump -U cfuser -d contentforge > backup-$(date +%F).sql
+# backup  (reads POSTGRES_USER/POSTGRES_DB from inside the container)
+make backup
 # restore
-cat backup-YYYY-MM-DD.sql | docker exec -i contentforge-db psql -U cfuser -d contentforge
+make restore FILE=backups/contentforge-YYYYMMDD-HHMMSS.sql
 ```
 
 **Uploaded / generated media** (named volumes)
@@ -116,10 +124,8 @@ docker run --rm -v contentforge_uploads:/data -v "$PWD":/out alpine \
 
 ```bash
 cd /home/ubuntu/git/ContentForge
-git fetch origin && git checkout deploy/vps-dogfooding && git pull
-docker compose --profile tunnel build        # rebuild the app image
-docker compose --profile tunnel up -d        # migrations run on boot
-docker compose --profile tunnel ps           # verify healthy
+make deploy-vps     # git pull --ff-only origin main → build → up (migrations run on boot)
+make ps             # verify healthy
 ```
 Back up the DB first (§6). Roll back by checking out the previous commit/digest and rebuilding.
 
@@ -136,8 +142,9 @@ Back up the DB first (§6). Roll back by checking out the previous commit/digest
 
 - `.env` is excluded from the image (`.dockerignore`) and from git (`*.env`). Keep it that way.
 - **Registration is open** on a public URL — anyone can sign up; consider a registration lock.
-- Session cookie is not `Secure` behind the tunnel (`SESSION_COOKIE_SECURE=0`); Express `trust proxy` is
-  not configured. Login works, but harden before wider use.
+- `docker-compose.vps.yml` sets `SESSION_COOKIE_SECURE=1` and `TRUST_PROXY=1`, so the session cookie is
+  `Secure` and Express trusts the tunnel's forwarded headers. (These were unset on the first VPS deploy;
+  the overlay now makes them the default.)
 - See `docs/DOGFOODING.md` and `docs/DOGFOODING_REPORT_TEMPLATE.md` for the dogfooding procedure.
 
 ---
