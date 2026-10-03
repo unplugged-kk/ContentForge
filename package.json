@@ -12,7 +12,7 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test": "npm run test:unit",
-    "test:unit": "NODE_ENV=test node --import tsx --test \"server/**/*.test.ts\" \"client/src/lib/**/*.test.ts\"",
+    "test:unit": "NODE_ENV=test CONTENTFORGE_E2E_SERVER=1 node --import tsx --test \"server/**/*.test.ts\" \"client/src/lib/**/*.test.ts\"",
     "test:db": "NODE_ENV=test node --import tsx script/test-db-guard.ts && NODE_ENV=test node --import tsx --test --test-concurrency=1 \"server/**/*.dbtest.ts\"",
     "test:e2e:live": "node script/e2e-live.mjs",
     "db:push": "drizzle-kit push",
