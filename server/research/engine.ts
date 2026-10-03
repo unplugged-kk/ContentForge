@@ -102,14 +102,28 @@ export interface ResearchEngineDeps {
    * evidence derivation and analysis; a missing/failing gate is fail-open.
    */
   triage?: ResearchTriagePort;
+  /**
+   * Optional depth decision, asked ONLY when the caller specified no depth, so a
+   * directed request always wins. Missing or failing ⇒ "standard" (fail-open).
+   */
+  depth?: ResearchDepthPort;
 }
 
 /** Decides which collected sources are worth continuing (Jev, in production). */
 export interface ResearchTriagePort {
   gate(
     sources: NormalizedSource[],
-    ctx: { query?: string },
+    ctx: { query?: string; jobId?: number },
   ): Promise<{ kept: NormalizedSource[]; dropped: NormalizedSource[] } | null>;
+}
+
+/** Decides how far a research run should go, when the caller did not say. */
+export interface ResearchDepthPort {
+  choose(ctx: {
+    query?: string;
+    kind: InitiationKind;
+    providerCount: number;
+  }): Promise<ResearchDepth | null>;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -204,12 +218,34 @@ export class ResearchEngine {
     };
   }
 
+  /**
+   * The depth to actually run at: a caller-specified depth always wins, and the
+   * optional decision is asked only when there is a genuine choice to make. A
+   * missing or failing port resolves to "standard" — research never stops
+   * because a decision was unavailable.
+   */
+  private async resolveDepth(input: ResearchRunInput): Promise<ResearchDepth> {
+    if (input.depth) return input.depth;
+    if (!this.deps.depth) return "standard";
+    try {
+      const chosen = await this.deps.depth.choose({
+        query: input.query,
+        kind: input.kind,
+        providerCount: input.providerIds.length,
+      });
+      return chosen ?? "standard";
+    } catch (error) {
+      this.log({ error: describeError(error) }, "research depth decision failed; using standard");
+      return "standard";
+    }
+  }
+
   private async execute(
     job: ResearchJob,
     input: ResearchRunInput,
     correlationId: string,
   ): Promise<ResearchRunResult> {
-    const budget = depthBudget(input.depth ?? "standard", input.limit);
+    const budget = depthBudget(await this.resolveDepth(input), input.limit);
     const timeoutMs = input.timeoutMs ?? budget.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const deadline = new Date(this.now().getTime() + timeoutMs);
     const resolvedWindow = resolveTimeWindow(
@@ -286,7 +322,10 @@ export class ResearchEngine {
       let triageDropped: NormalizedSource[] = [];
       if (this.deps.triage && kept.length > 0) {
         try {
-          const outcome = await this.deps.triage.gate(kept, { query: input.query });
+          const outcome = await this.deps.triage.gate(kept, {
+            query: input.query,
+            jobId: job.id,
+          });
           if (outcome) {
             gated = outcome.kept;
             triageDropped = outcome.dropped;

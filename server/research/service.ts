@@ -9,7 +9,10 @@
 import { db } from "../db";
 import type { LogSink } from "../jobs/logger";
 import { jevConfigured } from "../decision/jev";
-import { ResearchEngine } from "./engine";
+import { decide } from "../decision/engine";
+import { decisionTypeEnabled } from "../decision/policies";
+import type { ResearchDepthDecision } from "../decision/schemas";
+import { ResearchEngine, type ResearchDepthPort } from "./engine";
 import { ProviderExecutor } from "./registry";
 import { DatabaseResearchStorage } from "./storage";
 import { createSeoProvider, type SeoCapability } from "./seo";
@@ -34,10 +37,26 @@ export const providerExecutor = new ProviderExecutor({ logSink });
 const triage =
   process.env.JEV_RESEARCH_GATE === "1" && jevConfigured() ? createJevTriageGate() : undefined;
 
+// Opt-in depth decision, on its OWN flag so it never activates as a side effect
+// of the triage gate. Asked only when a request does not specify a depth, and
+// fail-open to "standard".
+const depth: ResearchDepthPort | undefined = decisionTypeEnabled("research_depth")
+  ? {
+      choose: async (ctx) => {
+        const result = await decide<ResearchDepthDecision>({
+          type: "research_depth",
+          state: { topic: { query: ctx.query } },
+        });
+        return (result.decision as ResearchDepthDecision).depth;
+      },
+    }
+  : undefined;
+
 export const researchEngine = new ResearchEngine({
   executor: providerExecutor,
   storage: researchStorage,
   logSink,
   seo: seoPort,
   ...(triage ? { triage } : {}),
+  ...(depth ? { depth } : {}),
 });

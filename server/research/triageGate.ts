@@ -1,15 +1,26 @@
-import { jevConfigured, type ResearchCandidate, type TriagedCandidate } from "../decision/jev";
-import { triageCandidates } from "../decision/jev";
+import { jevConfigured, type ResearchCandidate } from "../decision/jev";
+import { decide } from "../decision/engine";
+import type { TriageDecision } from "../decision/schemas";
 import type { NormalizedSource } from "./contracts";
 import type { ResearchTriagePort } from "./engine";
 
 /**
  * Jev-backed triage gate for the research engine.
  *
- * After providers are collected/deduped/windowed and BEFORE evidence derivation,
- * the gate asks Jev which sources are worth pursuing and drops the rest, so deep
- * analysis only runs on what matters. Wired only when `JEV_RESEARCH_GATE=1` and
- * Jev is configured; otherwise research proceeds exactly as before.
+ * A thin adapter over the DECISION ENGINE, not a second triage implementation.
+ * It used to carry its own `selectForResearch` policy, which meant two divergent
+ * triage rules (and a live one that discarded every `watch` candidate as soon as
+ * a single candidate was `pursue`) plus no ledger record. The policy now lives in
+ * the registry's `research_triage` definition, so:
+ *
+ *   • there is exactly one keep-set policy, env-tunable via JEV_TRIAGE_KEEP,
+ *   • every triage decision is recorded with its policy version and the sources
+ *     it kept, and
+ *   • an unusable answer reaches the engine's declared fail-open fallback
+ *     (keep everything) instead of emptying the batch.
+ *
+ * Wired only when `JEV_RESEARCH_GATE=1` and Jev is configured; otherwise research
+ * proceeds exactly as before.
  */
 
 /** 1:1 source → candidate mapping (index ids, so results map back by position). */
@@ -23,34 +34,33 @@ export function candidatesFromSources(sources: NormalizedSource[]): ResearchCand
   }));
 }
 
-/**
- * The gate's policy, pure and testable: keep `pursue`; if none, keep `watch`;
- * if neither, keep nothing.
- */
-export function selectForResearch(triaged: TriagedCandidate[]): TriagedCandidate[] {
-  const pursue = triaged.filter((c) => c.decision === "pursue");
-  if (pursue.length > 0) return pursue;
-  return triaged.filter((c) => c.decision === "watch");
+export interface TriageGateDeps {
+  /** Injected for tests; defaults to the real engine entry point. */
+  decide?: typeof decide;
 }
 
-export type TriageFn = (candidates: ResearchCandidate[]) => Promise<TriagedCandidate[]>;
-
-export function createJevTriageGate(options: { triage?: TriageFn } = {}): ResearchTriagePort {
-  const triage: TriageFn = options.triage ?? ((candidates) => triageCandidates(candidates));
+export function createJevTriageGate(deps: TriageGateDeps = {}): ResearchTriagePort {
+  const run = deps.decide ?? decide;
 
   return {
-    async gate(sources, _ctx) {
+    async gate(sources, ctx) {
       if (!jevConfigured()) return null;
       if (sources.length === 0) return null;
 
-      const candidates = candidatesFromSources(sources);
-      const triaged = await triage(candidates);
-      const keepIds = new Set(selectForResearch(triaged).map((c) => c.id));
+      const result = await run<TriageDecision>({
+        type: "research_triage",
+        state: { candidates: candidatesFromSources(sources) },
+        ...(ctx.jobId ? { refs: { researchJobId: ctx.jobId } } : {}),
+      });
 
+      // The engine has already applied the declared fallback if anything failed,
+      // so this decision is always usable: `keep` is a set of source indices.
+      const decision = result.decision as TriageDecision;
+      const keep = new Set(decision.keep);
       const kept: NormalizedSource[] = [];
       const dropped: NormalizedSource[] = [];
       sources.forEach((source, index) => {
-        (keepIds.has(`s${index}`) ? kept : dropped).push(source);
+        (keep.has(index) ? kept : dropped).push(source);
       });
       return { kept, dropped };
     },

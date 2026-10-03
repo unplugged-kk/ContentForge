@@ -60,7 +60,9 @@ const POLICIES = {
     version: "v1",
     fallback: "deterministic",
     minConfidence: 0,
-    flag: "JEV_RESEARCH_GATE",
+    // Its OWN flag, not JEV_RESEARCH_GATE: that gate is already on in existing
+    // deployments, and sharing it would silently activate depth selection.
+    flag: "JEV_RESEARCH_DEPTH",
     description: "How deep a research run should go for a given candidate",
   },
   opportunity_score: {
