@@ -97,6 +97,14 @@ const POLICIES = {
     flag: "JEV_PUBLISH_GATE",
     description: "May this be auto-approved and queued for publication without a human?",
   },
+  format_select: {
+    id: "format-select",
+    version: "v1",
+    fallback: "fail_open_keep",
+    minConfidence: 0,
+    flag: "JEV_FRAMING",
+    description: "Which of a policy's allowed formats to actually generate",
+  },
 } as const satisfies Record<string, DecisionPolicy>;
 
 export const DECISION_POLICIES = POLICIES;

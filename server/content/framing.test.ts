@@ -1,42 +1,42 @@
 /**
- * Jev framing (pure): question construction and answer mapping. No network.
+ * The framing adapter: policy targets in, a narrowed subset out, nothing invented.
+ *
+ * The decision's own logic (and Jev's verified `choice` contract) moved to
+ * `decision/decisions/format.ts` and is covered in `decision/engine.test.ts`.
+ * These tests pin this boundary: what the adapter sends, what it does with the
+ * answer, and that it can never widen a policy's allowed set.
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildFramingQuestions, matchFormat, selectFramedTargets } from "./framing";
+import { createJevFraming } from "./framing";
+import { matchFormat } from "../decision/decisions/format";
+import type { DecisionResult, FormatSelectDecision } from "../decision/schemas";
 
-const story = {
-  storyTitle: "Cost: Karpenter consolidation",
-  insightBody: "Evidence: bin-packing cut idle nodes 40%.",
-  targets: [
-    { format: "x_post", channel: "x" },
-    { format: "x_thread", channel: "x" },
-    { format: "linkedin_post", channel: "linkedin" },
-  ],
-};
+const TARGETS = [
+  { channel: "x", format: "x_post" },
+  { channel: "x", format: "x_thread" },
+  { channel: "linkedin", format: "linkedin_post" },
+];
 
-describe("buildFramingQuestions", () => {
-  it("asks only channels that actually have a choice", () => {
-    const q = buildFramingQuestions(story);
-    assert.deepEqual(Object.keys(q), ["ch0"]);
-    // Jev's contract: instructions is a STRING, criteria is an OBJECT whose keys
-    // are the candidate answers (verified against the live API).
-    assert.equal(typeof q.ch0.instructions, "string");
-    assert.deepEqual(Object.keys(q.ch0.criteria as object), ["x_post", "x_thread"]);
-    assert.match(q.ch0.instructions as string, /x_thread|exactly one/);
-  });
+function engineReturning(kept: Array<{ channel: string; format: string }>, fallback = false) {
+  const calls: Array<Record<string, any>> = [];
+  const run = (async (input: Record<string, any>) => {
+    calls.push(input);
+    return {
+      decision: { kept },
+      reasons: ["test"],
+      policyId: "format-select",
+      policyVersion: "v1",
+      decisionType: "format_select",
+      fallback,
+      level: "soft",
+    } satisfies DecisionResult<FormatSelectDecision>;
+  }) as never;
+  return { run, calls };
+}
 
-  it("asks nothing when every channel has a single format", () => {
-    const q = buildFramingQuestions({
-      ...story,
-      targets: [{ format: "x_post", channel: "x" }],
-    });
-    assert.deepEqual(Object.keys(q), []);
-  });
-});
-
-describe("matchFormat", () => {
+describe("matchFormat (choice → allowed format)", () => {
   it("matches exactly, case-insensitively, and by containment", () => {
     assert.equal(matchFormat("x_post", ["x_post", "x_thread"]), "x_post");
     assert.equal(matchFormat("X_THREAD", ["x_post", "x_thread"]), "x_thread");
@@ -46,26 +46,74 @@ describe("matchFormat", () => {
   });
 });
 
-describe("selectFramedTargets", () => {
-  it("narrows only the channels Jev spoke about", () => {
-    const kept = selectFramedTargets(story, { ch0: { type: "choice", choice: "x_thread" } });
-    assert.deepEqual(kept, [
-      { format: "x_thread", channel: "x" },
-      { format: "linkedin_post", channel: "linkedin" },
+describe("createJevFraming", () => {
+  it("sends the allowed pairs and the story, and returns the narrowed subset", async () => {
+    const { run, calls } = engineReturning([
+      { channel: "x", format: "x_thread" },
+      { channel: "linkedin", format: "linkedin_post" },
     ]);
+    const framing = createJevFraming({ decide: run });
+
+    const kept = await framing.selectTargets({
+      storyTitle: "Cost story",
+      insightBody: "Idle nodes trace to pod requests.",
+      targets: TARGETS,
+      runId: 9,
+    });
+
+    assert.deepEqual(kept, [
+      { channel: "x", format: "x_thread" },
+      { channel: "linkedin", format: "linkedin_post" },
+    ]);
+    assert.equal(calls[0].type, "format_select");
+    assert.deepEqual(calls[0].refs, { automationRunId: 9 });
+    assert.deepEqual(calls[0].state.targets, TARGETS);
+    assert.equal(calls[0].state.topic.title, "Cost story");
   });
 
-  it("returns null when nothing usable came back, so the policy set stands", () => {
-    assert.equal(selectFramedTargets(story, {}), null);
-    assert.equal(selectFramedTargets(story, { ch0: { type: "choice", choice: "nonsense" } }), null);
-    assert.equal(selectFramedTargets(story, { ch0: { type: "noul", choice: "x_post" } }), null);
+  it("cannot keep a pair the policy never allowed", async () => {
+    // A decision claiming an unpermitted pair is filtered out by the adapter.
+    const { run } = engineReturning([{ channel: "x", format: "x_article" }]);
+    const framing = createJevFraming({ decide: run });
+    const kept = await framing.selectTargets({
+      storyTitle: "t",
+      insightBody: "b",
+      targets: TARGETS,
+    });
+    assert.equal(kept, null, "nothing allowed survived ⇒ the caller keeps its own set");
   });
 
-  it("never invents a pair that is not in the policy", () => {
-    const kept = selectFramedTargets(story, { ch0: { type: "choice", choice: "x_post" } });
-    assert.deepEqual(kept, [
-      { format: "x_post", channel: "x" },
-      { format: "linkedin_post", channel: "linkedin" },
-    ]);
+  it("does not spend a call when no channel offers a choice", async () => {
+    const { run, calls } = engineReturning(TARGETS);
+    const framing = createJevFraming({ decide: run });
+    const kept = await framing.selectTargets({
+      storyTitle: "t",
+      insightBody: "b",
+      targets: [{ channel: "x", format: "x_post" }],
+    });
+    assert.equal(kept, null);
+    assert.equal(calls.length, 0);
+  });
+
+  it("returns the policy's targets untouched when the engine falls back", async () => {
+    const { run } = engineReturning(TARGETS, true);
+    const framing = createJevFraming({ decide: run });
+    const kept = await framing.selectTargets({
+      storyTitle: "t",
+      insightBody: "b",
+      targets: TARGETS,
+    });
+    assert.deepEqual(kept, TARGETS);
+  });
+
+  it("deduplicates the policy's pairs before deciding", async () => {
+    const { run, calls } = engineReturning(TARGETS);
+    const framing = createJevFraming({ decide: run });
+    await framing.selectTargets({
+      storyTitle: "t",
+      insightBody: "b",
+      targets: [...TARGETS, { channel: "x", format: "x_post" }, { channel: "x", format: "x_thread" }],
+    });
+    assert.equal(calls[0].state.targets.length, 3);
   });
 });

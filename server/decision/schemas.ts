@@ -98,6 +98,23 @@ export const publishGateDecisionSchema = z.object({
 });
 export type PublishGateDecision = z.infer<typeof publishGateDecisionSchema>;
 
+// ── format ───────────────────────────────────────────────────────────────────
+/**
+ * Narrow-only by construction: `kept` must be a subset of the pairs the caller
+ * allowed, so a decision can never invent a format a policy never permitted.
+ */
+export const formatSelectDecisionSchema = z.object({
+  kept: z
+    .array(
+      z.object({
+        channel: z.string().min(1).max(50),
+        format: z.string().min(1).max(50),
+      }),
+    )
+    .max(20),
+});
+export type FormatSelectDecision = z.infer<typeof formatSelectDecisionSchema>;
+
 // ── dispatch table ───────────────────────────────────────────────────────────
 export const DECISION_SCHEMAS = {
   research_triage: triageDecisionSchema,
@@ -106,6 +123,7 @@ export const DECISION_SCHEMAS = {
   quality_gate: qualityGateDecisionSchema,
   content_strategy: contentStrategyDecisionSchema,
   publish_gate: publishGateDecisionSchema,
+  format_select: formatSelectDecisionSchema,
 } as const satisfies Record<DecisionType, z.ZodTypeAny>;
 
 export function validateDecision<T extends DecisionType>(

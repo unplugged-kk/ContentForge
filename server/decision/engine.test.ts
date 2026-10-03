@@ -14,6 +14,7 @@ import type { JevAnswer, JevResponse } from "./jev";
 import type { DecisionLedgerEntry, DecisionLedgerPort } from "./ledger";
 import type {
   ContentStrategyDecision,
+  FormatSelectDecision,
   OpportunityScoreDecision,
   PublishGateDecision,
   QualityGateDecision,
@@ -441,6 +442,47 @@ describe("decide — publish_gate", () => {
     assert.equal(result.decision.outcome, "hold");
     assert.equal(result.fallback, true);
     assert.match(result.reasons[0], /failed/);
+  });
+});
+
+// ── format select (framing) ──────────────────────────────────────────────────
+describe("decide — format_select", () => {
+  const TARGETS = [
+    { channel: "x", format: "x_post" },
+    { channel: "x", format: "x_thread" },
+    { channel: "linkedin", format: "linkedin_post" },
+  ];
+  const FORMAT_STATE = { topic: { title: "Cost", query: "story body" }, targets: TARGETS };
+
+  it("asks one choice per channel with a real choice, options as criteria keys", () => {
+    const questions = getDecisionDefinition("format_select").buildQuestions({
+      state: normalizeState(FORMAT_STATE),
+    });
+    assert.deepEqual(Object.keys(questions), ["ch0"], "linkedin offers no choice and is not asked");
+    assert.equal(typeof questions.ch0.instructions, "string");
+    assert.deepEqual(Object.keys(questions.ch0.criteria as object), ["x_post", "x_thread"]);
+  });
+
+  it("narrows only the channel it spoke about", async () => {
+    const result = await decide<FormatSelectDecision>(
+      { type: "format_select", state: FORMAT_STATE, refs: { automationRunId: 3 } },
+      deps({ jevDecide: async () => response({ ch0: choice("x_thread", 0.8) }) }),
+    );
+    assert.equal(result.fallback, false);
+    assert.equal(result.policyId, "format-select");
+    assert.deepEqual(result.decision.kept, [
+      { channel: "x", format: "x_thread" },
+      { channel: "linkedin", format: "linkedin_post" },
+    ]);
+  });
+
+  it("falls back to keeping every allowed target when the answer is unusable", async () => {
+    const result = await decide<FormatSelectDecision>(
+      { type: "format_select", state: FORMAT_STATE },
+      deps({ jevDecide: async () => response({ ch0: choice("nonsense") }) }),
+    );
+    assert.equal(result.fallback, true);
+    assert.equal(result.decision.kept.length, 3, "fail-open keeps the policy's targets whole");
   });
 });
 

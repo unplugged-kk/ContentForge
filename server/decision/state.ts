@@ -27,6 +27,7 @@ export const STATE_BOUNDS = {
   maxDomains: 20,
   maxAudiences: 6,
   maxGoals: 6,
+  maxTargets: 20,
   maxFlags: 20,
   maxHashInputChars: 60_000,
 } as const;
@@ -51,6 +52,11 @@ export interface ContentForgeState {
   candidates?: StateCandidate[];
   /** `options` are the bounded audience candidates a strategy choice may pick from. */
   audience?: { primary?: string; description?: string; options?: string[] };
+  /**
+   * The allowed format × channel pairs a format decision may narrow. Bounded and
+   * whitelisted like everything else: a decision can only ever select from these.
+   */
+  targets?: Array<{ channel: string; format: string }>;
   reach?: Record<string, number>;
   expertise?: { domains?: string[]; goals?: string[]; alignment?: number; confidence?: string };
   contentHistory?: Array<{ title?: string; format?: string; channel?: string }>;
@@ -186,6 +192,18 @@ export function normalizeState(input: unknown): ContentForgeState {
     options: strArray(a.options, STATE_BOUNDS.maxAudiences),
   }));
   if (audience) state.audience = audience;
+
+  const targets: Array<{ channel: string; format: string }> = [];
+  if (Array.isArray(raw.targets)) {
+    for (const item of raw.targets.slice(0, STATE_BOUNDS.maxTargets)) {
+      const t = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+      const channel = str(t.channel, STATE_BOUNDS.maxShortChars);
+      const format = str(t.format, STATE_BOUNDS.maxShortChars);
+      if (channel === undefined || format === undefined) continue;
+      targets.push({ channel, format });
+    }
+  }
+  if (targets.length > 0) state.targets = targets;
 
   const reach = numRecord(raw.reach);
   if (reach) state.reach = reach;
