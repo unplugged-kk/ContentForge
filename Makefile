@@ -13,7 +13,10 @@
 # There is no Railway. The database is the `postgres` service in this stack, on
 # the `contentforge_pg_data` volume; the application migrates it on boot.
 
-COMPOSE_LOCAL := docker compose -f docker-compose.yml -f docker-compose.local.yml
+# Operator overlays that live outside git load automatically when present, so `make up` never drops them.
+# Example: ~/.contentos/compose/contentforge.video-factory.yml mounts the Video Factory exchange folder (data only).
+COMPOSE_EXTRA := $(foreach f,$(sort $(wildcard $(HOME)/.contentos/compose/contentforge.*.yml)),-f $(f))
+COMPOSE_LOCAL := docker compose -f docker-compose.yml -f docker-compose.local.yml $(COMPOSE_EXTRA)
 COMPOSE_VPS   := docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile tunnel
 
 .PHONY: help up vps deploy-vps down ps logs backup restore \
