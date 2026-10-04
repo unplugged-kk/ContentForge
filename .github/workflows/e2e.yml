@@ -109,3 +109,84 @@ jobs:
             test-results/
           retention-days: 14
           if-no-files-found: warn
+
+  # ── The live harness ────────────────────────────────────────────────────────
+  #
+  # script/e2e-live.mjs is the only suite that asserts DURABLE state: it boots the
+  # real bundle, doubles every external boundary with the RSS fixture, checks
+  # PostgreSQL and pg-boss rows, SIGKILLs the app mid-flight to prove recovery,
+  # and walks the golden path (Opportunity -> GenerationJob -> Artifact ->
+  # approve -> Schedule -> Occurrence -> Publication -> Result) plus adapter
+  # reconciliation. It was run locally only — nothing in CI executed it, so the
+  # strongest E2E signal in the repo was unprotected.
+  #
+  # Its database guard (`127.0.0.1:5433/cf_e2e_live`) is deliberate: the harness
+  # can never be pointed at a real database. The service container below matches
+  # that exact host/port/database.
+  live:
+    name: Live E2E (durable state)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # NON-BLOCKING until the harness is green. It currently reaches the golden
+    # path and then stops at two stale expectations (the queue-transient premise
+    # and the artifact approval/readiness contract) — see docs/HANDOVER.md.
+    # Running it anyway surfaces real output in CI while that is finished; remove
+    # this line the moment the job passes, so it starts protecting the suite.
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cfuser
+          POSTGRES_PASSWORD: cfpass
+          POSTGRES_DB: cf_e2e_live
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U cfuser -d cf_e2e_live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      CI: true
+      E2E_LIVE_DATABASE_URL: postgresql://cfuser:cfpass@127.0.0.1:5433/cf_e2e_live
+      # The fixture container is published here, so the run does not depend on
+      # host port 80 being free.
+      E2E_LIVE_FIXTURE_PORT: "8088"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify the harness can only target the disposable database
+        run: |
+          case "$E2E_LIVE_DATABASE_URL" in
+            *127.0.0.1:5433/cf_e2e_live*) ;;
+            *) echo "::error::E2E_LIVE_DATABASE_URL must be the disposable harness database."; exit 1 ;;
+          esac
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Production build (the harness boots dist/index.cjs)
+        run: npm run build
+
+      - name: Run the live E2E harness
+        run: node script/e2e-live.mjs
+
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-logs
+          path: /tmp/cf-e2e-live-app-*.log
+          if-no-files-found: ignore
+          retention-days: 14
