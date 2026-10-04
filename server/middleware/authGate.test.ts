@@ -55,6 +55,13 @@ describe("authGate (HTTP boundary)", () => {
       res.json({ ok: true });
     });
     app.get("/api/auth/login", (_req, res) => res.json({ public: true }));
+    // Stands in for the real provider-media token route (server/content/routes.ts):
+    // external providers cannot present a session cookie, so the gate must let the
+    // request reach the handler, which then validates the grant token itself.
+    app.get("/api/provider-media/:token", (req, res) => {
+      handlerRan += 1;
+      res.json({ token: req.params.token });
+    });
     await new Promise<void>((resolve) => {
       server = app.listen(0, "127.0.0.1", () => resolve());
     });
@@ -114,6 +121,36 @@ describe("authGate (HTTP boundary)", () => {
   });
 
   /**
+   * Finding F2: the token route was unreachable — the gate answered 401 before
+   * the route could validate its grant, so an external provider could never
+   * fetch media. The grant token IS the credential; absent is a 404 from the
+   * route (not a 401 from the gate).
+   */
+  it("admits a provider-media fetch with no session", async () => {
+    handlerRan = 0;
+    const token = "a".repeat(48);
+    const res = await fetch(`${baseUrl}/api/provider-media/${token}`);
+    assert.equal(res.status, 200, "a provider fetch cannot carry a session cookie");
+    assert.deepEqual(await res.json(), { token });
+    assert.equal(handlerRan, 1);
+  });
+
+  it("does not widen the unauthenticated surface beyond that one route", async () => {
+    handlerRan = 0;
+    for (const path of [
+      "/api/visual-assets",
+      "/api/visual-generations",
+      "/api/provider-media", // no trailing slash → no such route, and must not be public
+      "/api/provider-mediaX", // prefix must not match a longer segment
+      "/api/media/providers",
+    ]) {
+      const res = await fetch(`${baseUrl}${path}`);
+      assert.equal(res.status, 401, `${path} must still require a session`);
+    }
+    assert.equal(handlerRan, 0);
+  });
+
+  /**
    * Regression: the gate compared `req.path.startsWith("/api")`
    * case-sensitively while Express routes case-insensitively. A single
    * capital letter therefore reached the same handler with the gate stepped
@@ -149,7 +186,10 @@ describe("authGate wiring (static pins)", () => {
   const INDEX_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts");
 
   it("the public allowlist is exactly the intended surface", () => {
-    assert.deepEqual([...PUBLIC_API_PREFIXES], ["/api/auth/"]);
+    // Widening this list is a security decision, so it is pinned. Adding
+    // /api/provider-media/ was deliberate (finding F2): exactly one route lives
+    // under it, and the grant token is its credential.
+    assert.deepEqual([...PUBLIC_API_PREFIXES], ["/api/auth/", "/api/provider-media/"]);
     assert.deepEqual([...PUBLIC_API_EXACT], ["/api/csrf-token", "/api/health", "/api/ready"]);
   });
 
@@ -159,6 +199,9 @@ describe("authGate wiring (static pins)", () => {
     assert.equal(isPublicApiPath("/api/csrf-token"), true);
     assert.equal(isPublicApiPath("/api/health"), true);
     assert.equal(isPublicApiPath("/api/ready"), true);
+    assert.equal(isPublicApiPath(`/api/provider-media/${"f".repeat(48)}`), true);
+    assert.equal(isPublicApiPath("/api/provider-media"), false);
+    assert.equal(isPublicApiPath("/api/visual-assets"), false);
     assert.equal(isPublicApiPath("/api/posts"), false);
     assert.equal(isPublicApiPath("/api/posts/1/publish"), false);
     assert.equal(isPublicApiPath("/api/autonomy/run"), false);

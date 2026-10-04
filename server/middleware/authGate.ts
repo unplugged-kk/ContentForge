@@ -15,7 +15,22 @@ import { requireAuthMiddleware } from "./userContext";
  * ordering: authentication first, everything else later.
  */
 
-export const PUBLIC_API_PREFIXES: readonly string[] = ["/api/auth/"];
+export const PUBLIC_API_PREFIXES: readonly string[] = [
+  "/api/auth/",
+  /**
+   * Provider media fetch (finding F2).
+   *
+   * External providers (Meta, and any future fetcher) cannot present a session
+   * cookie, so this path is authenticated by its OWN credential instead: the
+   * 48-hex, short-TTL grant token minted by `issueProviderFetchUrl` and carried
+   * in the URL. Opening the prefix is safe because exactly ONE route lives
+   * under it — `GET /api/provider-media/:token` (server/content/routes.ts) —
+   * and nothing here mints, lists or extends a grant; a bad, expired or unknown
+   * token yields 404, never data and never a 401 (which would only tell a
+   * prober that the path exists).
+   */
+  "/api/provider-media/",
+];
 
 export const PUBLIC_API_EXACT: readonly string[] = [
   "/api/csrf-token",

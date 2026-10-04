@@ -21,10 +21,29 @@ import { after, describe, it } from "node:test";
 import { Pool } from "pg";
 
 const DEFAULT_DB_URL = "postgresql://e2e@127.0.0.1:5433/contentforge_e2e";
+
+/**
+ * Live DB target. `TEST_DATABASE_URL` wins over the application's
+ * `DATABASE_URL` deliberately: a local `.env` may point at a MANAGED, POOLED
+ * endpoint (this repo's does — a Neon `-pooler.` host), and running live
+ * assertions against a deployment database from a unit-test process is both
+ * unsafe and unsound.
+ */
+const dbUrl: string = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? DEFAULT_DB_URL;
+
+/**
+ * A transaction-mode connection pooler (pgbouncer, Neon's pooler) cannot
+ * support the resilience scenario below: client connections and server backends
+ * are not 1:1, so terminating the backend one pool observed can kill a backend
+ * another session is using — the admin statement then fails with the very 57P01
+ * the test is trying to observe. That is an environment limitation, not a
+ * product signal, so the test skips loudly rather than failing.
+ */
+const isPooledEndpoint = /-pooler\.|pooler\.|pgbouncer/i.test(dbUrl);
+
 // `server/db.ts` throws at import when DATABASE_URL is unset and reads it at
 // module scope, so it must be present *before* the dynamic import below.
 if (!process.env.DATABASE_URL) process.env.DATABASE_URL = DEFAULT_DB_URL;
-const dbUrl: string = process.env.DATABASE_URL;
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DB_MODULE_URL = pathToFileURL(path.join(REPO_ROOT, "server", "db.ts")).href;
@@ -46,7 +65,7 @@ async function probeReachable(): Promise<boolean> {
   }
 }
 
-const live = await probeReachable();
+const live = !isPooledEndpoint && (await probeReachable());
 
 function runChild(
   args: string[],
@@ -67,9 +86,12 @@ function runChild(
 }
 
 /** Run a snippet through tsx in a child process that imports server/db.ts. */
-function runDbChild(body: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runDbChild(
+  body: string,
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const code = `import(${JSON.stringify(DB_MODULE_URL)}).then(async ({ pool }) => {\n${body}\n}).catch((e) => { console.error(e); process.exit(9); });`;
-  return runChild(["--import", "tsx", "--eval", code]);
+  return runChild(["--import", "tsx", "--eval", code], env);
 }
 
 /** Capture console.error lines emitted while `fn` runs. */
@@ -250,41 +272,55 @@ describe("startup / configuration failures stay fatal and visible", () => {
 });
 
 describe("live PostgreSQL pool resilience", () => {
+  /**
+   * This scenario is only *observable* in a child process. In-process, the
+   * shared pool already carries the permanent 'error' listener installed by
+   * server/db.ts, so an assertion here satisfies itself — it would pass even if
+   * the product were broken. The child imports server/db.ts, warms a real
+   * backend, terminates it from another session exactly as an administrator
+   * command does (57P01), then proves the SAME process is still alive and can
+   * query again over a fresh connection.
+   */
   it(
     "survives an admin-terminated idle connection and reconnects",
     {
-      skip: live ? false : `PostgreSQL at ${REDACED_DSN} unreachable — live test skipped`,
+      skip: live
+        ? false
+        : isPooledEndpoint
+          ? `pooled endpoint (${REDACED_DSN}) cannot exercise pg_terminate_backend — live test skipped`
+          : `PostgreSQL at ${REDACED_DSN} unreachable — live test skipped`,
     },
     async () => {
-      // Warm the pool so a real client is idle and holding a backend.
-      const { rows } = await pool.query("SELECT pg_backend_pid() AS pid");
-      const pid = rows[0].pid as number;
+      const result = await runDbChild(
+        [
+          'const { Pool: AdminPool } = await import("pg");',
+          'const { rows } = await pool.query("SELECT pg_backend_pid() AS pid");',
+          "const admin = new AdminPool({ connectionString: process.env.DATABASE_URL });",
+          'admin.on("error", () => {});',
+          'await admin.query("SELECT pg_terminate_backend($1)", [rows[0].pid]);',
+          // The idle client's 57P01 arrives asynchronously.
+          "await new Promise((r) => setTimeout(r, 400));",
+          // Same process, still alive, and the pool has a usable connection again.
+          'const after = await pool.query("SELECT 1 AS ok");',
+          'console.log("RECONNECTED:" + after.rows[0].ok);',
+          'const again = await pool.query("SELECT current_user AS who");',
+          'console.log("USABLE:" + Boolean(again.rows[0].who));',
+          "await admin.end().catch(() => {});",
+          "await pool.end().catch(() => {});",
+        ].join("\n"),
+        // Pin the child to the DIRECT target: the scenario is only meaningful
+        // against a 1:1 connection, never through a pooler.
+        { DATABASE_URL: dbUrl },
+      );
 
-      // Terminate that backend "from another session", exactly as PostgreSQL
-      // does for an administrator command (57P01).
-      const admin = new Pool({ connectionString: dbUrl });
-      admin.on("error", () => {});
-      try {
-        const sawError = new Promise<Error>((resolve) => pool.once("error", (e) => resolve(e as Error)));
-        await admin.query("SELECT pg_terminate_backend($1)", [pid]);
-        const error = await Promise.race([
-          sawError,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("no pool error observed")), 5000),
-          ),
-        ]);
-        assert.equal((error as Error & { code?: string }).code, "57P01");
-
-        // Process is alive and the pool has reconnected.
-        const after = await pool.query("SELECT 1 AS ok");
-        assert.equal(after.rows[0].ok, 1);
-
-        // And once more, to prove new connections are usable, not just one.
-        const again = await pool.query("SELECT current_user AS who");
-        assert.ok(again.rows[0].who);
-      } finally {
-        await admin.end().catch(() => {});
-      }
+      assert.equal(result.code, 0, `child exited ${result.code}: ${result.stderr}`);
+      assert.ok(result.stdout.includes("RECONNECTED:1"), result.stdout + result.stderr);
+      assert.ok(result.stdout.includes("USABLE:true"), result.stdout + result.stderr);
+      assert.ok(
+        result.stderr.includes("recoverable pool error"),
+        `the recoverable path must log rather than crash; got: ${result.stderr}`,
+      );
+      assert.ok(!result.stderr.includes("Unhandled 'error' event"), result.stderr);
     },
   );
 });
