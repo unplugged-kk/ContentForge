@@ -13,6 +13,16 @@ import { normalizeText } from "./normalize";
 /** Evidence is a pin, not a copy: excerpts are bounded. */
 export const MAX_EVIDENCE_EXCERPT_LENGTH = 400;
 
+/**
+ * How many excerpts one source may contribute (finding F6).
+ *
+ * Emitting a single clipped excerpt meant a 38,513-character talk reached the
+ * post as ~400 characters — about 1% of it — so every later fact was
+ * structurally unable to appear. A bounded, spread sample fixes the coverage
+ * without turning evidence into a copy of the source.
+ */
+export const MAX_EVIDENCE_EXCERPTS_PER_SOURCE = 4;
+
 export interface DroppedSource {
   ref: NormalizedSource["ref"];
   reason: "duplicate_ref" | "duplicate_url" | "duplicate_content";
@@ -110,6 +120,56 @@ function clipExcerpt(text: string): string {
 }
 
 /**
+ * Bounded excerpt windows for one body (finding F6).
+ *
+ * A short body yields one window (the previous behaviour, unchanged). A long one
+ * yields up to `MAX_EVIDENCE_EXCERPTS_PER_SOURCE` windows, preferring sentence
+ * boundaries and spread across the WHOLE body rather than taken from the front —
+ * that spread is the point: the opening of a talk is rarely its substance.
+ *
+ * Deterministic: the same input always yields the same windows in the same
+ * order, so evidence hashes and ordering stay stable across runs.
+ */
+export function excerptWindows(text: string): string[] {
+  const normalized = normalizeText(text);
+  if (normalized.length === 0) return [];
+  if (normalized.length <= MAX_EVIDENCE_EXCERPT_LENGTH) return [normalized];
+
+  const windows: string[] = [];
+  let current = "";
+  for (const sentence of normalized.split(/(?<=[.!?])\s+/)) {
+    const candidate = current ? `${current} ${sentence}` : sentence;
+    if (candidate.length <= MAX_EVIDENCE_EXCERPT_LENGTH) {
+      current = candidate;
+      continue;
+    }
+    if (current) windows.push(current);
+    if (sentence.length > MAX_EVIDENCE_EXCERPT_LENGTH) {
+      // A single sentence longer than a window: hard-split it so it is still
+      // representable rather than dropped.
+      for (let at = 0; at < sentence.length; at += MAX_EVIDENCE_EXCERPT_LENGTH) {
+        windows.push(sentence.slice(at, at + MAX_EVIDENCE_EXCERPT_LENGTH));
+      }
+      current = "";
+    } else {
+      current = sentence;
+    }
+  }
+  if (current) windows.push(current);
+
+  if (windows.length <= MAX_EVIDENCE_EXCERPTS_PER_SOURCE) return windows;
+
+  const picked: string[] = [];
+  const last = windows.length - 1;
+  const stride = last / (MAX_EVIDENCE_EXCERPTS_PER_SOURCE - 1);
+  for (let n = 0; n < MAX_EVIDENCE_EXCERPTS_PER_SOURCE; n++) {
+    const window = windows[Math.round(n * stride)];
+    if (window && !picked.includes(window)) picked.push(window);
+  }
+  return picked;
+}
+
+/**
  * Derive evidence from normalized sources. Providers never create evidence —
  * this is where a source becomes a pinned, hashed quotation.
  */
@@ -119,22 +179,27 @@ export function deriveEvidence(sources: readonly NormalizedSource[]): DerivedEvi
 
   sources.forEach((source, index) => {
     const basis = source.content?.text ?? source.excerpt ?? source.title ?? "";
-    const excerpt = clipExcerpt(basis);
-    if (excerpt.length === 0) return;
+    // One entry per window (F6), not one per source: a long transcript must be
+    // represented by more than its opening. Ordering is stable, and each window
+    // is pinned by its own hash.
+    for (const window of excerptWindows(basis)) {
+      const excerpt = clipExcerpt(window);
+      if (excerpt.length === 0) continue;
 
-    const excerptHash = hashExcerpt(excerpt);
-    // Content-addressed within the job: re-quoting the same passage dedupes.
-    if (seen.has(excerptHash)) return;
-    seen.add(excerptHash);
+      const excerptHash = hashExcerpt(excerpt);
+      // Content-addressed within the job: re-quoting the same passage dedupes.
+      if (seen.has(excerptHash)) continue;
+      seen.add(excerptHash);
 
-    evidence.push({
-      sourceIndex: index,
-      kind: "excerpt",
-      origin: "sourced",
-      excerpt,
-      excerptHash,
-      retrievedAt: new Date(source.retrievedAt),
-    });
+      evidence.push({
+        sourceIndex: index,
+        kind: "excerpt",
+        origin: "sourced",
+        excerpt,
+        excerptHash,
+        retrievedAt: new Date(source.retrievedAt),
+      });
+    }
   });
 
   return evidence;
