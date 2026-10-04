@@ -1,49 +1,49 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 
+/**
+ * A destructive action must require an explicit confirmation.
+ *
+ * Rewritten against the CURRENT IA. The original spec deleted an idea from
+ * `/ideas` and a reference from `/references`; both are now READ-ONLY views
+ * (`/ideas` → `/sources?view=ideas`, `/references` → `/sources?view=references`)
+ * — the per-item delete controls no longer exist anywhere in the client, so the
+ * old assertions could never pass again.
+ *
+ * The confirm-protected delete that does exist is the ingest view's reference
+ * delete (`button-delete-active` + the shared ConfirmDialog), which is what this
+ * spec exercises. It needs an ingested reference, so it skips loudly when the
+ * ingest endpoint cannot fetch (no network in this environment) rather than
+ * pretending the flow is broken.
+ */
+
 async function csrfHeaders(request: APIRequestContext): Promise<Record<string, string>> {
   const res = await request.get("/api/csrf-token");
   const { csrfToken } = await res.json();
   return { "X-CSRF-Token": csrfToken };
 }
 
-test("deleting an idea requires confirmation and only removes it after confirming", async ({ page, request }) => {
-  const created = await request.post("/api/ideas", {
-    data: { title: `E2E delete idea ${Date.now()}` },
-    headers: await csrfHeaders(request),
-  });
-  expect(created.ok()).toBeTruthy();
-  const idea = await created.json();
-
-  await page.goto("/ideas");
-  const card = page.locator(`[data-testid="card-idea-${idea.id}"]`);
-  await expect(card).toBeVisible();
-
-  // Cancel leaves the row intact.
-  await page.locator(`[data-testid="button-delete-idea-${idea.id}"]`).click();
-  await expect(page.locator('[data-testid="dialog-confirm"]')).toBeVisible();
-  await page.locator('[data-testid="button-confirm-cancel"]').click();
-  await expect(page.locator('[data-testid="dialog-confirm"]')).toBeHidden();
-  await expect(card).toBeVisible();
-
-  // Confirm actually deletes.
-  await page.locator(`[data-testid="button-delete-idea-${idea.id}"]`).click();
-  await expect(page.locator('[data-testid="dialog-confirm"]')).toBeVisible();
-  await page.locator('[data-testid="button-confirm-action"]').click();
-  await expect(card).toHaveCount(0);
-});
-
-test("deleting a reference requires confirmation", async ({ page, request }) => {
+test("deleting an ingested reference requires confirmation", async ({ page, request }) => {
   const created = await request.post("/api/ingest", {
     data: { url: `https://example.com/e2e-${Date.now()}` },
     headers: await csrfHeaders(request),
   });
   test.skip(!created.ok(), "ingest endpoint requires network access to fetch the URL in this environment");
-  const ref = await created.json();
 
-  await page.goto("/references");
-  await expect(page.locator(`[data-testid="button-delete-ref-${ref.id}"]`)).toBeVisible();
-  await page.locator(`[data-testid="button-delete-ref-${ref.id}"]`).click();
-  await expect(page.locator('[data-testid="dialog-confirm"]')).toBeVisible();
+  await page.goto("/sources?view=ingest");
+
+  const del = page.locator('[data-testid="button-delete-active"]');
+  await expect(del).toBeVisible({ timeout: 15_000 });
+  await del.click();
+
+  // Cancel leaves everything intact...
+  const dialog = page.locator('[data-testid="dialog-confirm"]');
+  await expect(dialog).toBeVisible();
   await page.locator('[data-testid="button-confirm-cancel"]').click();
-  await expect(page.locator(`[data-testid="button-delete-ref-${ref.id}"]`)).toBeVisible();
+  await expect(dialog).toBeHidden();
+
+  // ...and confirming is required to actually delete.
+  await del.click();
+  await expect(dialog).toBeVisible();
+  await page.locator('[data-testid="button-confirm-action"]').click();
+  await expect(dialog).toBeHidden();
 });
