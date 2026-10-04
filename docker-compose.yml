@@ -62,12 +62,13 @@ services:
       # Loopback-bound too: cloudflared reaches the app over the compose network
       # (`http://app:5000`), so the host port exists only for convenience.
       - "127.0.0.1:${APP_PORT:-3000}:5000"
-    # Real credentials come from the gitignored local .env — never from this
-    # file, and never into git. `.env` takes precedence for anything set below
-    # only where noted; DATABASE_URL is deliberately overridden to address the
-    # `postgres` service rather than localhost.
+    # Real credentials come from the gitignored env file — never from this
+    # file, and never into git. It defaults to `.env` beside this file, but an
+    # operator can keep it OUTSIDE the working tree (surviving a re-clone or a
+    # `git clean -xfd`) by exporting an absolute path:
+    #   CONTENTFORGE_ENV_FILE=$HOME/.contentos/contentforge.env make vps
     env_file:
-      - .env
+      - ${CONTENTFORGE_ENV_FILE:-.env}
     environment:
       NODE_ENV: production
       PORT: "5000"

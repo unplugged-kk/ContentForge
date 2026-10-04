@@ -126,6 +126,13 @@ the tunnel routes. Plus `make e2e` / `make e2e-live` / `make e2e-vps` targets.
 - **Paid media**: `CONTENTFORGE_ALLOW_PAID_MEDIA` (+ `GEMINI_IMAGE_MODEL`) is set
   locally only. It is deliberately OFF on the VPS, so image generation ships
   there but makes no paid calls until you enable it.
+- **The VPS `.env` is gitignored, so a fresh clone has none.** `docker compose`
+  fails with a bare `env file /path/.env not found`. Either `cp .env.example .env`
+  and fill it in, or keep it outside the repo:
+  `CONTENTFORGE_ENV_FILE=$HOME/.contentos/contentforge.env make vps` (absolute
+  path — compose does not expand `~`). `make up` / `make vps` now check first and
+  print that guidance. A copy of the real file already exists on the original VPS
+  (`/home/ubuntu/git/ContentForge/.env`) — copy it rather than rebuilding it.
 - The VPS `.env` previously had `POSTGRES_PORT=127.0.0.1:5432` (old doc advice),
   which broke the compose render; it is now `5432` / `APP_PORT=3000`.
 

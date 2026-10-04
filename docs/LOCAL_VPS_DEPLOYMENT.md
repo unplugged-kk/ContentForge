@@ -66,6 +66,26 @@ Internet → Cloudflare (DNS + WAF) → Cloudflare Tunnel → OCI VPS → Docker
 | `XQUIK_API_KEY`, `XQUIK_ACCOUNT` | X publishing (xQuick) |
 | `CLOUDFLARE_*`, `TUNNEL_TOKEN` | Cloudflare management + tunnel credential |
 
+### Where that file lives (read this before a first deploy on a new machine)
+
+`.env` is **gitignored**, so a fresh clone — a new server, a second machine, or
+after `git clean -xfd` — has **none**, and `docker compose` then fails with a raw
+`env file … not found`. Two supported placements:
+
+```bash
+# A — beside the compose file (default)
+cp .env.example .env      # then fill in the real values
+
+# B — outside the working tree (recommended on a server: a re-clone cannot lose it)
+mkdir -p ~/.contentos
+cp .env.example ~/.contentos/contentforge.env   # then fill in the real values
+CONTENTFORGE_ENV_FILE=$HOME/.contentos/contentforge.env make vps
+```
+
+Use an **absolute** path for `CONTENTFORGE_ENV_FILE` — compose does not expand
+`~`. `make up` / `make vps` check for the file first and print this guidance
+instead of a stack trace. The value is never printed.
+
 ---
 
 ## 5. Day-2 operations

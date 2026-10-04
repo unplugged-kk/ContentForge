@@ -16,11 +16,35 @@
 # Operator overlays that live outside git load automatically when present, so `make up` never drops them.
 # Example: ~/.contentos/compose/contentforge.video-factory.yml mounts the Video Factory exchange folder (data only).
 COMPOSE_EXTRA := $(foreach f,$(sort $(wildcard $(HOME)/.contentos/compose/contentforge.*.yml)),-f $(f))
+
+# The stack is configured by ONE env file. By default that is `.env` beside this
+# file — and it is GITIGNORED, so a fresh clone, a new machine, or a
+# `git clean -xfd` has none, and compose then fails with a bare
+# "env file ... not found". Point at one kept outside the working tree instead
+# (recommended on a server, so a re-clone cannot lose it):
+#   CONTENTFORGE_ENV_FILE=$HOME/.contentos/contentforge.env make vps
+# Use an ABSOLUTE path: compose does not expand `~`.
+ENV_FILE ?= $(if $(CONTENTFORGE_ENV_FILE),$(CONTENTFORGE_ENV_FILE),.env)
+export CONTENTFORGE_ENV_FILE := $(ENV_FILE)
+
 COMPOSE_LOCAL := docker compose -f docker-compose.yml -f docker-compose.local.yml $(COMPOSE_EXTRA)
 COMPOSE_VPS   := docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile tunnel
 
-.PHONY: help up vps deploy-vps down ps logs backup restore \
+.PHONY: help up vps deploy-vps down ps logs backup restore check-env \
         db db-stop db-logs dev install start graph orient
+
+# Explain the failure and the fix, instead of a compose stack trace.
+check-env:
+	@test -f "$(ENV_FILE)" || { \
+		echo "No env file at: $(ENV_FILE)"; \
+		echo ""; \
+		echo "  The stack needs one, and it is gitignored — a fresh clone or a new"; \
+		echo "  machine never has it. Either:"; \
+		echo "    cp .env.example .env      # then fill in the values"; \
+		echo "  or keep it outside the repo and point at it:"; \
+		echo "    CONTENTFORGE_ENV_FILE=\$$HOME/.contentos/contentforge.env make vps"; \
+		exit 1; \
+	}
 
 help: ## list the targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -28,13 +52,13 @@ help: ## list the targets
 
 # ---------- deployment ----------
 
-up: ## local stack: build and start
+up: check-env ## local stack: build and start
 	@$(COMPOSE_LOCAL) up -d --build
 	@echo "ContentForge (local) → http://localhost:$${APP_PORT:-3000}"
 
-vps: ## VPS stack: build and start with the Cloudflare tunnel
+vps: check-env ## VPS stack: build and start with the Cloudflare tunnel
 	@$(COMPOSE_VPS) up -d --build
-	@echo "ContentForge (VPS) → https://$${PUBLIC_HOSTNAME:-$$(sed -n 's/^PUBLIC_HOSTNAME=//p' .env 2>/dev/null | head -1)} (via tunnel)"
+	@echo "ContentForge (VPS) → https://$${PUBLIC_HOSTNAME:-$$(sed -n 's/^PUBLIC_HOSTNAME=//p' $(ENV_FILE) 2>/dev/null | head -1)} (via tunnel)"
 
 deploy-vps: ## on the VPS: pull main, then deploy
 	@git pull --ff-only origin main
