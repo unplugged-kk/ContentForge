@@ -45,12 +45,25 @@ const PORT = Number(process.env.FIXTURE_PORT ?? 80);
 const RUN = process.env.FIXTURE_RUN ?? "e2e";
 const ORIGIN = `https://fixture.contentforge.test/${RUN}`;
 
+/**
+ * Item dates are RELATIVE to the run, on purpose.
+ *
+ * They used to be hardcoded to 2026-09-01..03, which silently EXPIRED: a research
+ * job defaults to a `last_30d` window, so once those dates fell outside it the
+ * feed legitimately yielded zero usable sources and the live harness failed with
+ * `no_sourced_evidence`. That is a time bomb, not a code defect — and it made the
+ * strongest E2E signal in the repo fail for reasons unrelated to any change.
+ * Offsets keep the ordering and spacing deterministic while always falling inside
+ * a recent window.
+ */
+const daysAgo = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
+
 const ITEMS = [
   {
     title: "Kubernetes scheduler plugins reach general availability",
     link: `${ORIGIN}/kubernetes-scheduler-plugins`,
     guid: `${RUN}-k8s-scheduler`,
-    date: "2026-09-01T00:00:00.000Z",
+    date: daysAgo(3),
     snippet:
       "Kubernetes scheduler plugins are now a stable extension point for custom placement decisions across large clusters.",
   },
@@ -58,7 +71,7 @@ const ITEMS = [
     title: "Operating Kubernetes control planes at scale",
     link: `${ORIGIN}/kubernetes-control-plane`,
     guid: `${RUN}-k8s-control-plane`,
-    date: "2026-09-02T00:00:00.000Z",
+    date: daysAgo(2),
     snippet:
       "Kubernetes control plane capacity planning and API server latency under sustained load.",
   },
@@ -66,7 +79,7 @@ const ITEMS = [
     title: "Cost signals for Kubernetes workloads",
     link: `${ORIGIN}/kubernetes-cost`,
     guid: `${RUN}-k8s-cost`,
-    date: "2026-09-03T00:00:00.000Z",
+    date: daysAgo(1),
     snippet:
       "Measuring the real cost of Kubernetes workloads with request-to-limit ratios and bin packing.",
   },
@@ -90,7 +103,7 @@ function feedXml() {
     <title>ContentForge Deterministic Fixture ${RUN}</title>
     <link>${ORIGIN}</link>
     <description>Deterministic RSS fixture for ContentForge live E2E</description>
-    <lastBuildDate>${new Date("2026-09-03T00:00:00.000Z").toUTCString()}</lastBuildDate>${items}
+    <lastBuildDate>${new Date(daysAgo(0)).toUTCString()}</lastBuildDate>${items}
   </channel>
 </rss>`;
 }
@@ -603,7 +616,7 @@ function overlongFeedXml() {
       <title>Kubernetes overlong native id probe</title>
       <link>${ORIGIN}/overlong-item</link>
       <guid isPermaLink="false">${guid}</guid>
-      <pubDate>${new Date("2026-09-03T00:00:00.000Z").toUTCString()}</pubDate>
+      <pubDate>${new Date(daysAgo(1)).toUTCString()}</pubDate>
       <description>Kubernetes item whose native id exceeds the persistence column, so the write fails.</description>
     </item>
   </channel>

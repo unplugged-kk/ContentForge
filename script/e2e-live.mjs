@@ -36,7 +36,8 @@ const APP_PORT = Number(process.env.E2E_LIVE_APP_PORT ?? 4199);
 const APP_BASE = `http://127.0.0.1:${APP_PORT}`;
 const FIXTURE_CONTAINER = "cf-rss-fixture";
 const FIXTURE_IMAGE = "node:24-alpine";
-const FIXTURE_BASE = "http://localhost";
+const FIXTURE_PORT = Number(process.env.E2E_LIVE_FIXTURE_PORT ?? 80);
+const FIXTURE_BASE = FIXTURE_PORT === 80 ? "http://localhost" : `http://localhost:${FIXTURE_PORT}`;
 const RUN = `live${Date.now().toString(36)}`;
 
 // Safety guard: never touch anything but the disposable local E2E database.
@@ -123,6 +124,15 @@ async function q(sql, params = []) {
 // ── HTTP client (session cookie + CSRF, like a browser) ───────────────────────
 let cookie = null;
 let csrfToken = null;
+/**
+ * The authenticated owner's id.
+ *
+ * The harness used to assume owner 1 everywhere (the removed
+ * `getUserId(req) ?? 1` fallback made that true). Now that the API is
+ * authenticated-only, every owner-scoped seed and assertion must use the id of
+ * the session it actually registered — a row owned by 1 is invisible to it.
+ */
+let ownerId = null;
 
 async function http(method, urlPath, body) {
   for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -162,6 +172,36 @@ async function bootstrapSession() {
   assert(res.status === 200, `csrf-token returned ${res.status}`);
   csrfToken = res.body?.csrfToken;
   assert(typeof csrfToken === "string" && csrfToken.length > 0, "empty CSRF token");
+
+  /**
+   * Establish a REAL session.
+   *
+   * This harness used to run anonymously: every owner-scoped handler fell back to
+   * owner 1 (`getUserId(req) ?? 1`), so no login was ever needed and the missing
+   * auth step went unnoticed. The Phase 30.1 auth gate removed that fallback and
+   * made the /api surface authenticated-only, which is why a fresh run now dies
+   * with `401 Unauthorized` on the first owner-scoped call. Register (or log in),
+   * exactly as a browser would.
+   */
+  const email = process.env.E2E_LIVE_EMAIL ?? `live-${RUN}@e2e.local`;
+  const password = process.env.E2E_LIVE_PASSWORD ?? "LiveE2EPass99!";
+  const name = process.env.E2E_LIVE_NAME ?? "Live E2E Owner";
+  const registered = await http("POST", "/api/auth/register", { email, password, name });
+  if (![200, 201].includes(registered.status)) {
+    const loggedIn = await http("POST", "/api/auth/login", { email, password });
+    assert(
+      [200, 201].includes(loggedIn.status),
+      `could not authenticate the harness session (register ${registered.status}, login ${loggedIn.status}): ${loggedIn.text}`,
+    );
+  }
+  assert(cookie, "authentication did not yield a session cookie");
+
+  const me = await http("GET", "/api/auth/me");
+  assert(
+    me.status === 200 && Number.isInteger(me.body?.id),
+    `could not resolve the harness owner (${me.status}): ${me.text}`,
+  );
+  ownerId = me.body.id;
 }
 
 // ── App process lifecycle ─────────────────────────────────────────────────────
@@ -186,6 +226,11 @@ async function startApp() {
       // External boundaries are doubled at the transport level only: the model
       // gateway (AI_BASE_URL) and xQuick (XQUICK_API_BASE_URL) point at the
       // deterministic local fixture. ContentForge's own code runs unmodified.
+      // The fixture may be published on a non-standard port, and the SSRF guard
+      // allows only 80/443 by default. Widen it for the harness only.
+      ...(FIXTURE_PORT === 80 || FIXTURE_PORT === 443
+        ? {}
+        : { SSRF_ADDITIONAL_ALLOWED_PORTS: String(FIXTURE_PORT) }),
       AI_BASE_URL: `${FIXTURE_BASE}/v1`,
       AI_API_KEY: "fixture-key",
       OPENAI_API_KEY: "fixture-key",
@@ -272,7 +317,10 @@ function startFixture() {
   const b64 = Buffer.from(script, "utf8").toString("base64");
   const start = docker([
     "run", "-d", "--rm", "--name", FIXTURE_CONTAINER,
-    "-p", "80:80",
+    // Configurable host port: the harness must not require :80 to be free (a
+    // developer machine may have something there, and CI hosts vary).
+    "-p", `${FIXTURE_PORT}:${FIXTURE_PORT}`,
+    "-e", `FIXTURE_PORT=${FIXTURE_PORT}`,
     "-e", `FIXTURE_RUN=${RUN}`,
     "-e", `SCRIPT_B64=${b64}`,
     FIXTURE_IMAGE,
@@ -307,8 +355,8 @@ async function fixturePost(p, body) {
 async function setActiveFeed(feedUrl) {
   await q("delete from rss_sources");
   await q(
-    "insert into rss_sources (user_id, name, feed_url, is_active) values (1, $1, $2, true)",
-    [`${RUN}-feed`, feedUrl],
+    "insert into rss_sources (user_id, name, feed_url, is_active) values ($1, $2, $3, true)",
+    [ownerId, `${RUN}-feed`, feedUrl],
   );
 }
 
@@ -353,7 +401,7 @@ const observed = {};
   console.log(`ContentForge live E2E — run ${RUN}`);
   console.log(`  app:      ${APP_BASE}  (dist/index.cjs)`);
   console.log(`  database: ${DB_URL}`);
-  console.log(`  fixture:  docker ${FIXTURE_IMAGE} -> host :80`);
+  console.log(`  fixture:  docker ${FIXTURE_IMAGE} -> host :${FIXTURE_PORT}`);
 
   pool = new pg.Pool({
     connectionString: DB_URL,
@@ -375,7 +423,7 @@ const observed = {};
     },
     { timeoutMs: 60_000, intervalMs: 300, label: "fixture readiness" },
   );
-  record("deterministic RSS fixture reachable on host port 80", true, FIXTURE_BASE);
+  record(`deterministic RSS fixture reachable on host port ${FIXTURE_PORT}`, true, FIXTURE_BASE);
 
   await startApp();
   record("real application started (dist/index.cjs)", true, appLogPath.replace(/^.*\//, ""));
@@ -751,8 +799,8 @@ const observed = {};
     // complete/no-evidence row is seeded directly to exercise the real route.
     const rows = await q(
       `insert into research_jobs (user_id, correlation_id, idempotency_key, kind, query, status, provider_ids, finished_at)
-       values (1, $1, $2, 'directed', 'seeded', 'complete', '{rss}', now()) returning id`,
-      [`${RUN}-noev-corr`, `${RUN}-noev-idem`],
+       values ($1, $2, $3, 'directed', 'seeded', 'complete', '{rss}', now()) returning id`,
+      [ownerId, `${RUN}-noev-corr`, `${RUN}-noev-idem`],
     );
     const res = await http("POST", "/api/stories", {
       researchJobId: rows[0].id,
@@ -3718,7 +3766,10 @@ const observed = {};
   await check("Path E: analytics summary matches durable DB state", async () => {
     const summary = await http("GET", "/api/learning/summary");
     assert(summary.status === 200, `summary ${summary.status}: ${summary.text}`);
-    const published = await q("select count(*)::int c from publications where state = 'published' and user_id = 1");
+    const published = await q(
+      "select count(*)::int c from publications where state = 'published' and user_id = $1",
+      [ownerId],
+    );
     assert(summary.body.publishedCount === published[0].c, `summary ${summary.body.publishedCount} vs db ${published[0].c}`);
     assert(summary.body.signalCounts.edit >= 1, "edit counts missing");
     return `publishedCount=${summary.body.publishedCount}`;

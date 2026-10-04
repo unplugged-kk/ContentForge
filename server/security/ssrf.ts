@@ -193,6 +193,27 @@ export function resolveAllowedHosts(env: NodeJS.ProcessEnv = process.env): strin
   return Array.from(out);
 }
 
+/**
+ * The ports a guarded fetch may reach: the defaults, plus any explicitly added
+ * by `SSRF_ADDITIONAL_ALLOWED_PORTS` (comma separated).
+ *
+ * Additive on purpose — the operator can only widen the guard to a port they
+ * named, never narrow it into allowing something the defaults reject. Empty by
+ * default, so the shipped behaviour is exactly `[80, 443]`. This mirrors
+ * `resolveAllowedHosts` (the same default-off, operator-controlled widening for
+ * hosts) and exists so the E2E fixture can be published on a non-privileged port
+ * instead of requiring :80 to be free.
+ */
+export function resolveAllowedPorts(env: NodeJS.ProcessEnv = process.env): readonly number[] {
+  const raw = env.SSRF_ADDITIONAL_ALLOWED_PORTS ?? "";
+  const extra: number[] = [];
+  for (const part of raw.split(",")) {
+    const port = Number(part.trim());
+    if (Number.isInteger(port) && port > 0 && port <= 65535) extra.push(port);
+  }
+  return extra.length > 0 ? [...DEFAULT_ALLOWED_PORTS, ...extra] : DEFAULT_ALLOWED_PORTS;
+}
+
 function isAllowlistedHost(host: string, allowed: readonly string[] | undefined): boolean {
   if (!allowed || allowed.length === 0) return false;
   const normalized = host.toLowerCase();
@@ -221,7 +242,7 @@ export function validateUrlSyntax(
     throw new UnsafeUrlError("credentials_in_url", "URLs with embedded credentials are rejected");
   }
 
-  const allowedPorts = options.allowedPorts ?? DEFAULT_ALLOWED_PORTS;
+  const allowedPorts = options.allowedPorts ?? resolveAllowedPorts();
   const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
   if (!allowedPorts.includes(port)) {
     throw new UnsafeUrlError("disallowed_port", `Port ${port} is not allowed`);
