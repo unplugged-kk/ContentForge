@@ -56,7 +56,7 @@ import {
 } from "./publication";
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
-import { createLocalAssetStorage, registerVisualProvider } from "./visual";
+import { createDiskAssetStorage, registerVisualProvider } from "./visual";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { createGeminiImageProvider } from "./visualProviders/geminiImage";
@@ -83,7 +83,13 @@ export const automationStorage = new DatabaseAutomationStorage(db);
 export const learningStorage = new DatabaseLearningStorage(db);
 export const learningRecorder = createLearningRecorder(learningStorage, db);
 
-export const visualAssetStorage = createLocalAssetStorage();
+/**
+ * Durable asset bytes (finding F3). The in-memory implementation is the test
+ * double; the running app writes to the `contentforge_uploads` volume, so an
+ * asset row and its bytes have the same lifetime and a restart cannot orphan
+ * one from the other.
+ */
+export const visualAssetStorage = createDiskAssetStorage();
 
 export const styleServiceDeps: StyleServiceDeps = {
   storage: createDatabaseStyleStorage(db),

@@ -1585,7 +1585,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!/^[a-f0-9]{48}$/i.test(token) || !deps.visualStorage.getProviderGrant) {
         return res.status(404).json({ message: "Media grant not found" });
       }
-      const grant = deps.visualStorage.getProviderGrant(token);
+      const grant = await deps.visualStorage.getProviderGrant(token);
       if (!grant) return res.status(404).json({ message: "Media grant not found" });
       res.setHeader("Content-Type", grant.mime);
       res.setHeader("Cache-Control", "private, no-store");

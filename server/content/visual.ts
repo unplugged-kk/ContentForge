@@ -11,6 +11,8 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import type { VisualAsset, VisualGeneration } from "@shared/schema";
 import { JobFailure, describeError } from "../jobs/failures";
@@ -577,7 +579,7 @@ export interface AssetStoragePort {
     ttlMs?: number;
   }): Promise<{ url: string; expiresAt: Date } | null>;
   /** Resolve a previously issued grant token to bytes. Missing/expired → null. */
-  getProviderGrant?(token: string): { bytes: Buffer; mime: string } | null;
+  getProviderGrant?(token: string): Promise<{ bytes: Buffer; mime: string } | null>;
 }
 
 /**
@@ -620,7 +622,7 @@ export function createLocalAssetStorage(): AssetStoragePort & { size(): number }
       grants.set(token, { storageKey: input.storageKey, expiresAt });
       return { url: `${publicBase}/api/provider-media/${token}`, expiresAt: new Date(expiresAt) };
     },
-    getProviderGrant(token: string) {
+    async getProviderGrant(token: string) {
       const grant = grants.get(token);
       if (!grant) return null;
       if (grant.expiresAt <= Date.now()) {
@@ -633,6 +635,148 @@ export function createLocalAssetStorage(): AssetStoragePort & { size(): number }
     },
     size() {
       return blobs.size;
+    },
+  };
+}
+
+/**
+ * Durable asset storage (finding F3).
+ *
+ * The in-memory implementation above is the test double: its bytes are process
+ * state, so an asset ROW outlives its BYTES across a restart, and a later `get`
+ * fails with `asset "local:…" is unavailable` — observed live when a `refine`
+ * of a previously generated image failed after the app process restarted.
+ *
+ * Same content-addressed contract, written to a directory on the
+ * `contentforge_uploads` volume so bytes survive restarts *and* image rebuilds:
+ *
+ *   <dir>/<sha256>        the bytes
+ *   <dir>/<sha256>.json   { mime, byteSize, archived }
+ *
+ * Writes land on a temp name and are renamed into place, so a torn write is
+ * never observable as a valid asset. Every path segment comes from the
+ * VALIDATED storage key (`assertSafeStorageKey`), never from caller input, so a
+ * hostile key cannot escape the directory.
+ */
+export interface DiskAssetStorageOptions {
+  /** Blob directory. Defaults to `$VISUAL_ASSET_DIR`, else `<cwd>/uploads/visual-assets`. */
+  dir?: string;
+}
+
+interface DiskAssetMeta {
+  mime: string;
+  byteSize: number;
+  archived: boolean;
+}
+
+function diskAssetDir(explicit?: string): string {
+  return (
+    explicit?.trim()
+    || process.env.VISUAL_ASSET_DIR?.trim()
+    || path.join(process.cwd(), "uploads", "visual-assets")
+  );
+}
+
+export function createDiskAssetStorage(
+  options: DiskAssetStorageOptions = {},
+): AssetStoragePort & { size(): Promise<number> } {
+  const dir = diskAssetDir(options.dir);
+  const grants = new Map<string, { storageKey: string; expiresAt: number }>();
+
+  /** The only place a caller-derived value becomes a path — and only post-validation. */
+  function blobPath(storageKey: string): string {
+    assertSafeStorageKey(storageKey);
+    return path.join(dir, storageKey.slice("local:".length));
+  }
+  const metaPath = (storageKey: string): string => `${blobPath(storageKey)}.json`;
+
+  async function readMeta(storageKey: string): Promise<DiskAssetMeta | null> {
+    try {
+      const parsed = JSON.parse(await readFile(metaPath(storageKey), "utf8")) as DiskAssetMeta;
+      return typeof parsed?.mime === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function unavailable(storageKey: string): Promise<never> {
+    throw new InvalidVisualInputError([`asset "${storageKey}" is unavailable`]);
+  }
+
+  return {
+    async put(bytes: Buffer, mime: string) {
+      const contentHash = createHash("sha256").update(bytes).digest("hex");
+      const storageKey = `local:${contentHash}`;
+      await mkdir(dir, { recursive: true });
+      const target = blobPath(storageKey);
+      // Content-addressed: identical bytes are written once. An existing entry
+      // is left exactly as it is, so re-storing archived bytes cannot resurrect
+      // them (the in-memory implementation behaves the same way).
+      if (!(await readMeta(storageKey))) {
+        const tmp = path.join(dir, `.tmp-${randomBytes(8).toString("hex")}`);
+        await writeFile(tmp, bytes);
+        await rename(tmp, target);
+        await writeFile(
+          metaPath(storageKey),
+          JSON.stringify({ mime, byteSize: bytes.length, archived: false } satisfies DiskAssetMeta),
+        );
+      }
+      return { storageKey, contentHash, byteSize: bytes.length };
+    },
+
+    async get(storageKey: string) {
+      const meta = await readMeta(storageKey);
+      if (!meta || meta.archived) return unavailable(storageKey);
+      try {
+        return await readFile(blobPath(storageKey));
+      } catch {
+        return unavailable(storageKey);
+      }
+    },
+
+    async archive(storageKey: string) {
+      const meta = await readMeta(storageKey);
+      if (!meta) return;
+      await writeFile(metaPath(storageKey), JSON.stringify({ ...meta, archived: true } satisfies DiskAssetMeta));
+    },
+
+    async issueProviderFetchUrl(input) {
+      const meta = await readMeta(input.storageKey);
+      if (!meta || meta.archived) return null;
+      const publicBase = process.env.CONTENTFORGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+      if (!publicBase) return null;
+      const ttlMs = input.ttlMs ?? 15 * 60 * 1000;
+      const token = randomBytes(24).toString("hex");
+      const expiresAt = Date.now() + ttlMs;
+      grants.set(token, { storageKey: input.storageKey, expiresAt });
+      return { url: `${publicBase}/api/provider-media/${token}`, expiresAt: new Date(expiresAt) };
+    },
+
+    async getProviderGrant(token: string) {
+      const grant = grants.get(token);
+      if (!grant) return null;
+      if (grant.expiresAt <= Date.now()) {
+        grants.delete(token);
+        return null;
+      }
+      // Grants are process-local and short-lived by design (a restart simply
+      // invalidates outstanding fetches); the BYTES they point at are durable.
+      const meta = await readMeta(grant.storageKey);
+      if (!meta || meta.archived) return null;
+      try {
+        return { bytes: await readFile(blobPath(grant.storageKey)), mime: meta.mime };
+      } catch {
+        return null;
+      }
+    },
+
+    async size() {
+      try {
+        const entries = await readdir(dir);
+        return entries.filter((name) => !name.endsWith(".json") && !name.startsWith(".tmp-")).length;
+      } catch {
+        return 0;
+      }
     },
   };
 }
