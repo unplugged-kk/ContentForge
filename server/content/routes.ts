@@ -242,6 +242,13 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   channels: typeof a.metadata?.channels === "number" ? a.metadata.channels : null,
   providerVoiceId: typeof a.metadata?.providerVoiceId === "string" ? a.metadata.providerVoiceId : null,
   contentHash: a.contentHash,
+  /**
+   * Finding F4: the review surface could only show metadata because the only
+   * byte route was the provider grant. An owner reading their own asset uses
+   * the owner-authenticated route below; `status` gates it so a non-ready
+   * (e.g. archived) asset advertises no URL at all.
+   */
+  contentUrl: a.status === "ready" ? `/api/visual-assets/${a.id}/content` : null,
   altText: a.altText,
   caption: a.caption,
   role: a.role,
@@ -1623,7 +1630,43 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
-  // ── Video generations (Phase 19) — same VisualGeneration table, kind=video ──
+    /**
+     * Owner-authenticated bytes (finding F4).
+     *
+     * The provider-grant route cannot serve this: it carries no session, is
+     * scoped to one storage key, and expires. An owner reading their OWN asset
+     * needs identity, so this route is session-scoped and re-checks ownership on
+     * every request. `not-yours` is indistinguishable from `not-there` (404),
+     * and an asset whose bytes are gone is a separate, honest 404 rather than an
+     * empty body.
+     */
+    router.get("/visual-assets/:id/content", async (req, res, next) => {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
+      try {
+        const asset = await deps.content.getVisualAsset(id);
+        if (!asset || (asset.userId !== null && asset.userId !== requireOwnerId(req))) {
+          return res.status(404).json({ message: "Visual asset not found" });
+        }
+        let bytes: Buffer;
+        try {
+          bytes = await deps.visualStorage.get(asset.storageKey);
+        } catch {
+          return res.status(404).json({ message: "Visual asset content is unavailable" });
+        }
+        res.setHeader("Content-Type", asset.mime);
+        res.setHeader("Content-Length", String(bytes.length));
+        // Private: this is the owner's media. Immutable in practice — the key is
+        // a content hash, so the bytes behind a URL can never change.
+        res.setHeader("Cache-Control", "private, max-age=3600");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        return res.status(200).end(bytes);
+      } catch (error) {
+        return next(error);
+      }
+    });
+
+    // ── Video generations (Phase 19) — same VisualGeneration table, kind=video ──
   router.post("/video-generations", async (req, res, next) => {
     try {
       const { generation, created } = await createVisualGeneration(

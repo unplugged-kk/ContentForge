@@ -147,12 +147,26 @@ export function PublicationCard({ publication }: { publication: Record<string, u
 }
 
 export function VisualAssetCard({ asset }: { asset: Record<string, unknown> }) {
+  // F4: the review surface used to show metadata only — id, mime, hash — so an
+  // owner could never actually see the image they had generated. The server
+  // now exposes an owner-authenticated byte URL; render it when present so a
+  // mocked/legacy payload without a URL is unaffected.
+  const contentUrl = textField(asset.contentUrl);
   return (
     <Card data-testid={`card-visual-${asset.id}`}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">Image</CardTitle>
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground space-y-1">
+        {contentUrl ? (
+          <img
+            src={contentUrl}
+            alt={textField(asset.altText) || "Generated image"}
+            loading="lazy"
+            className="w-full rounded-md border border-border object-contain"
+            data-testid={`visual-content-${asset.id}`}
+          />
+        ) : null}
         <p>{textField(asset.kind) || "Image"}</p>
         <TechnicalDetails>
           <p>id {String(asset.id)}</p>
