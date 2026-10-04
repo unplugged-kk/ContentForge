@@ -29,8 +29,17 @@ export default defineConfig({
         ["junit", { outputFile: "test-results/e2e-junit.xml" }],
       ]
     : [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
-  timeout: 60_000,
-  expect: { timeout: 20_000 },
+  timeout: 90_000,
+  expect: { timeout: 30_000 },
+  /**
+   * The suite drives ONE application process (playwright's `webServer`) and, in
+   * CI, a 2-vCPU runner. Unbounded parallelism therefore makes a correct but
+   * slow render miss the expect timeout — which is exactly how
+   * `settings-labels` took 1.1m in CI against 4.2s locally and failed, and why
+   * every failing spec in the full run passed in isolation. Cap the workers so
+   * the suite measures correctness rather than scheduler luck.
+   */
+  workers: isCi ? 2 : 4,
   use: {
     baseURL,
     trace: "on-first-retry",

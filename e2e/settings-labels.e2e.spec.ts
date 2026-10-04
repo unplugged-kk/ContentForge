@@ -34,6 +34,21 @@ const CONNECT_DIALOG_CONTROLS: Array<{ testId: string; name: string }> = [
 ];
 
 test.describe("settings accessible labels (Phase 33.6)", () => {
+  /**
+   * The E2E user is SHARED across the whole suite, and
+   * `security-secret-exposure.e2e.spec.ts` really does connect accounts for it
+   * through the API. Under parallelism that flips each platform card from
+   * "Connect" to "Manage" mid-test, so a spec that assumes a freshly registered
+   * user fails intermittently — it passes in isolation, which is exactly how it
+   * presented. Pin the accounts response instead: the same idiom
+   * agent-workspace, create-workflow and phase-33.2 already use.
+   */
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/accounts", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    );
+  });
+
   test("every Brand Profile control exposes a non-empty accessible name", async ({ page }) => {
     await page.goto("/settings");
     await expect(page.getByTestId("text-settings-title")).toBeVisible();
