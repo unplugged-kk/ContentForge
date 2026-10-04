@@ -39,22 +39,17 @@ describe("ai router", () => {
   });
 
   it("routes video tasks to Gemini when GEMINI_API_KEY is set", () => {
-    withEnv(
-      {
-        GEMINI_API_KEY: "g",
-        GEMINI_BASE_URL: undefined,
-        VIDEO_TEXT_MODEL: undefined,
-        VIDEO_MAIN_MODEL: undefined,
-        VIDEO_PREMIUM_MODEL: undefined,
-      },
-      () => {
-        assert.equal(resolveRoute("video.classify").providerId, "gemini");
-        assert.equal(resolveRoute("video.classify").model, "gemini-3.1-flash-lite");
-        assert.equal(resolveRoute("video.extract").model, "gemini-3.8-flash");
-        assert.equal(resolveRoute("video.premium").model, "gemini-3.1-pro-preview");
-        assert.match(resolveRoute("video.extract").baseUrl ?? "", /generativelanguage/);
-      },
-    );
+    withEnv({ GEMINI_API_KEY: "g", GEMINI_BASE_URL: undefined, VIDEO_MAIN_MODEL: undefined }, () => {
+      assert.equal(resolveRoute("video.extract").providerId, "gemini");
+      assert.equal(resolveRoute("video.extract").model, "gemini-3.8-flash");
+      assert.match(resolveRoute("video.extract").baseUrl ?? "", /generativelanguage/);
+    });
+  });
+
+  it("declares only the tasks that actually have a call site", () => {
+    // `video.classify` and `video.premium` were declared with no consumer — a
+    // trap for anyone reading the routing table as a capability list (F12).
+    assert.deepEqual([...AI_TASKS], ["default", "video.extract"]);
   });
 
   it("honours the VIDEO_* env overrides", () => {

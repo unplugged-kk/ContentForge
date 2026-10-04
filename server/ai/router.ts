@@ -14,13 +14,11 @@ import { MODELS } from "./config";
  * provider has no credential, it degrades to the default provider (never throws
  * for a missing optional key) and reports `fallback: true`.
  */
-export type AiTask = "default" | "video.classify" | "video.extract" | "video.premium";
+export type AiTask = "default" | "video.extract";
 
 export const AI_TASKS: readonly AiTask[] = [
   "default",
-  "video.classify",
   "video.extract",
-  "video.premium",
 ] as const;
 
 export type AiProviderId = "default" | "gemini";
@@ -64,11 +62,16 @@ function defaultModel(): string {
   return process.env.AI_TEXT_MODEL?.trim() || MODELS.TEXT;
 }
 
-/** Per-task Gemini model overrides (env-driven; defaults are current 3.x ids). */
-function geminiModelFor(task: AiTask): string {
-  if (task === "video.classify") return process.env.VIDEO_TEXT_MODEL?.trim() || "gemini-3.1-flash-lite";
-  if (task === "video.extract") return process.env.VIDEO_MAIN_MODEL?.trim() || "gemini-3.8-flash";
-  return process.env.VIDEO_PREMIUM_MODEL?.trim() || "gemini-3.1-pro-preview";
+/**
+ * The Gemini model for a video task.
+ *
+ * Exported because the native `generateContent` lane (server/research/transcript/
+ * geminiVideo.ts) cannot go through the OpenAI-compatible client — it needs
+ * `file_data.file_uri` for a YouTube URL — so it must still make the SAME model
+ * decision as every other video call rather than repeating the default.
+ */
+export function geminiModelFor(task: Exclude<AiTask, "default">): string {
+  return process.env.VIDEO_MAIN_MODEL?.trim() || "gemini-3.8-flash";
 }
 
 /** Resolve a task to a provider + model. Never throws. */

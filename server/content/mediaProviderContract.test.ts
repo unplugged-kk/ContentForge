@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+import { promisify } from "node:util";
 import {
   discoverMediaProviders,
   normalizeProviderError,
@@ -20,6 +25,42 @@ import {
  * Reusable adapter certification checks. New providers call this suite with a
  * deterministic adapter instance; live output checks remain provider-specific.
  */
+const execFileAsync = promisify(execFile);
+
+/**
+ * Can THIS host synthesize speech at all?
+ *
+ * A macOS voice can be listed yet carry no audio data (a placeholder until its
+ * data is installed). `say` then writes a header-only AIFF, ffmpeg converts it
+ * faithfully to silence, and the provider CORRECTLY refuses the empty result —
+ * so a failure here reports a host state, not a product defect. The live check
+ * below therefore skips loudly instead, mirroring the pooled-database skip in
+ * server/db.pool.test.ts.
+ */
+async function macosSayUsable(): Promise<{ ok: boolean; reason: string }> {
+  if (process.platform !== "darwin") {
+    return { ok: false, reason: "not macOS — local speech synthesis is host-specific" };
+  }
+  const dir = await mkdtemp(join(tmpdir(), "cf-say-probe-"));
+  try {
+    const aiff = join(dir, "probe.aiff");
+    await execFileAsync("say", ["-v", "Samantha", "-o", aiff, "probe"], { timeout: 30_000 });
+    const { size } = await stat(aiff);
+    return size > 8192
+      ? { ok: true, reason: "" }
+      : {
+          ok: false,
+          reason: `macOS voice "Samantha" produced no audio (${size}-byte header only) — install its voice data`,
+        };
+  } catch (error) {
+    return { ok: false, reason: `macOS say unusable: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const localSpeech = await macosSayUsable();
+
 function certifyProviderContract(provider: VisualProviderPort): void {
   assert.ok(provider.providerId);
   assert.ok(provider.providerVersion);
@@ -93,7 +134,7 @@ describe("media provider contract certification", () => {
     );
   });
 
-  it("produces and validates real local speech", { skip: process.platform !== "darwin" }, async () => {
+    it("produces and validates real local speech", { skip: localSpeech.ok ? false : localSpeech.reason }, async () => {
     const provider = createMacosSayProvider({
       MACOS_SAY_ENABLED: "true",
       MACOS_SAY_VOICES: "Samantha",

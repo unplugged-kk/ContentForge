@@ -5,7 +5,16 @@
  * `generateContent` accepts `file_data.file_uri` pointing at a YouTube video
  * directly. This is video-token priced, so it is *opt-in* (`VIDEO_GEMINI_FALLBACK=1`)
  * and only used when a transcript is unavailable.
+ *
+ * Deliberate split, not a duplicate path (finding F11): the gateway in
+ * `server/ai/router.ts` serves every TEXT task, and this file exists solely
+ * because the gateway cannot express `file_uri`. They now share one model
+ * decision (`geminiModelFor`) and the API key travels in the `x-goog-api-key`
+ * header, never in the URL, so it cannot leak through a URL in a log or an error
+ * message.
  */
+
+import { geminiModelFor } from "../../ai/router";
 
 const DEFAULT_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -27,7 +36,8 @@ function nativeBaseUrl(): string {
 }
 
 function videoModel(): string {
-  return process.env.VIDEO_MAIN_MODEL?.trim() || "gemini-3.8-flash";
+  // Same model decision as every other video call — one source of truth.
+  return geminiModelFor("video.extract");
 }
 
 export type GeminiVideoNotes = { text: string; model: string; promptTokens: number; outputTokens: number };
@@ -67,9 +77,9 @@ export async function geminiVideoNotes(
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   const model = videoModel();
 
-  const res = await fetch(`${nativeBaseUrl()}/models/${encodeURIComponent(model)}:generateContent?key=${key}`, {
+  const res = await fetch(`${nativeBaseUrl()}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
       contents: [{ parts: [{ file_data: { file_uri: url } }, { text: NOTES_PROMPT }] }],
       generationConfig: { maxOutputTokens: options.maxOutputTokens ?? 2048 },

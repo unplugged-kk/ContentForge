@@ -56,8 +56,17 @@ async function probeWav(path: string): Promise<{ durationMs: number; sampleRate:
   const durationMs = Math.round(Number(parsed.format?.duration) * 1000);
   const sampleRate = Number(stream?.sample_rate);
   const channels = Number(stream?.channels);
-  if (!Number.isInteger(durationMs) || durationMs <= 0 || !Number.isInteger(sampleRate) || !Number.isInteger(channels)) {
-    throw JobFailure.permanent("macOS Say produced audio with invalid probe metadata");
+  if (!stream || !Number.isInteger(sampleRate) || !Number.isInteger(channels)) {
+    throw JobFailure.permanent("macOS Say produced no readable audio stream");
+  }
+  if (!Number.isInteger(durationMs) || durationMs <= 0) {
+    // A voice can be LISTED yet carry no audio data (a placeholder until its
+    // data is installed); `say` then emits a header-only file and ffmpeg
+    // converts it faithfully to silence. Naming that cause saves an operator
+    // from debugging an empty WAV.
+    throw JobFailure.permanent(
+      "macOS Say produced no audio — the host voice may have no data installed (check `say -v '?'`)",
+    );
   }
   return { durationMs, sampleRate, channels, codec: stream?.codec_name ?? "pcm_s16le" };
 }

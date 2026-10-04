@@ -18,6 +18,12 @@ export type VideoIntakeResult =
       transcriptHash: string;
       charCount: number;
       chunkCount: number;
+      /** Caption language, when the track declares one. */
+      lang: string | null;
+      /** Cues parsed from the captions, before chunking — the DB column's value. */
+      cueCount: number;
+      /** Which caption track was used (`subs` = manual, `auto` = ASR). */
+      transcriptSource: string;
       reused: boolean;
     }
   | { status: "no_transcript"; videoId: string | null }
@@ -49,6 +55,11 @@ export async function intakeVideo(
       transcriptHash: existing.transcriptHash,
       charCount: existing.charCount,
       chunkCount: chunks.length,
+      // F15: these live in the row but were missing from the response, so a
+      // caller could not tell which track or how many cues it had ingested.
+      lang: existing.lang ?? null,
+      cueCount: existing.cueCount,
+      transcriptSource: existing.transcriptSource,
       reused: true,
     };
   }
@@ -62,6 +73,9 @@ export async function intakeVideo(
     transcriptHash: row.transcriptHash,
     charCount: row.charCount,
     chunkCount: chunks.length,
+    lang: row.lang ?? null,
+    cueCount: row.cueCount,
+    transcriptSource: row.transcriptSource,
     reused,
   };
 }
