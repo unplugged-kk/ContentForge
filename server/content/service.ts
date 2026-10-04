@@ -57,6 +57,7 @@ import {
 import { dispatchDueOccurrences } from "./scheduling";
 import { registerBuiltinChannelAdapters } from "./adapters";
 import { createDiskAssetStorage, registerVisualProvider } from "./visual";
+import { isTerminalGenerationFailure, shouldNudgeRun } from "./generationFailure";
 import { createFixtureVisualProvider, createFixtureVideoProvider } from "./visualFixture";
 import { createOpenAiImageProvider } from "./visualProviders/openaiImage";
 import { createGeminiImageProvider } from "./visualProviders/geminiImage";
@@ -192,7 +193,27 @@ export const generationRunPayloadSchema = z.object({
 });
 export type GenerationRunPayload = z.infer<typeof generationRunPayloadSchema>;
 
-export function createGenerationRunHandler(deps: GenerationDeps) {
+/** F5 — the seam that settles a run as soon as its generation dies. */
+export interface GenerationRunNudge {
+  /** Advance the run owning this generation job, if it is still unfinished. */
+  failOwningRun(generationJobId: number, reason: string): Promise<boolean>;
+}
+
+/**
+ * Wired into the generation handler below. Advances the owning run through the
+ * SAME idempotent path the scheduler tick uses, so the settle step — not this
+ * bridge — decides `failed` vs `partial`. Only unfinished runs are nudged; a
+ * settled run is left exactly as it is.
+ */
+export const generationRunNudge: GenerationRunNudge = {
+  async failOwningRun(generationJobId: number): Promise<boolean> {
+    const run = await automationStorage.findAutomationRunByGenerationJobId(generationJobId);
+    if (!run || !shouldNudgeRun(run.status)) return false;
+    return enqueueAutomationRunJob(run);
+  },
+};
+
+export function createGenerationRunHandler(deps: GenerationDeps, nudge?: GenerationRunNudge) {
   return async (payload: GenerationRunPayload, ctx: JobContext): Promise<void> => {
     const result = await runGenerationJob(payload.generationJobId, deps);
     if (result.status === "succeeded") {
@@ -211,6 +232,12 @@ export function createGenerationRunHandler(deps: GenerationDeps) {
     const message = result.failureMessage ?? "generation failed";
     if (failureClass === "rate_limited") throw JobFailure.rateLimited(message);
     if (failureClass === "transient") throw JobFailure.transient(message);
+    // Terminal from here on — the job is about to dead-letter. Nudge the run
+    // that owns it now rather than leaving it `running` until the next
+    // scheduler tick (finding F5).
+    if (nudge && isTerminalGenerationFailure(failureClass)) {
+      await nudge.failOwningRun(payload.generationJobId, message);
+    }
     if (failureClass === "policy_human") throw JobFailure.policyHuman(message);
     throw JobFailure.permanent(message);
   };
@@ -234,7 +261,7 @@ export function registerGenerationRunJob(
       singletonSeconds: 30,
       ...queueOverrides,
     },
-    handler: createGenerationRunHandler(deps),
+    handler: createGenerationRunHandler(deps, generationRunNudge),
   };
   registerJob(definition);
   return definition;

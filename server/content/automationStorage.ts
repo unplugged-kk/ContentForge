@@ -133,6 +133,12 @@ export interface AutomationStoragePort {
   /** Runs whose orchestration is unfinished — the scheduler tick's work list. */
   listAdvanceableAutomationRuns(limit: number): Promise<AutomationRun[]>;
   /**
+   * The run that owns a generation job, if any (finding F5). There is no FK
+   * from `generation_jobs` to a run — the link lives only inside the run's
+   * `outcomes` JSON — so this is a containment query, not a join.
+   */
+  findAutomationRunByGenerationJobId(generationJobId: number): Promise<AutomationRun | undefined>;
+  /**
    * Single-flight advance lease (the orchestrator's concurrency arbiter). Only
    * one caller can hold a run's lease; a crashed holder is reclaimed once the
    * lease expires, so recovery needs no in-memory state.
@@ -326,6 +332,21 @@ export class DatabaseAutomationStorage implements AutomationStoragePort {
       .where(inArray(automationRuns.status, ["pending", "running"]))
       .orderBy(asc(automationRuns.id))
       .limit(limit);
+  }
+
+  /**
+   * Reverse lookup used only by the failure path (F5): the newest run whose
+   * `outcomes` mention this generation job. Containment (`@>`) is served by a
+   * GIN index on the column when one exists, and the run count per job is 1.
+   */
+  async findAutomationRunByGenerationJobId(generationJobId: number): Promise<AutomationRun | undefined> {
+    const rows = await this.database
+      .select()
+      .from(automationRuns)
+      .where(sql`${automationRuns.outcomes} @> ${JSON.stringify([{ generationJobId }])}::jsonb`)
+      .orderBy(desc(automationRuns.id))
+      .limit(1);
+    return rows[0];
   }
 
   /**
