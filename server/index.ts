@@ -308,6 +308,15 @@ app.use((req, res, next) => {
     console.warn(`[x] X_THREAD_FINISHER is ${finisher.length} chars (max 275). It will be truncated at publish time.`);
   }
 
+  // Unmatched API paths must never fall through to the SPA/Vite fallback.
+  // Without this, an unknown /api route answers 200 text/html, which any client
+  // that does not parse the body reads as success (finding F1). Mounted after
+  // every router and before the static/Vite branch, so it catches only genuinely
+  // unmatched paths — and only under /api, never the SPA's own routes.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ message: "Not found" });
+  });
+
   // Standardized error handler: logs full error server-side, returns
   // sanitized message to client. Replaces the prior inline handler so stack
   // traces and internal details never leak on 5xx paths.

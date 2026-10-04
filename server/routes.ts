@@ -214,7 +214,7 @@ export async function registerRoutes(
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/posts/:id/publish", publishLimiter, async (req, res) => {
+  app.post("/api/posts/:id/publish", publishLimiter, async (req, res, next) => {
     try {
       const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid post id" });
@@ -227,8 +227,11 @@ export async function registerRoutes(
       }
       const result = await tryPublishPostById(id, { ownerUserId: sessionUserId(req) });
       res.json({ success: true, ...result });
-    } catch (err: any) {
-      res.status(500).json({ message: err?.message || "Failed to publish to X" });
+    } catch (err) {
+      // Route through the shared error handler (F14): it logs the real cause and
+      // its stack server-side and never echoes internals on a 5xx. The
+      // per-target failure reason is recorded on the publication row, not here.
+      next(err);
     }
   });
 
@@ -932,7 +935,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/articles/:id/publish", publishLimiter, async (req, res) => {
+  app.post("/api/articles/:id/publish", publishLimiter, async (req, res, next) => {
     try {
       const id = parseInt(String(req.params.id));
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid article id" });
@@ -951,8 +954,8 @@ export async function registerRoutes(
         message: "Article publish API integration is not implemented yet.",
         docsUrl: capability.docsUrl,
       });
-    } catch (err: any) {
-      res.status(500).json({ message: err.message });
+    } catch (err) {
+      next(err);
     }
   });
 
@@ -2714,7 +2717,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/images/generate", async (req, res) => {
+  app.post("/api/images/generate", async (req, res, next) => {
     try {
       const { prompt, style = "professional", aspectRatio = "1:1", pillarId, postId, enhancePrompt = true } = req.body;
       if (!prompt) return res.status(400).json({ message: "Prompt is required" });
@@ -2742,8 +2745,20 @@ Return ONLY the improved content text. Keep the same format and length constrain
           quality: "standard",
         });
 
-        const imageUrl = response.data?.[0]?.url || "";
-        const revisedPrompt = response.data?.[0]?.revised_prompt || finalPrompt;
+        // `gpt-image-1` returns `b64_json` and no `url`; dall-e returns a
+        // `url`. Reading only `.url` silently persisted an empty image
+        // (finding F13). Accept either shape — mirroring the provider adapter
+        // — and fail honestly instead of writing a broken row.
+        const item = response.data?.[0];
+        const imageUrl = item?.url
+          ? item.url
+          : item?.b64_json
+            ? `data:image/png;base64,${item.b64_json}`
+            : "";
+        if (!imageUrl) {
+          return res.status(502).json({ message: "Image provider returned no image data" });
+        }
+        const revisedPrompt = item?.revised_prompt || finalPrompt;
 
         const [saved] = await db.insert(generatedImages).values({
           userId: sessionUserId(req),
@@ -2758,9 +2773,8 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
         res.json(saved);
       }
-    } catch (err: any) {
-      console.error("Image generation error:", err);
-      res.status(500).json({ message: err.message || "Image generation failed" });
+    } catch (err) {
+      next(err);
     }
   });
 
