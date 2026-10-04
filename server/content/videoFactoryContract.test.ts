@@ -22,7 +22,11 @@ import {
   videoFactoryJobId,
 } from "./videoFactoryContract";
 import { createFilesystemVideoFactoryTransport, createMemoryVideoFactoryTransport } from "./videoFactoryTransport";
-import { createConfiguredVideoFactoryProvider, createVideoFactoryProvider } from "./videoFactoryProvider";
+import {
+  createConfiguredVideoFactoryProvider,
+  createVideoFactoryProvider,
+  videoFactoryDefaultVoiceFromEnv,
+} from "./videoFactoryProvider";
 import {
   InvalidVisualInputError,
   listVisualProviders,
@@ -153,6 +157,64 @@ describe("video-factory provider adapter", () => {
     assert.equal(typeof out.usage.outputIdentity, "string");
     assert.equal(out.durationMs, 1500);
     assert.doesNotMatch(JSON.stringify(out.usage), /\/Users\//);
+  });
+
+  describe("default voice (the factory rejects voiceless jobs)", () => {
+    const generate = (provider: ReturnType<typeof createVideoFactoryProvider>, generationId: number, overrides = {}) =>
+      provider.generate({
+        kind: "video",
+        capability: "generate_video",
+        snapshot: snapshot(overrides),
+        correlationId: "c",
+        generationId,
+      });
+
+    it("an intent that omits voice is submitted voiced with the default id; the frozen parser is untouched", async () => {
+      const transport = createMemoryVideoFactoryTransport();
+      const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0 });
+      await assert.rejects(() => generate(provider, 31), JobFailure);
+      assert.deepEqual(transport.jobs.get("cfvg-31")?.request.voice, { enabled: true, id: "af_heart" });
+      // asked directly, the v1 parser still reads an absent voice as disabled (producer-side default only)
+      assert.equal(buildVideoFactoryJobRequest({ generationId: 31, snapshot: snapshot() }).voice.enabled, false);
+    });
+
+    it("an explicit voice is never overridden, including voice: false", async () => {
+      const cases = [
+        { id: 32, voice: false, expected: { enabled: false } },
+        { id: 33, voice: { id: "bm_george" }, expected: { enabled: true, id: "bm_george" } },
+        { id: 34, voice: true, expected: { enabled: true } },
+      ];
+      for (const c of cases) {
+        const transport = createMemoryVideoFactoryTransport();
+        const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0 });
+        await assert.rejects(() => generate(provider, c.id, { voice: c.voice }), JobFailure);
+        assert.deepEqual(transport.jobs.get(`cfvg-${c.id}`)?.request.voice, c.expected);
+      }
+    });
+
+    it("the default id is a deployment setting", async () => {
+      assert.equal(videoFactoryDefaultVoiceFromEnv({}), "af_heart");
+      assert.equal(videoFactoryDefaultVoiceFromEnv({ VIDEO_FACTORY_DEFAULT_VOICE: "  bm_george " }), "bm_george");
+      assert.equal(videoFactoryDefaultVoiceFromEnv({ VIDEO_FACTORY_DEFAULT_VOICE: "   " }), "af_heart");
+      const transport = createMemoryVideoFactoryTransport();
+      const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0, defaultVoiceId: "bf_emma" });
+      await assert.rejects(() => generate(provider, 35), JobFailure);
+      assert.deepEqual(transport.jobs.get("cfvg-35")?.request.voice, { enabled: true, id: "bf_emma" });
+    });
+
+    it("a malformed default id fails permanently, names the setting, and submits nothing", async () => {
+      const transport = createMemoryVideoFactoryTransport();
+      const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0, defaultVoiceId: "not a voice!" });
+      await assert.rejects(
+        () => generate(provider, 36),
+        (err: unknown) =>
+          err instanceof JobFailure && err.failureClass === "permanent" && /VIDEO_FACTORY_DEFAULT_VOICE/.test(err.message),
+      );
+      assert.equal(transport.jobs.size, 0);
+      // the bad default is only consulted when the caller said nothing about voice
+      await assert.rejects(() => generate(provider, 37, { voice: { id: "af_heart" } }), JobFailure);
+      assert.deepEqual(transport.jobs.get("cfvg-37")?.request.voice, { enabled: true, id: "af_heart" });
+    });
   });
 
   it("unknown state after submit does not mint a new job id", async () => {

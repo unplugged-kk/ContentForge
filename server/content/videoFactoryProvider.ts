@@ -34,6 +34,17 @@ import { InvalidVisualInputError } from "./visual";
 const POLL_MS = 200;
 const POLL_BUDGET_MS = 5_000;
 
+/**
+ * Voice sent when an intent says nothing about voice (ratified Round 4, Q17a): the factory rejects voiceless
+ * jobs, so a silent caller gets a voiced one. The factory stays the authority on whether an id is valid;
+ * `VIDEO_FACTORY_DEFAULT_VOICE` keeps its voice catalogue a deployment setting, not code.
+ */
+export const VIDEO_FACTORY_FALLBACK_VOICE_ID = "af_heart";
+
+export function videoFactoryDefaultVoiceFromEnv(env: NodeJS.ProcessEnv): string {
+  return env.VIDEO_FACTORY_DEFAULT_VOICE?.trim() || VIDEO_FACTORY_FALLBACK_VOICE_ID;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -44,13 +55,15 @@ export interface VideoFactoryProviderOptions {
   pollBudgetMs?: number;
   dashboardUrl?: string | null;
   fetchImpl?: typeof fetch;
+  /** Voice for intents that omit `voice`; an explicit `voice` (even `false`) is always sent as given. */
+  defaultVoiceId?: string;
 }
 
 function snapshotRecord(snapshot: VisualGenerationRequest["snapshot"]): Record<string, unknown> {
   return snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>) : {};
 }
 
-function buildRequest(request: VisualGenerationRequest): VideoFactoryJobRequest {
+function buildRequest(request: VisualGenerationRequest, defaultVoiceId: string): VideoFactoryJobRequest {
   if (request.capability === "refine_video") {
     throw JobFailure.permanent("Video Factory does not support refine_video; create a new VideoGeneration to regenerate");
   }
@@ -60,14 +73,19 @@ function buildRequest(request: VisualGenerationRequest): VideoFactoryJobRequest 
   if (!request.generationId) {
     throw JobFailure.permanent("Video Factory requires a durable VisualGeneration id");
   }
+  const snapshot = snapshotRecord(request.snapshot);
+  const intent = snapshot.intent && typeof snapshot.intent === "object" ? (snapshot.intent as Record<string, unknown>) : {};
+  // Producer-side default (the frozen parser still reads an absent voice as disabled, so it is filled in here).
+  const defaulted = intent.voice === undefined || intent.voice === null;
   try {
     return buildVideoFactoryJobRequest({
       generationId: request.generationId,
-      snapshot: snapshotRecord(request.snapshot),
+      snapshot: defaulted ? { ...snapshot, intent: { ...intent, voice: { enabled: true, id: defaultVoiceId } } } : snapshot,
     });
   } catch (error) {
     if (error instanceof InvalidVisualInputError) {
-      throw JobFailure.permanent(error.message);
+      const fromDefault = defaulted && error.message.includes("voice id");
+      throw JobFailure.permanent(fromDefault ? `VIDEO_FACTORY_DEFAULT_VOICE: ${error.message}` : error.message);
     }
     throw error;
   }
@@ -115,6 +133,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
   const pollBudgetMs = options.pollBudgetMs ?? POLL_BUDGET_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
   const dashboardUrl = options.dashboardUrl?.trim() || null;
+  const defaultVoiceId = options.defaultVoiceId?.trim() || VIDEO_FACTORY_FALLBACK_VOICE_ID;
 
   return {
     providerId,
@@ -189,7 +208,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
         throw JobFailure.transient("Video Factory is unreachable");
       }
 
-      const job = buildRequest(request);
+      const job = buildRequest(request, defaultVoiceId);
       const expectedId = videoFactoryJobId(request.generationId!);
       if (job.jobId !== expectedId) {
         throw JobFailure.permanent("Video Factory job identity drifted from VisualGeneration id");
@@ -242,8 +261,10 @@ export function createConfiguredVideoFactoryProvider(
   env: NodeJS.ProcessEnv = process.env,
 ): VisualProviderPort {
   const root = videoFactoryRootFromEnv(env);
+  const defaultVoiceId = videoFactoryDefaultVoiceFromEnv(env);
   if (!root) {
     return createVideoFactoryProvider({
+      defaultVoiceId,
       transport: {
         kind: "filesystem",
         configured: false,
@@ -270,6 +291,7 @@ export function createConfiguredVideoFactoryProvider(
   }
   return createVideoFactoryProvider({
     transport: createFilesystemVideoFactoryTransport(root),
+    defaultVoiceId,
     dashboardUrl: env.VIDEO_FACTORY_DASHBOARD_URL?.trim() || "http://127.0.0.1:4300/manifest.json",
   });
 }
