@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Video repurposing",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "A repurposing job", "focus": ["video", "job", "jobrun", "provider", "outputs", "assets"], "note": "A source video becomes rendered derivatives through an external video provider." }
+    ]
+  },
+  "lanes": [
+    { "id": "source", "label": "Source" },
+    { "id": "plan", "label": "Plan" },
+    { "id": "render", "label": "Render" },
+    { "id": "output", "label": "Output" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "Intake", "fromCol": 0, "toCol": 1 },
+    { "id": "build", "label": "Render", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "store", "label": "Store", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["video", "job", "jobrun", "provider", "outputs", "assets"],
+  "nodes": [
+    { "id": "video", "lane": "source", "col": 0, "type": "external", "label": "Video Asset", "sublabel": "ready media", "width": 132 },
+    { "id": "job", "lane": "plan", "col": 1, "type": "backend", "label": "Repurposing Job", "sublabel": "idempotency key", "width": 132 },
+    { "id": "jobrun", "lane": "render", "col": 2, "type": "messagebus", "label": "video.repurpose", "sublabel": "retryLimit 8", "width": 132 },
+    { "id": "provider", "lane": "render", "col": 3, "type": "cloud", "label": "Video Provider", "sublabel": "HyperFrames / OpenShorts", "width": 132 },
+    { "id": "outputs", "lane": "output", "col": 4, "type": "database", "label": "Outputs", "sublabel": "rendered clips", "width": 132 },
+    { "id": "assets", "lane": "output", "col": 5, "type": "database", "label": "Derivative Assets", "sublabel": "visual asset refs", "width": 132 }
+  ],
+  "edges": [
+    { "id": "video-job", "from": "video", "to": "job", "label": "submit", "variant": "emphasis" },
+    { "id": "job-run", "from": "job", "to": "jobrun", "label": "enqueue", "variant": "emphasis" },
+    { "id": "run-provider", "from": "jobrun", "to": "provider", "label": "render", "variant": "emphasis" },
+    { "id": "provider-outputs", "from": "provider", "to": "outputs", "label": "result", "variant": "default" },
+    { "id": "outputs-assets", "from": "outputs", "to": "assets", "label": "persist", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Long-running job", "items": ["video.repurpose has the largest retry budget (8) and a 45-minute expiry", "Rendering happens on an external provider, not in-process"] }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Quality Gate (advisory, default off)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "Submit for review", "focus": ["submit", "signals", "decide", "thresholds", "approve"], "note": "Deterministic signals feed the Jev quality_gate decision before draft→in_review." },
+      { "id": "outcomes", "label": "Outcomes", "focus": ["thresholds", "approve", "revise", "reject", "hold"], "note": "Revise and reject block submission; hold is the fail-closed fallback and does not block." }
+    ]
+  },
+  "lanes": [
+    { "id": "trigger", "label": "Trigger" },
+    { "id": "signals", "label": "Signals" },
+    { "id": "decide", "label": "Decide" },
+    { "id": "outcome", "label": "Outcome", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "read", "label": "Read", "fromCol": 0, "toCol": 1 },
+    { "id": "judge", "label": "Judge", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "act", "label": "Act", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["submit", "signals", "decide", "thresholds", "approve"],
+  "nodes": [
+    { "id": "submit", "lane": "trigger", "col": 0, "type": "backend", "label": "Submit for Review", "sublabel": "draft → in_review", "width": 132 },
+    { "id": "signals", "lane": "signals", "col": 1, "type": "backend", "label": "Quality Signals", "sublabel": "deterministic regex", "width": 132 },
+    { "id": "decide", "lane": "decide", "col": 2, "type": "security", "label": "Decision Engine", "sublabel": "quality_gate", "width": 132 },
+    { "id": "thresholds", "lane": "decide", "col": 3, "type": "backend", "label": "Thresholds", "sublabel": "0.7 / 0.45", "width": 132 },
+    { "id": "approve", "lane": "outcome", "col": 4, "type": "backend", "label": "Approve", "sublabel": "→ in_review", "width": 132 },
+    { "id": "revise", "lane": "decide", "col": 4, "type": "security", "label": "Revise", "sublabel": "blocked (409)", "width": 132 },
+    { "id": "reject", "lane": "decide", "col": 5, "type": "security", "label": "Reject", "sublabel": "blocked (409)", "width": 132 },
+    { "id": "hold", "lane": "outcome", "col": 5, "type": "security", "label": "Hold", "sublabel": "fail-closed fallback", "width": 132 }
+  ],
+  "edges": [
+    { "id": "submit-signals", "from": "submit", "to": "signals", "label": "review", "variant": "emphasis" },
+    { "id": "signals-decide", "from": "signals", "to": "decide", "label": "state.quality", "variant": "default" },
+    { "id": "decide-thresholds", "from": "decide", "to": "thresholds", "variant": "default" },
+    { "id": "thresholds-approve", "from": "thresholds", "to": "approve", "label": "≥ 0.7", "variant": "emphasis" },
+    { "id": "thresholds-revise", "from": "thresholds", "to": "revise", "label": "≥ 0.45", "variant": "security", "role": "error" },
+    { "id": "thresholds-reject", "from": "thresholds", "to": "reject", "label": "< 0.45", "variant": "security", "role": "error" },
+    { "id": "thresholds-hold", "from": "thresholds", "to": "hold", "label": "no judgment", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Dormant by default", "items": ["The gate is only composed when JEV_DECISION_ENGINE_ENABLED=1 and JEV_CONTENT_GATE=1", "Otherwise submit-for-review behaves exactly as before"] },
+    { "dot": "rose", "title": "Advisory, never authorizing", "items": ["Revise/reject block the review transition; hold does not", "If the gate throws, the request falls back to the human path", "The gate can never make unapproved content publishable"] }
+  ]
+}

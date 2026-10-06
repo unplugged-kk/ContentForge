@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Jev trace — decide() to fallback",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [860, 720],
+    "views": [
+      { "id": "ask", "label": "Ask and record", "focus": ["caller", "engine", "transport", "http", "ledger"], "note": "Normalize state, ask Jev, validate the answer, record the decision, return a soft result." },
+      { "id": "fallback", "label": "Failure to fallback", "focus": ["transport", "http", "engine", "caller"], "note": "Any error becomes the decision's declared fallback — never an action." }
+    ]
+  },
+  "participants": [
+    { "id": "caller", "type": "backend", "label": "Caller", "sublabel": "boundary" },
+    { "id": "engine", "type": "backend", "label": "Decision Engine", "sublabel": "decide()" },
+    { "id": "transport", "type": "cloud", "label": "Jev Transport", "sublabel": "HTTP or CLI" },
+    { "id": "http", "type": "external", "label": "System One", "sublabel": "typesafe/jev" },
+    { "id": "ledger", "type": "database", "label": "jev_decisions", "sublabel": "append-only" }
+  ],
+  "segments": [
+    { "from": 150, "to": 300, "label": "Prepare" },
+    { "from": 316, "to": 460, "label": "Decide" },
+    { "from": 476, "to": 620, "label": "Fallback" }
+  ],
+  "messages": [
+    { "from": "caller", "to": "engine", "y": 180, "label": "decide(type, state, refs)", "variant": "emphasis" },
+    { "from": "engine", "to": "transport", "y": 222, "label": "buildQuestions + jevDecide", "variant": "emphasis" },
+    { "from": "transport", "to": "http", "y": 264, "label": "POST /systemone", "variant": "emphasis" },
+    { "from": "http", "to": "transport", "y": 326, "label": "answers", "variant": "return" },
+    { "from": "transport", "to": "engine", "y": 368, "label": "parsed answers", "variant": "return" },
+    { "from": "engine", "to": "ledger", "y": 410, "label": "validate + record", "variant": "emphasis" },
+    { "from": "engine", "to": "caller", "y": 452, "label": "DecisionResult (soft)", "variant": "return" },
+    { "from": "http", "to": "transport", "y": 540, "label": "timeout / 429", "variant": "dashed" },
+    { "from": "transport", "to": "engine", "y": 575, "label": "typed error", "variant": "dashed" },
+    { "from": "engine", "to": "caller", "y": 615, "label": "declared fallback", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "engine", "from": 174, "to": 470, "type": "backend" },
+    { "participant": "transport", "from": 216, "to": 386, "type": "cloud" },
+    { "participant": "http", "from": 258, "to": 336, "type": "external" },
+    { "participant": "ledger", "from": 404, "to": 424, "type": "database" },
+    { "participant": "engine", "from": 534, "to": 628, "type": "backend" },
+    { "participant": "transport", "from": 534, "to": 588, "type": "cloud" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Soft by contract", "items": ["level is always soft; the caller re-runs its own hard validators", "A decision never substitutes for a gate"] },
+    { "dot": "rose", "title": "Declared fallbacks", "items": ["fail_open_keep, deterministic, fail_closed_hold or skip", "No Jev failure can produce a publish"] }
+  ]
+}

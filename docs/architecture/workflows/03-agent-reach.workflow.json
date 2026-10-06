@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent Reach (declared, not built)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "truth", "label": "What exists", "focus": ["record", "gate", "e2e", "nodispatch"], "note": "Only a capability record, an access-class rule, and an e2e assertion exist." },
+      { "id": "absent", "label": "What is absent", "focus": ["skill", "nodispatch"], "note": "No provider is registered and nothing dispatches it." }
+    ]
+  },
+  "lanes": [
+    { "id": "declared", "label": "Declared" },
+    { "id": "enforced", "label": "Enforced" },
+    { "id": "absent", "label": "Absent / Not wired", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "statement", "label": "Statement", "fromCol": 0, "toCol": 1 },
+    { "id": "enforcement", "label": "Enforcement", "fromCol": 2, "toCol": 2, "variant": "emphasis" },
+    { "id": "gap", "label": "The gap", "fromCol": 3, "toCol": 3, "variant": "dashed" }
+  ],
+  "mainPath": ["record", "gate", "e2e", "nodispatch"],
+  "nodes": [
+    { "id": "record", "lane": "declared", "col": 0, "type": "backend", "label": "Capability Record", "sublabel": "available: false", "tag": "research/routes.ts", "width": 132 },
+    { "id": "skill", "lane": "declared", "col": 1, "type": "external", "label": "Agent Skill", "sublabel": ".agents/agent-reach", "width": 132 },
+    { "id": "gate", "lane": "enforced", "col": 1, "type": "security", "label": "Access-Class Gate", "sublabel": "local-agent-only refused", "width": 132 },
+    { "id": "e2e", "lane": "enforced", "col": 2, "type": "backend", "label": "E2E Assertion", "sublabel": "expects unavailable", "width": 132 },
+    { "id": "nodispatch", "lane": "absent", "col": 3, "type": "security", "label": "No Dispatcher", "sublabel": "never registered", "tag": "not wired", "width": 132 }
+  ],
+  "edges": [
+    { "id": "record-gate", "from": "record", "to": "gate", "label": "declares", "variant": "emphasis" },
+    { "id": "gate-e2e", "from": "gate", "to": "e2e", "label": "asserted", "variant": "default" },
+    { "id": "e2e-absent", "from": "e2e", "to": "nodispatch", "label": "confirms absent", "variant": "security" },
+    { "id": "skill-absent", "from": "skill", "to": "nodispatch", "label": "not dispatched", "variant": "dashed", "role": "branch" },
+    { "id": "record-skill", "from": "record", "to": "skill", "label": "design ref", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "This workflow does not run", "items": ["ContentForge does NOT scrape reach data today", "Agent Reach exists as a design reference and an agent-side skill only", "The hosted research engine never dispatches it"] },
+    { "dot": "slate", "title": "What you would build", "items": ["A provider registered in the registry with an allowed access class", "A dispatch path and an ingest seam", "Live scraping was explicitly ruled out for production accounts"] }
+  ]
+}

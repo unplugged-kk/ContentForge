@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Strategy, expertise & reach decisions",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "evidence", "label": "Deterministic evidence", "focus": ["profile", "reach", "scoring"], "note": "Expertise alignment and reach signals are computed by code and handed to the decision." },
+      { "id": "decide", "label": "Model judgment", "focus": ["scoring", "strategy", "publish"], "note": "Jev selects among bounded candidates; the code never invents a value." },
+      { "id": "loop", "label": "Close the loop", "focus": ["publish", "outcomes", "ledger"], "note": "Observed metrics attach back to every decision that referenced the publication." }
+    ]
+  },
+  "lanes": [
+    { "id": "evidence", "label": "Evidence (code)" },
+    { "id": "decide", "label": "Decision (Jev)" },
+    { "id": "enforce", "label": "Enforce" },
+    { "id": "outcome", "label": "Outcome loop", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "gather", "label": "Gather", "fromCol": 0, "toCol": 1 },
+    { "id": "judge", "label": "Judge", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "learn", "label": "Learn", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["profile", "scoring", "strategy", "publish", "ledger"],
+  "nodes": [
+    { "id": "profile", "lane": "evidence", "col": 0, "type": "backend", "label": "Expertise Profile", "sublabel": "deterministic", "width": 132 },
+    { "id": "reach", "lane": "evidence", "col": 1, "type": "backend", "label": "Reach Signals", "sublabel": "own history only", "width": 132 },
+    { "id": "scoring", "lane": "decide", "col": 2, "type": "security", "label": "Opportunity Scoring", "sublabel": "opportunity_score", "width": 132 },
+    { "id": "strategy", "lane": "decide", "col": 3, "type": "security", "label": "Content Strategy", "sublabel": "angle · audience · goal", "width": 132 },
+    { "id": "publish", "lane": "enforce", "col": 4, "type": "security", "label": "Publish Gate", "sublabel": "trusted path only", "width": 132 },
+    { "id": "outcomes", "lane": "outcome", "col": 4, "type": "backend", "label": "Outcomes", "sublabel": "observed metrics", "width": 132 },
+    { "id": "ledger", "lane": "outcome", "col": 5, "type": "database", "label": "jev_decisions", "sublabel": "predicted vs actual", "width": 132 }
+  ],
+  "edges": [
+    { "id": "profile-score", "from": "profile", "to": "scoring", "label": "alignment", "variant": "emphasis" },
+    { "id": "reach-score", "from": "reach", "to": "scoring", "label": "history", "variant": "dashed" },
+    { "id": "score-strategy", "from": "scoring", "to": "strategy", "label": "state", "variant": "emphasis" },
+    { "id": "strategy-publish", "from": "strategy", "to": "publish", "label": "audience + angle", "variant": "emphasis" },
+    { "id": "publish-ledger", "from": "publish", "to": "ledger", "label": "record", "variant": "emphasis" },
+    { "id": "outcomes-ledger", "from": "outcomes", "to": "ledger", "label": "attach actual", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Evidence is code", "items": ["Expertise alignment and reach signals are deterministic and model-free", "Reach reports only our own observed history; no fabricated trend signals"] },
+    { "dot": "rose", "title": "Judgment is flagged", "items": ["opportunity_score, content_strategy and publish_gate are all default-off", "publish_gate is consulted only on the trusted unattended path and fails closed (hold)"] },
+    { "dot": "amber", "title": "The loop closes", "items": ["Observed metrics attach to every decision that referenced the publication", "An unobserved metric is reported as unavailable, never coerced to zero"] }
+  ]
+}

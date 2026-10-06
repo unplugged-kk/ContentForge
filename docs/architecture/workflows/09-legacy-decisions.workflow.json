@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Legacy decisions (LLM + heuristic)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "llm", "label": "LLM-made decisions", "focus": ["ingest", "brandvoice", "viral", "discoverRank", "schedule"], "note": "Ingest, brand voice, viral score, discover ranking and schedule suggestions are all model calls." },
+      { "id": "heuristic", "label": "Heuristic decisions", "focus": ["marketPulse", "autopilot"], "note": "Autopilot content-type, template and rank are regex/heuristic, boosted by market pulse." }
+    ]
+  },
+  "lanes": [
+    { "id": "ingestl", "label": "Content ingest" },
+    { "id": "score", "label": "Scoring & ranking", "variant": "exception" },
+    { "id": "sched", "label": "Scheduling" },
+    { "id": "auto", "label": "Autopilot" }
+  ],
+  "phases": [
+    { "id": "read", "label": "Read", "fromCol": 0, "toCol": 1 },
+    { "id": "scorep", "label": "Score", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "route", "label": "Route", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "nodes": [
+    { "id": "ingest", "lane": "ingestl", "col": 0, "type": "cloud", "label": "Ingest Relevance", "sublabel": "LLM analysis", "width": 132 },
+    { "id": "brandvoice", "lane": "ingestl", "col": 1, "type": "cloud", "label": "Brand-Voice Learn", "sublabel": "LLM merge", "width": 132 },
+    { "id": "viral", "lane": "score", "col": 2, "type": "cloud", "label": "Viral 8-dim", "sublabel": "LLM score", "width": 132 },
+    { "id": "discoverRank", "lane": "score", "col": 4, "type": "cloud", "label": "Discover Rank", "sublabel": "LLM 20 ideas", "width": 132 },
+    { "id": "marketPulse", "lane": "auto", "col": 3, "type": "backend", "label": "Breaking Boost", "sublabel": "×1.5 heuristic", "width": 132 },
+    { "id": "autopilot", "lane": "auto", "col": 4, "type": "backend", "label": "Autopilot Rank", "sublabel": "niche · template", "width": 132 },
+    { "id": "schedule", "lane": "sched", "col": 5, "type": "cloud", "label": "Smart Schedule", "sublabel": "LLM times", "width": 132 }
+  ],
+  "edges": [
+    { "id": "ingest-brand", "from": "ingest", "to": "brandvoice", "label": "learn voice", "variant": "emphasis" },
+    { "id": "ingest-viral", "from": "ingest", "to": "viral", "label": "reference", "variant": "dashed" },
+    { "id": "discover-auto", "from": "discoverRank", "to": "autopilot", "label": "ranked ideas", "variant": "emphasis" },
+    { "id": "pulse-auto", "from": "marketPulse", "to": "autopilot", "label": "boost", "variant": "dashed" },
+    { "id": "viral-schedule", "from": "viral", "to": "schedule", "label": "score", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Why this matters", "items": ["These are decisions a decision layer would need to cover", "None of them go through the Decision OS today"] },
+    { "dot": "slate", "title": "Model vs code", "items": ["Viral, discover and smart-schedule outcomes are entirely the model", "Autopilot and market pulse are deterministic heuristics"] }
+  ]
+}

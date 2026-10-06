@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Decision OS (Jev) — one decide() call",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "happy", "label": "A successful decision", "focus": ["caller", "engine", "state", "questions", "transport", "validate", "ledger", "result"], "note": "Resolve policy, normalize state, ask Jev, validate, record, return a soft result." },
+      { "id": "fallbacks", "label": "Declared fallbacks", "focus": ["engine", "fa", "fb", "result"], "note": "Disabled engine and Jev errors both return the decision's declared fallback." }
+    ]
+  },
+  "lanes": [
+    { "id": "caller", "label": "Caller" },
+    { "id": "engine", "label": "Engine" },
+    { "id": "transport", "label": "Transport & Store" },
+    { "id": "fallback", "label": "Fallback", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "prepare", "label": "Prepare", "fromCol": 1, "toCol": 2 },
+    { "id": "ask", "label": "Ask + parse", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "return", "label": "Record + return", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["caller", "engine", "state", "questions", "transport", "validate", "ledger", "result"],
+  "nodes": [
+    { "id": "caller", "lane": "caller", "col": 0, "type": "backend", "label": "Boundary Caller", "sublabel": "quality_gate live", "width": 132 },
+    { "id": "engine", "lane": "engine", "col": 1, "type": "security", "label": "Decision Engine", "sublabel": "decide() · soft", "width": 132 },
+    { "id": "state", "lane": "engine", "col": 2, "type": "backend", "label": "normalizeState", "sublabel": "+ inputStateHash", "width": 132 },
+    { "id": "questions", "lane": "engine", "col": 3, "type": "backend", "label": "buildQuestions", "sublabel": "per decision type", "width": 132 },
+    { "id": "ledger", "lane": "engine", "col": 4, "type": "database", "label": "jev_decisions", "sublabel": "append-only", "width": 132 },
+    { "id": "result", "lane": "caller", "col": 5, "type": "backend", "label": "DecisionResult", "sublabel": "soft · logged", "width": 132 },
+    { "id": "transport", "lane": "transport", "col": 3, "type": "cloud", "label": "jevDecide", "sublabel": "HTTP or CLI", "width": 132 },
+    { "id": "validate", "lane": "transport", "col": 4, "type": "backend", "label": "zod validate", "sublabel": "per-type schema", "width": 132 },
+    { "id": "fa", "lane": "fallback", "col": 2, "type": "security", "label": "Not Enabled", "sublabel": "engine off → fallback", "width": 132 },
+    { "id": "fb", "lane": "fallback", "col": 3, "type": "security", "label": "Jev Error", "sublabel": "declared fallback", "width": 132 }
+  ],
+  "edges": [
+    { "id": "caller-engine", "from": "caller", "to": "engine", "label": "decide()", "variant": "emphasis" },
+    { "id": "engine-state", "from": "engine", "to": "state", "variant": "default" },
+    { "id": "state-questions", "from": "state", "to": "questions", "variant": "default" },
+    { "id": "questions-transport", "from": "questions", "to": "transport", "label": "ask Jev", "variant": "emphasis" },
+    { "id": "transport-validate", "from": "transport", "to": "validate", "label": "parse", "variant": "default" },
+    { "id": "validate-ledger", "from": "validate", "to": "ledger", "label": "record", "variant": "default" },
+    { "id": "ledger-result", "from": "ledger", "to": "result", "label": "return", "variant": "emphasis" },
+    { "id": "engine-disabled", "from": "engine", "to": "fa", "label": "disabled", "variant": "security", "role": "error" },
+    { "id": "transport-error", "from": "transport", "to": "fb", "label": "throws", "variant": "security", "role": "error" },
+    { "id": "fb-result", "from": "fb", "to": "result", "label": "fallback", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Default off", "items": ["The engine only runs when JEV_DECISION_ENGINE_ENABLED=1", "quality_gate is the only production caller today"] },
+    { "dot": "rose", "title": "Never authorizes execution", "items": ["The engine returns a value; the caller acts", "Every failure returns the decision's declared fallback", "No Jev failure can produce a publish"] }
+  ]
+}

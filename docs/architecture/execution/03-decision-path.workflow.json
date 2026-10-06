@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Decision path — where choices are made",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "canonical", "label": "Canonical gates", "focus": ["triage", "framing", "quality", "readiness"], "note": "The canonical chain has three soft Jev gates and one hard readiness gate." },
+      { "id": "legacy", "label": "Legacy decisions", "focus": ["viral", "discover", "autopilot"], "note": "Most live decisions are still LLM prompts or heuristics in the monolith." },
+      { "id": "hard", "label": "Hard gates", "focus": ["readiness", "provider", "classify", "activate"], "note": "Deterministic gates and the human activation gate close the loop." }
+    ]
+  },
+  "lanes": [
+    { "id": "canonical", "label": "Canonical (Jev)" },
+    { "id": "legacy", "label": "Legacy (LLM / heuristic)", "variant": "exception" },
+    { "id": "hard", "label": "Hard gates (code)" },
+    { "id": "feedback", "label": "Feedback" }
+  ],
+  "phases": [
+    { "id": "decide", "label": "Decide", "fromCol": 0, "toCol": 2, "variant": "emphasis" },
+    { "id": "enforce", "label": "Enforce", "fromCol": 3, "toCol": 5, "variant": "security" }
+  ],
+  "mainPath": ["triage", "framing", "quality", "readiness", "provider", "classify"],
+  "nodes": [
+    { "id": "triage", "lane": "canonical", "col": 0, "type": "security", "label": "Research Triage", "sublabel": "Jev · fail-open", "width": 132 },
+    { "id": "framing", "lane": "canonical", "col": 1, "type": "security", "label": "Format Select", "sublabel": "Jev · narrow-only", "width": 132 },
+    { "id": "quality", "lane": "canonical", "col": 2, "type": "security", "label": "Quality Gate", "sublabel": "Jev · fail-closed", "width": 132 },
+    { "id": "viral", "lane": "legacy", "col": 0, "type": "cloud", "label": "Viral 8-dim", "sublabel": "LLM score", "width": 132 },
+    { "id": "discover", "lane": "legacy", "col": 1, "type": "cloud", "label": "Discover Rank", "sublabel": "LLM ordering", "width": 132 },
+    { "id": "autopilot", "lane": "legacy", "col": 2, "type": "backend", "label": "Autopilot Rank", "sublabel": "heuristic", "width": 132 },
+    { "id": "readiness", "lane": "hard", "col": 3, "type": "backend", "label": "Readiness Gate", "sublabel": "approved only", "width": 132 },
+    { "id": "provider", "lane": "hard", "col": 4, "type": "backend", "label": "providerCalled", "sublabel": "no blind retry", "width": 132 },
+    { "id": "classify", "lane": "hard", "col": 5, "type": "backend", "label": "Failure Class", "sublabel": "regex", "width": 132 },
+    { "id": "activate", "lane": "feedback", "col": 5, "type": "security", "label": "Policy Activation", "sublabel": "human gate", "width": 132 }
+  ],
+  "edges": [
+    { "id": "triage-framing", "from": "triage", "to": "framing", "label": "kept sources", "variant": "emphasis" },
+    { "id": "framing-quality", "from": "framing", "to": "quality", "label": "chosen targets", "variant": "emphasis" },
+    { "id": "quality-readiness", "from": "quality", "to": "readiness", "label": "approved", "variant": "security" },
+    { "id": "readiness-provider", "from": "readiness", "to": "provider", "label": "send", "variant": "emphasis" },
+    { "id": "provider-classify", "from": "provider", "to": "classify", "label": "result", "variant": "default" },
+    { "id": "discover-autopilot", "from": "discover", "to": "autopilot", "label": "ideas", "variant": "dashed" },
+    { "id": "classify-activate", "from": "classify", "to": "activate", "label": "outcomes", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Soft vs hard", "items": ["Jev gates are soft and default-off; they return a value the caller may ignore", "Hard gates are code-owned and re-checked after any decision"] },
+    { "dot": "rose", "title": "Split surface", "items": ["The canonical chain is nearly decision-free", "The legacy monolith holds most live decisions today"] }
+  ]
+}

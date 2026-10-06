@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Content Generation",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "Opportunity to artifact", "focus": ["opp", "job", "policy", "prompt", "model", "validate", "artifact"], "note": "Freeze a policy, ask the model for copy only, validate the payload, store an immutable revision." },
+      { "id": "reuse", "label": "Idempotent re-run", "focus": ["job", "policy", "artifact"], "note": "If the job already succeeded, the existing artifact is reused." },
+      { "id": "failure", "label": "Failure classes", "focus": ["policy", "model", "fail"], "note": "Missing frozen policy or schema is permanent; model errors map to a JobFailure class." }
+    ]
+  },
+  "lanes": [
+    { "id": "trigger", "label": "Trigger" },
+    { "id": "freeze", "label": "Freeze" },
+    { "id": "generate", "label": "Generate" },
+    { "id": "persist", "label": "Persist & Recover", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "Intake", "fromCol": 0, "toCol": 1 },
+    { "id": "assemble", "label": "Freeze + assemble", "fromCol": 2, "toCol": 3 },
+    { "id": "produce", "label": "Produce + store", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["opp", "job", "policy", "prompt", "model", "validate", "artifact"],
+  "nodes": [
+    { "id": "opp", "lane": "trigger", "col": 0, "type": "backend", "label": "Opportunity", "sublabel": "status ≠ killed", "width": 132 },
+    { "id": "job", "lane": "trigger", "col": 1, "type": "messagebus", "label": "createGenerationJob", "sublabel": "idempotency key", "width": 132 },
+    { "id": "policy", "lane": "freeze", "col": 2, "type": "backend", "label": "Freeze Policy", "sublabel": "policyKey+version+hash", "width": 132 },
+    { "id": "prompt", "lane": "generate", "col": 3, "type": "backend", "label": "Assemble Request", "sublabel": "copy-only prompt", "width": 132 },
+    { "id": "model", "lane": "generate", "col": 4, "type": "cloud", "label": "Model Call", "sublabel": "AI Gateway", "tag": "copy only", "width": 132 },
+    { "id": "validate", "lane": "generate", "col": 5, "type": "backend", "label": "Payload Schema", "sublabel": "zod per format", "width": 132 },
+    { "id": "artifact", "lane": "persist", "col": 5, "type": "database", "label": "Artifact (draft)", "sublabel": "immutable revision", "width": 132 },
+    { "id": "fail", "lane": "persist", "col": 3, "type": "security", "label": "JobFailure", "sublabel": "permanent / transient", "width": 132 }
+  ],
+  "edges": [
+    { "id": "opp-job", "from": "opp", "to": "job", "label": "start", "variant": "emphasis" },
+    { "id": "job-policy", "from": "job", "to": "policy", "label": "resolve", "variant": "default" },
+    { "id": "policy-prompt", "from": "policy", "to": "prompt", "variant": "emphasis" },
+    { "id": "prompt-model", "from": "prompt", "to": "model", "label": "copy", "variant": "emphasis" },
+    { "id": "model-validate", "from": "model", "to": "validate", "label": "json", "variant": "default" },
+    { "id": "validate-artifact", "from": "validate", "to": "artifact", "label": "create", "variant": "emphasis" },
+    { "id": "policy-fail", "from": "policy", "to": "fail", "label": "no snapshot", "variant": "security", "role": "error" },
+    { "id": "model-fail", "from": "model", "to": "fail", "label": "error", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Copy only", "items": ["Format, structure, hook and voice come from the frozen prompt", "The model only writes the body text"] },
+    { "dot": "emerald", "title": "Immutable by design", "items": ["The artifact is inserted at readiness draft", "Edits create a new revision linked by supersedes_id"] }
+  ]
+}

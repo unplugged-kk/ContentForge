@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Agent trace — inline step loop",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [860, 900],
+    "views": [
+      { "id": "start", "label": "Start a run", "focus": ["operator", "api", "runtime", "db"], "note": "The run is created and claimed inline in the HTTP request." },
+      { "id": "loop", "label": "Tool step loop", "focus": ["runtime", "tool", "queue"], "note": "Tools execute inline; heavy work is delegated to durable jobs." },
+      { "id": "finish", "label": "Stream and finish", "focus": ["runtime", "api", "operator", "db"], "note": "Events stream to the operator; the run ends completed, failed or cancelled." }
+    ]
+  },
+  "participants": [
+    { "id": "operator", "type": "external", "label": "Operator", "sublabel": "objective" },
+    { "id": "api", "type": "backend", "label": "/api/agent", "sublabel": "routes" },
+    { "id": "runtime", "type": "backend", "label": "Agent Runtime", "sublabel": "advance()" },
+    { "id": "tool", "type": "backend", "label": "Tool Registry", "sublabel": "29 tools" },
+    { "id": "queue", "type": "messagebus", "label": "pg-boss", "sublabel": "delegated jobs" },
+    { "id": "db", "type": "database", "label": "Agent Store", "sublabel": "runs + calls" }
+  ],
+  "segments": [
+    { "from": 150, "to": 290, "label": "Start" },
+    { "from": 306, "to": 620, "label": "Step loop" },
+    { "from": 636, "to": 790, "label": "Stream + finish" }
+  ],
+  "messages": [
+    { "from": "operator", "to": "api", "y": 180, "label": "POST /runs {objective}", "variant": "emphasis" },
+    { "from": "api", "to": "runtime", "y": 222, "label": "createAndRun", "variant": "emphasis" },
+    { "from": "runtime", "to": "db", "y": 264, "label": "claim run (idempotent)", "variant": "emphasis" },
+    { "from": "runtime", "to": "tool", "y": 340, "label": "executeTool (authorize)", "variant": "emphasis" },
+    { "from": "tool", "to": "queue", "y": 382, "label": "enqueue research.run", "variant": "emphasis" },
+    { "from": "queue", "to": "tool", "y": 424, "label": "job id", "variant": "return" },
+    { "from": "tool", "to": "runtime", "y": 466, "label": "ToolEnvelope", "variant": "return" },
+    { "from": "runtime", "to": "db", "y": 508, "label": "record tool call", "variant": "emphasis" },
+    { "from": "runtime", "to": "api", "y": 646, "label": "AG-UI events (SSE)", "variant": "dashed" },
+    { "from": "api", "to": "operator", "y": 688, "label": "stream", "variant": "dashed" },
+    { "from": "runtime", "to": "db", "y": 730, "label": "completed / failed", "variant": "emphasis" },
+    { "from": "api", "to": "operator", "y": 772, "label": "final result", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "api", "from": 174, "to": 700, "type": "backend" },
+    { "participant": "runtime", "from": 216, "to": 746, "type": "backend" },
+    { "participant": "tool", "from": 334, "to": 492, "type": "backend" },
+    { "participant": "queue", "from": 376, "to": 432, "type": "messagebus" },
+    { "participant": "db", "from": 258, "to": 276, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Inline, not queued", "items": ["POST /runs blocks on runtime.advance and streams events", "The durable agent.run lane exists but is never enqueued"] },
+    { "dot": "rose", "title": "Bounded and guarded", "items": ["The step loop caps at MAX_STEPS = 16", "Privileged tools are stripped from autonomous plans and gated by authorizeTool"] }
+  ]
+}

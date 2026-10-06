@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Agent Reach trace — nothing is dispatched",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [860, 620],
+    "views": [
+      { "id": "attempt", "label": "A dispatch attempt", "focus": ["engine", "registry"], "note": "The registry has no agent-reach provider, so dispatch throws." },
+      { "id": "exists", "label": "What does exist", "focus": ["engine", "record"], "note": "Only a capability record with available:false." }
+    ]
+  },
+  "participants": [
+    { "id": "engine", "type": "backend", "label": "Research Engine", "sublabel": "hosted" },
+    { "id": "registry", "type": "security", "label": "Provider Registry", "sublabel": "access-class gate" },
+    { "id": "record", "type": "backend", "label": "Capability Record", "sublabel": "routes.ts" }
+  ],
+  "segments": [
+    { "from": 150, "to": 280, "label": "Dispatch attempt" },
+    { "from": 300, "to": 500, "label": "What exists" }
+  ],
+  "messages": [
+    { "from": "engine", "to": "registry", "y": 180, "label": "dispatch('agent-reach')", "variant": "emphasis" },
+    { "from": "registry", "to": "engine", "y": 222, "label": "not registered → error", "variant": "return" },
+    { "from": "registry", "to": "engine", "y": 326, "label": "local-agent-only → refused", "variant": "dashed" },
+    { "from": "engine", "to": "record", "y": 410, "label": "read capability", "variant": "dashed" },
+    { "from": "record", "to": "engine", "y": 452, "label": "available: false", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "engine", "from": 174, "to": 470, "type": "backend" },
+    { "participant": "registry", "from": 174, "to": 240, "type": "security" },
+    { "participant": "record", "from": 404, "to": 424, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "A negative finding", "items": ["No agent-reach provider is registered", "The access class local-agent-only is refused server-side", "Nothing constructs or dispatches this workflow"] },
+    { "dot": "slate", "title": "What remains", "items": ["A capability record marked available:false", "An e2e assertion and an agent-side skill folder", "No ingest seam and no store"] }
+  ]
+}

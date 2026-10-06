@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Data lifecycle — content objects",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 640],
+    "views": [
+      { "id": "research", "label": "Research to opportunity", "focus": ["researchJob", "source", "evidence", "story", "opportunity"], "note": "A job collects sources and derived evidence, then a story and one or more opportunities." },
+      { "id": "produce", "label": "Produce an artifact", "focus": ["policy", "genjob", "artifact", "schedule", "publication", "result"], "note": "A frozen policy drives generation into an immutable artifact, then a publication and a result." },
+      { "id": "measure", "label": "Measure and feed back", "focus": ["result", "perf", "learning", "context", "policy"], "note": "Metrics become signals; learning only reaches generation as bounded counts." }
+    ]
+  },
+  "stages": [
+    { "label": "Research" },
+    { "label": "Synthesize" },
+    { "label": "Produce" },
+    { "label": "Publish" },
+    { "label": "Measure" }
+  ],
+  "nodes": [
+    { "id": "researchJob", "type": "backend", "label": "ResearchJob", "sublabel": "kind · status", "stage": 0, "row": 0, "tag": "research_jobs" },
+    { "id": "source", "type": "backend", "label": "Source", "sublabel": "provider · hash", "stage": 0, "row": 1, "tag": "research_sources" },
+    { "id": "evidence", "type": "database", "label": "Evidence", "sublabel": "excerpt · origin", "stage": 0, "row": 2, "tag": "research_evidence" },
+    { "id": "story", "type": "backend", "label": "Story", "sublabel": "title · angles", "stage": 1, "row": 0, "tag": "stories" },
+    { "id": "opportunity", "type": "backend", "label": "Opportunity", "sublabel": "format × channel", "stage": 1, "row": 1, "tag": "opportunities" },
+    { "id": "policy", "type": "security", "label": "GenerationPolicy", "sublabel": "spec hash", "stage": 2, "row": 0, "tag": "generation_policies" },
+    { "id": "genjob", "type": "backend", "label": "GenerationJob", "sublabel": "policy snapshot", "stage": 2, "row": 1, "tag": "generation_jobs" },
+    { "id": "artifact", "type": "database", "label": "Artifact", "sublabel": "immutable revision", "stage": 2, "row": 2, "tag": "artifacts" },
+    { "id": "schedule", "type": "backend", "label": "Schedule", "sublabel": "occurrence", "stage": 3, "row": 0, "tag": "schedules" },
+    { "id": "publication", "type": "backend", "label": "Publication", "sublabel": "lease · providerCalled", "stage": 3, "row": 1, "tag": "publications" },
+    { "id": "result", "type": "database", "label": "Result", "sublabel": "outcome · metrics", "stage": 3, "row": 2, "tag": "results" },
+    { "id": "perf", "type": "database", "label": "performance_signals", "sublabel": "absent ≠ 0", "stage": 4, "row": 0, "tag": "metrics" },
+    { "id": "learning", "type": "backend", "label": "Learning", "sublabel": "proposals · guardrails", "stage": 4, "row": 1, "tag": "learning_*" },
+    { "id": "context", "type": "backend", "label": "Context", "sublabel": "bounded counts", "stage": 4, "row": 2, "tag": "context.ts" }
+  ],
+  "flows": [
+    { "from": "researchJob", "to": "source", "label": "collects", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "source", "to": "evidence", "label": "derives", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "evidence", "to": "story", "label": "grounds", "variant": "emphasis", "route": "vertical-channel", "labelDy": 26 },
+    { "from": "story", "to": "opportunity", "label": "spawns", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "opportunity", "to": "genjob", "label": "input", "variant": "emphasis", "route": "vertical-channel" },
+    { "from": "policy", "to": "genjob", "label": "frozen into", "variant": "security", "route": "straight", "labelDy": 26 },
+    { "from": "genjob", "to": "artifact", "label": "writes", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "artifact", "to": "schedule", "label": "approved only", "variant": "emphasis", "route": "vertical-channel", "labelDy": 26 },
+    { "from": "schedule", "to": "publication", "label": "occurrence", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "publication", "to": "result", "label": "outcome", "variant": "emphasis", "route": "straight", "labelDy": 26 },
+    { "from": "result", "to": "perf", "label": "metrics", "variant": "emphasis", "route": "vertical-channel" },
+    { "from": "perf", "to": "learning", "label": "observations", "variant": "default", "route": "straight", "labelDy": 26 },
+    { "from": "learning", "to": "context", "label": "bounded counts", "variant": "dashed", "route": "straight", "labelDy": 26 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "One chain", "items": ["Every object links by foreign key from ResearchJob to Result", "Artifacts are immutable; changes are new revisions"] },
+    { "dot": "emerald", "title": "Feedback is coarse", "items": ["Learning returns only bounded counts into context", "There is no per-topic or per-hook feedback loop"] }
+  ]
+}

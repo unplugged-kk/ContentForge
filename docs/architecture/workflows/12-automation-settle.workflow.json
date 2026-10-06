@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Automation run — the four steps",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "steps", "label": "The four steps", "focus": ["policy", "run", "step1", "step2", "step3", "step4"], "note": "One bounded step per durable delivery: research, story, fan-out, settle." },
+      { "id": "trusted", "label": "Trusted auto-approve", "focus": ["step3", "step4", "trusted"], "note": "Only a trusted + on_approval policy auto-advances past approval." }
+    ]
+  },
+  "lanes": [
+    { "id": "trigger", "label": "Trigger" },
+    { "id": "steps", "label": "Steps" },
+    { "id": "settle", "label": "Settle" },
+    { "id": "outcome", "label": "Outcome", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "open", "label": "Open", "fromCol": 0, "toCol": 1 },
+    { "id": "advance", "label": "Advance", "fromCol": 2, "toCol": 4, "variant": "emphasis" },
+    { "id": "close", "label": "Close", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["policy", "run", "step1", "step2", "step3", "step4"],
+  "nodes": [
+    { "id": "policy", "lane": "trigger", "col": 0, "type": "backend", "label": "AutomationPolicy", "sublabel": "specHash frozen", "width": 132 },
+    { "id": "run", "lane": "trigger", "col": 1, "type": "backend", "label": "AutomationRun", "sublabel": "idempotency key", "width": 132 },
+    { "id": "step1", "lane": "steps", "col": 2, "type": "messagebus", "label": "Step 1 Research", "sublabel": "research.run", "width": 132 },
+    { "id": "step2", "lane": "steps", "col": 3, "type": "backend", "label": "Step 2 Story", "sublabel": "synthesize", "width": 132 },
+    { "id": "step3", "lane": "steps", "col": 4, "type": "backend", "label": "Step 3 Fan-out", "sublabel": "repurpose + framing", "width": 132 },
+    { "id": "step4", "lane": "settle", "col": 5, "type": "backend", "label": "Step 4 Settle", "sublabel": "awaiting_approval", "width": 132 },
+    { "id": "trusted", "lane": "outcome", "col": 5, "type": "security", "label": "Trusted Auto", "sublabel": "draft → approved", "width": 132 }
+  ],
+  "edges": [
+    { "id": "policy-run", "from": "policy", "to": "run", "label": "instantiate", "variant": "emphasis" },
+    { "id": "run-step1", "from": "run", "to": "step1", "label": "step", "variant": "emphasis" },
+    { "id": "step1-step2", "from": "step1", "to": "step2", "label": "wait complete", "variant": "default" },
+    { "id": "step2-step3", "from": "step2", "to": "step3", "label": "targets", "variant": "emphasis" },
+    { "id": "step3-step4", "from": "step3", "to": "step4", "label": "outcomes", "variant": "emphasis" },
+    { "id": "step4-trusted", "from": "step4", "to": "trusted", "label": "if trusted", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "One step per delivery", "items": ["Each durable delivery advances at most one step", "Intermediate state is retained across retries (≤10 attempts)"] },
+    { "dot": "rose", "title": "Stops for humans by default", "items": ["Runs stop at awaiting_approval unless the policy is trusted + on_approval", "Trusted auto uses the artifact model's own transitions, not a bypass"] }
+  ]
+}

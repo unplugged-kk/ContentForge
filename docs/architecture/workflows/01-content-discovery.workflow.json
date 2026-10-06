@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Content Discovery (idea feed)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "A discovery run", "focus": ["cron", "fanout", "dedupe", "rank", "ideas"], "note": "Fetch sources, dedupe 14 days, then let the model rank exactly 20 ideas." },
+      { "id": "autopost", "label": "RSS autopost", "focus": ["ideas", "rss", "draftgen", "posts"], "note": "Ideas matching an autopost feed become drafts, at most two per feed." },
+      { "id": "empty", "label": "Empty fetch", "focus": ["fanout", "seed", "rank"], "note": "If nothing is fetched, three fallback ideas are seeded." }
+    ]
+  },
+  "lanes": [
+    { "id": "trigger", "label": "Trigger" },
+    { "id": "collect", "label": "Collect" },
+    { "id": "rank", "label": "Rank & Store" },
+    { "id": "draft", "label": "Draft" }
+  ],
+  "phases": [
+    { "id": "fetch", "label": "Fetch", "fromCol": 0, "toCol": 2 },
+    { "id": "rankphase", "label": "Rank + store", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "draftphase", "label": "Draft", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["cron", "fanout", "dedupe", "rank", "ideas", "rss", "draftgen", "posts"],
+  "nodes": [
+    { "id": "cron", "lane": "trigger", "col": 0, "type": "messagebus", "label": "Discover Refresh", "sublabel": "cron 0 6 * * *", "tag": "or POST /api route", "width": 132 },
+    { "id": "fanout", "lane": "collect", "col": 1, "type": "backend", "label": "Source Fan-out", "sublabel": "HN · Reddit · RSS", "width": 132 },
+    { "id": "dedupe", "lane": "collect", "col": 2, "type": "backend", "label": "14-day Dedupe", "sublabel": "url + title", "width": 132 },
+    { "id": "seed", "lane": "collect", "col": 3, "type": "security", "label": "Fallback Seeds", "sublabel": "if none fetched", "width": 132 },
+    { "id": "rank", "lane": "rank", "col": 3, "type": "cloud", "label": "LLM Ranking", "sublabel": "exactly 20 ideas", "tag": "aiCall", "width": 132 },
+    { "id": "ideas", "lane": "rank", "col": 4, "type": "database", "label": "discovered_ideas", "sublabel": "status: new", "width": 132 },
+    { "id": "posts", "lane": "rank", "col": 5, "type": "database", "label": "posts (draft)", "sublabel": "autopilot: false", "width": 132 },
+    { "id": "rss", "lane": "draft", "col": 4, "type": "backend", "label": "RSS Autopost Match", "sublabel": "host + status=new", "width": 132 },
+    { "id": "draftgen", "lane": "draft", "col": 5, "type": "cloud", "label": "Draft Generator", "sublabel": "split on ---", "width": 132 }
+  ],
+  "edges": [
+    { "id": "cron-fanout", "from": "cron", "to": "fanout", "label": "fan out", "variant": "emphasis" },
+    { "id": "fanout-dedupe", "from": "fanout", "to": "dedupe", "variant": "default" },
+    { "id": "dedupe-rank", "from": "dedupe", "to": "rank", "label": "candidates", "variant": "emphasis" },
+    { "id": "fanout-seed", "from": "fanout", "to": "seed", "label": "none fetched", "variant": "security", "role": "error" },
+    { "id": "seed-rank", "from": "seed", "to": "rank", "label": "seed 3", "variant": "dashed", "role": "branch" },
+    { "id": "rank-ideas", "from": "rank", "to": "ideas", "label": "20 ideas", "variant": "emphasis" },
+    { "id": "ideas-rss", "from": "ideas", "to": "rss", "label": "match feeds", "variant": "dashed" },
+    { "id": "rss-draftgen", "from": "rss", "to": "draftgen", "label": "≤2 / feed", "variant": "emphasis" },
+    { "id": "draftgen-posts", "from": "draftgen", "to": "posts", "label": "persist", "variant": "default" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Legacy path", "items": ["This is the older idea-feed path, separate from the canonical Research engine", "It runs on cron and also on demand via HTTP"] },
+    { "dot": "amber", "title": "Ranking is a model call", "items": ["Ordering of the 20 ideas is decided entirely by the LLM prompt", "There is no numeric relevance threshold in code here"] }
+  ]
+}

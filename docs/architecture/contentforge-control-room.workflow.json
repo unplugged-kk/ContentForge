@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "ContentForge — where am I (content lifecycle)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "happy", "label": "Happy path", "focus": ["proposed", "researching", "drafted", "in_review", "approved", "scheduled", "published", "measured"], "note": "From opportunity to measured result across four stages." },
+      { "id": "gates", "label": "Human and hard gates", "focus": ["in_review", "approved", "rejected", "scheduled"], "note": "Approval is per revision; only approved content is schedulable." },
+      { "id": "exceptions", "label": "Exceptions", "focus": ["published", "unknown", "rejected"], "note": "Rejected returns to Draft; an ambiguous publish parks as Unknown." }
+    ]
+  },
+  "lanes": [
+    { "id": "discovery", "label": "Discovery" },
+    { "id": "production", "label": "Production" },
+    { "id": "publishing", "label": "Publishing" },
+    { "id": "measurement", "label": "Measurement", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "disc", "label": "Discover", "fromCol": 0, "toCol": 0 },
+    { "id": "prod", "label": "Produce + approve", "fromCol": 1, "toCol": 3, "variant": "emphasis" },
+    { "id": "pub", "label": "Publish + measure", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["proposed", "researching", "drafted", "in_review", "approved", "scheduled", "published", "measured"],
+  "nodes": [
+    { "id": "proposed", "lane": "discovery", "col": 0, "type": "external", "label": "Opportunity", "sublabel": "proposed", "width": 132 },
+    { "id": "researching", "lane": "discovery", "col": 1, "type": "backend", "label": "Research → Story", "sublabel": "evidence", "width": 132 },
+    { "id": "drafted", "lane": "production", "col": 1, "type": "backend", "label": "Draft", "sublabel": "frozen policy", "width": 132 },
+    { "id": "in_review", "lane": "production", "col": 2, "type": "security", "label": "In Review", "sublabel": "human gate", "width": 132 },
+    { "id": "approved", "lane": "production", "col": 3, "type": "security", "label": "Approved", "sublabel": "schedulable", "width": 132 },
+    { "id": "rejected", "lane": "production", "col": 4, "type": "security", "label": "Rejected", "sublabel": "revise", "width": 132 },
+    { "id": "scheduled", "lane": "publishing", "col": 3, "type": "messagebus", "label": "Scheduled", "sublabel": "occurrence", "width": 132 },
+    { "id": "published", "lane": "publishing", "col": 4, "type": "backend", "label": "Published", "sublabel": "result", "width": 132 },
+    { "id": "unknown", "lane": "publishing", "col": 5, "type": "security", "label": "Unknown", "sublabel": "reconcile", "width": 132 },
+    { "id": "measured", "lane": "measurement", "col": 5, "type": "backend", "label": "Measured", "sublabel": "signals → policy", "width": 132 }
+  ],
+  "edges": [
+    { "id": "e-research", "from": "proposed", "to": "researching", "label": "research", "variant": "emphasis" },
+    { "id": "e-generate", "from": "researching", "to": "drafted", "label": "generate", "variant": "emphasis" },
+    { "id": "e-submit", "from": "drafted", "to": "in_review", "label": "submit", "variant": "emphasis" },
+    { "id": "e-approve", "from": "in_review", "to": "approved", "label": "approve", "variant": "emphasis" },
+    { "id": "e-reject", "from": "in_review", "to": "rejected", "label": "reject", "variant": "security", "role": "error" },
+    { "id": "e-schedule", "from": "approved", "to": "scheduled", "label": "schedule", "variant": "emphasis" },
+    { "id": "e-publish", "from": "scheduled", "to": "published", "label": "publish", "variant": "emphasis" },
+    { "id": "e-measure", "from": "published", "to": "measured", "label": "metrics", "variant": "emphasis" },
+    { "id": "e-ambiguous", "from": "published", "to": "unknown", "label": "ambiguous", "variant": "security", "role": "branch" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Where am I?", "items": ["Lanes are stages: Discovery, Production, Publishing, Measurement", "Columns are the same logical ranks used across every workflow here"] },
+    { "dot": "rose", "title": "Gates and exits", "items": ["Approval is per revision; only approved content is schedulable", "Rejected loops back to Draft; an ambiguous publish parks as Unknown"] },
+    { "dot": "amber", "title": "The loop is coarse", "items": ["Measurement reaches Draft only as bounded counts", "There is no per-topic or per-hook channel back into generation"] }
+  ]
+}

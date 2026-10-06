@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Performance Feedback loop",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "measure", "label": "Measure", "focus": ["published", "refresh", "metrics"], "note": "Published results refresh performance signals; absent metrics are never treated as zero." },
+      { "id": "propose", "label": "Detect and propose", "focus": ["metrics", "extract", "proposals", "evaluate", "candidate"], "note": "Deterministic extraction needs sample ≥ 3 and Δ ≥ 15% before a proposal exists." },
+      { "id": "activate", "label": "Activate and feed", "focus": ["candidate", "activate", "context"], "note": "Activation is human-gated (or bounded autonomy); feedback reaches generation as bounded counts only." }
+    ]
+  },
+  "lanes": [
+    { "id": "collect", "label": "Collect" },
+    { "id": "signals", "label": "Signals" },
+    { "id": "analyze", "label": "Analyze & Propose" },
+    { "id": "activate", "label": "Activate & Feed", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "ingest", "label": "Ingest", "fromCol": 0, "toCol": 2 },
+    { "id": "detect", "label": "Detect", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "apply", "label": "Apply", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["published", "refresh", "metrics", "extract", "proposals", "evaluate", "candidate", "activate", "context"],
+  "nodes": [
+    { "id": "published", "lane": "collect", "col": 0, "type": "backend", "label": "Published Result", "sublabel": "state: published", "width": 132 },
+    { "id": "refresh", "lane": "collect", "col": 1, "type": "backend", "label": "Refresh Metrics", "sublabel": "adapter fetch", "width": 132 },
+    { "id": "metrics", "lane": "signals", "col": 2, "type": "database", "label": "performance_signals", "sublabel": "absent ≠ 0", "width": 132 },
+    { "id": "extract", "lane": "analyze", "col": 3, "type": "backend", "label": "Extract Patterns", "sublabel": "sample ≥ 3 · Δ ≥ 15%", "width": 132 },
+    { "id": "proposals", "lane": "analyze", "col": 4, "type": "database", "label": "learning_proposals", "sublabel": "observations + proposals", "width": 132 },
+    { "id": "evaluate", "lane": "signals", "col": 4, "type": "backend", "label": "Evaluate Experiment", "sublabel": "guardrails", "width": 132 },
+    { "id": "candidate", "lane": "analyze", "col": 5, "type": "database", "label": "policy_candidates", "sublabel": "status: candidate", "width": 132 },
+    { "id": "activate", "lane": "activate", "col": 5, "type": "security", "label": "Human Activation", "sublabel": "or bounded autonomy", "width": 132 },
+    { "id": "context", "lane": "collect", "col": 5, "type": "backend", "label": "Bounded Context", "sublabel": "counts → generation", "width": 132 }
+  ],
+  "edges": [
+    { "id": "pub-refresh", "from": "published", "to": "refresh", "label": "sync", "variant": "emphasis" },
+    { "id": "refresh-metrics", "from": "refresh", "to": "metrics", "label": "persist", "variant": "default" },
+    { "id": "metrics-extract", "from": "metrics", "to": "extract", "label": "analyze", "variant": "emphasis" },
+    { "id": "extract-proposals", "from": "extract", "to": "proposals", "label": "observe", "variant": "default" },
+    { "id": "proposals-eval", "from": "proposals", "to": "evaluate", "label": "test", "variant": "default" },
+    { "id": "eval-candidate", "from": "evaluate", "to": "candidate", "label": "recommend", "variant": "emphasis" },
+    { "id": "candidate-activate", "from": "candidate", "to": "activate", "label": "human gate", "variant": "security" },
+    { "id": "activate-context", "from": "activate", "to": "context", "label": "new policy", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Deterministic detection", "items": ["Observation and proposal extraction is pure code, not a model", "Baselines are mutually exclusive where a comparable cohort exists"] },
+    { "dot": "amber", "title": "Human in the loop", "items": ["Activation needs an approved candidate and a completed experiment", "Autonomy may only auto-activate within a non-configurable evidence floor"] },
+    { "dot": "slate", "title": "Feedback is coarse", "items": ["Generation only sees bounded counts of past signals", "There is no per-topic or per-hook feedback loop"] }
+  ]
+}

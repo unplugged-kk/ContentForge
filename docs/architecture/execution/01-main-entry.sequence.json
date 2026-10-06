@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Main entry — canonical end-to-end",
+    "quality_profile": "showcase",
+    "viewBox": [900, 990],
+    "views": [
+      { "id": "accept", "label": "Accept work", "focus": ["operator", "api", "queue"], "note": "The API acknowledges with a durable job id before any long work begins." },
+      { "id": "background", "label": "Research then generate", "focus": ["queue", "worker", "llm", "db"], "note": "Each durable job does one bounded unit and persists state." },
+      { "id": "publish", "label": "Publish and measure", "focus": ["queue", "worker", "platform", "db"], "note": "Only approved revisions publish; ambiguous outcomes are parked." }
+    ]
+  },
+  "participants": [
+    { "id": "operator", "type": "external", "label": "Operator", "sublabel": "single user" },
+    { "id": "api", "type": "backend", "label": "Express API", "sublabel": "auth + CSRF" },
+    { "id": "queue", "type": "messagebus", "label": "pg-boss", "sublabel": "durable jobs" },
+    { "id": "worker", "type": "backend", "label": "Worker", "sublabel": "research/gen/pub" },
+    { "id": "llm", "type": "cloud", "label": "AI Gateway", "sublabel": "copy only" },
+    { "id": "db", "type": "database", "label": "Postgres", "sublabel": "sources→results" },
+    { "id": "platform", "type": "external", "label": "Platform", "sublabel": "X · Meta · LinkedIn" }
+  ],
+  "segments": [
+    { "from": 150, "to": 288, "label": "Accept" },
+    { "from": 306, "to": 580, "label": "Background work" },
+    { "from": 596, "to": 900, "label": "Publish + measure" }
+  ],
+  "messages": [
+    { "from": "operator", "to": "api", "y": 180, "label": "POST /api/research/jobs", "variant": "emphasis" },
+    { "from": "api", "to": "queue", "y": 222, "label": "enqueue research.run", "variant": "emphasis" },
+    { "from": "api", "to": "operator", "y": 264, "label": "201 + job id", "variant": "return" },
+    { "from": "queue", "to": "worker", "y": 326, "label": "deliver research.run", "variant": "emphasis" },
+    { "from": "worker", "to": "db", "y": 368, "label": "sources + evidence", "variant": "emphasis" },
+    { "from": "queue", "to": "worker", "y": 452, "label": "deliver generation.run", "variant": "emphasis" },
+    { "from": "worker", "to": "llm", "y": 494, "label": "copy-only prompt", "variant": "default" },
+    { "from": "llm", "to": "worker", "y": 536, "label": "JSON copy", "variant": "return" },
+    { "from": "worker", "to": "db", "y": 598, "label": "artifact (draft)", "variant": "emphasis" },
+    { "from": "queue", "to": "worker", "y": 660, "label": "deliver publication.run", "variant": "emphasis" },
+    { "from": "worker", "to": "platform", "y": 702, "label": "publish approved", "variant": "emphasis" },
+    { "from": "platform", "to": "worker", "y": 744, "label": "ok / ambiguous", "variant": "return" },
+    { "from": "worker", "to": "db", "y": 786, "label": "result + metrics", "variant": "emphasis" },
+    { "from": "db", "to": "worker", "y": 828, "label": "performance signals", "variant": "return" },
+    { "from": "worker", "to": "queue", "y": 870, "label": "schedule next tick", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "api", "from": 174, "to": 272, "type": "backend" },
+    { "participant": "queue", "from": 216, "to": 346, "type": "messagebus" },
+    { "participant": "worker", "from": 320, "to": 884, "type": "backend" },
+    { "participant": "llm", "from": 488, "to": 542, "type": "cloud" },
+    { "participant": "db", "from": 362, "to": 380, "type": "database" },
+    { "participant": "queue", "from": 446, "to": 672, "type": "messagebus" },
+    { "participant": "platform", "from": 696, "to": 750, "type": "external" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Async by job", "items": ["Each stage is a separate durable job", "The API never blocks on research, generation or publishing"] },
+    { "dot": "rose", "title": "Approval gate", "items": ["Only approved artifact revisions reach publication.run", "A provider call without a confirmed outcome is parked as unknown"] }
+  ]
+}

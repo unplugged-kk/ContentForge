@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Publishing (schedule → publication → platform)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "A publication run", "focus": ["tick", "occurrence", "publication", "lease", "adapter", "result"], "note": "Only approved artifacts are schedulable; the publication is single-flight leased." },
+      { "id": "ambiguous", "label": "Ambiguous outcome", "focus": ["adapter", "unknown", "reconcile"], "note": "A provider call without a confirmed outcome becomes unknown and is reconciled, never blindly retried." }
+    ]
+  },
+  "lanes": [
+    { "id": "schedule", "label": "Schedule" },
+    { "id": "claim", "label": "Claim" },
+    { "id": "publish", "label": "Publish" },
+    { "id": "reconcile", "label": "Reconcile", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "due", "label": "Due", "fromCol": 0, "toCol": 1 },
+    { "id": "lease", "label": "Lease", "fromCol": 2, "toCol": 3 },
+    { "id": "send", "label": "Send + measure", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["tick", "occurrence", "publication", "lease", "adapter", "result"],
+  "nodes": [
+    { "id": "tick", "lane": "schedule", "col": 0, "type": "messagebus", "label": "Scheduler Tick", "sublabel": "every minute", "width": 132 },
+    { "id": "occurrence", "lane": "schedule", "col": 1, "type": "backend", "label": "Occurrence", "sublabel": "CAS pending→enqueued", "width": 132 },
+    { "id": "publication", "lane": "claim", "col": 2, "type": "backend", "label": "runPublication", "sublabel": "approved only", "width": 132 },
+    { "id": "lease", "lane": "claim", "col": 3, "type": "security", "label": "Lease", "sublabel": "single-flight CAS", "width": 132 },
+    { "id": "adapter", "lane": "publish", "col": 4, "type": "backend", "label": "Channel Adapter", "sublabel": "x · meta · linkedin", "width": 132 },
+    { "id": "result", "lane": "publish", "col": 5, "type": "database", "label": "Result", "sublabel": "outcome + metrics", "width": 132 },
+    { "id": "unknown", "lane": "reconcile", "col": 4, "type": "security", "label": "Unknown", "sublabel": "no blind retry", "width": 132 },
+    { "id": "reconcile", "lane": "reconcile", "col": 5, "type": "security", "label": "Reconcile", "sublabel": "≤5 attempts", "width": 132 }
+  ],
+  "edges": [
+    { "id": "tick-occ", "from": "tick", "to": "occurrence", "label": "due", "variant": "emphasis" },
+    { "id": "occ-pub", "from": "occurrence", "to": "publication", "label": "enqueue", "variant": "emphasis" },
+    { "id": "pub-lease", "from": "publication", "to": "lease", "label": "claim", "variant": "security" },
+    { "id": "lease-adapter", "from": "lease", "to": "adapter", "label": "publish", "variant": "emphasis" },
+    { "id": "adapter-result", "from": "adapter", "to": "result", "label": "ok", "variant": "emphasis" },
+    { "id": "adapter-unknown", "from": "adapter", "to": "unknown", "label": "ambiguous", "variant": "security", "role": "error" },
+    { "id": "unknown-reconcile", "from": "unknown", "to": "reconcile", "label": "check", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Hard pre-conditions", "items": ["Only readiness=approved artifacts are schedulable", "The database arbitrates single-flight via a compare-and-set lease"] },
+    { "dot": "rose", "title": "No blind retries", "items": ["providerCalled ⇒ the transport is never invoked again", "Ambiguous outcomes are parked as unknown and reconciled", "Reconciliation miss is never proof of absence"] }
+  ]
+}

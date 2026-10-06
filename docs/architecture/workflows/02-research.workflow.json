@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Research run",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "pipeline", "label": "Deterministic pipeline", "focus": ["runjob", "fanout", "dedupe", "windowcap", "evidence", "store", "analyze"], "note": "The engine makes no model call except the optional Jev triage gate." },
+      { "id": "gate", "label": "The two gates", "focus": ["windowcap", "triage", "evidence"], "note": "Only triage (flag) and the sourced-evidence rule can remove sources." },
+      { "id": "empty", "label": "Empty collection", "focus": ["fanout", "empty"], "note": "Zero collected sources fail the run; nothing is fabricated." }
+    ]
+  },
+  "lanes": [
+    { "id": "queue", "label": "Queue" },
+    { "id": "collect", "label": "Collect" },
+    { "id": "filter", "label": "Filter & Decide" },
+    { "id": "persist", "label": "Persist & Analyze" }
+  ],
+  "phases": [
+    { "id": "gather", "label": "Gather", "fromCol": 0, "toCol": 2 },
+    { "id": "decide", "label": "Gate", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "store", "label": "Store + rank", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["runjob", "fanout", "dedupe", "windowcap", "triage", "evidence", "store", "analyze"],
+  "nodes": [
+    { "id": "runjob", "lane": "queue", "col": 0, "type": "messagebus", "label": "research.run", "sublabel": "durable job", "width": 132 },
+    { "id": "empty", "lane": "queue", "col": 1, "type": "security", "label": "Empty → Failed", "sublabel": "classifyEmpty", "width": 132 },
+    { "id": "fanout", "lane": "collect", "col": 1, "type": "backend", "label": "Provider Fan-out", "sublabel": "≤8 · concurrency 4", "width": 132 },
+    { "id": "dedupe", "lane": "collect", "col": 2, "type": "backend", "label": "dedupeSources", "sublabel": "hash ladder", "width": 132 },
+    { "id": "triage", "lane": "collect", "col": 3, "type": "security", "label": "Jev Triage Gate", "sublabel": "JEV_RESEARCH_GATE", "tag": "fail-open", "width": 132 },
+    { "id": "windowcap", "lane": "filter", "col": 3, "type": "backend", "label": "Window + Cap", "sublabel": "quick 10 / std 20 / deep 50", "width": 132 },
+    { "id": "evidence", "lane": "persist", "col": 4, "type": "backend", "label": "Derive + Validate", "sublabel": "needs ≥1 sourced", "width": 132 },
+    { "id": "store", "lane": "persist", "col": 5, "type": "database", "label": "Sources + Evidence", "sublabel": "insertEvidence ≤50", "width": 132 },
+    { "id": "analyze", "lane": "filter", "col": 5, "type": "backend", "label": "analyzeResearch", "sublabel": "weighted, gates nothing", "width": 132 }
+  ],
+  "edges": [
+    { "id": "job-fanout", "from": "runjob", "to": "fanout", "label": "execute", "variant": "emphasis" },
+    { "id": "fanout-dedupe", "from": "fanout", "to": "dedupe", "variant": "default" },
+    { "id": "dedupe-window", "from": "dedupe", "to": "windowcap", "label": "merged", "variant": "emphasis" },
+    { "id": "window-triage", "from": "windowcap", "to": "triage", "label": "if flag", "variant": "security" },
+    { "id": "triage-evidence", "from": "triage", "to": "evidence", "label": "kept", "variant": "emphasis" },
+    { "id": "evidence-store", "from": "evidence", "to": "store", "label": "persist", "variant": "default" },
+    { "id": "store-analyze", "from": "store", "to": "analyze", "label": "rank", "variant": "dashed" },
+    { "id": "fanout-empty", "from": "fanout", "to": "empty", "label": "0 collected", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Deterministic core", "items": ["Dedupe, window filter, cap, evidence derivation and ranking are pure code", "The single model boundary is the optional Jev triage gate"] },
+    { "dot": "amber", "title": "Fail-open gate", "items": ["If Jev is unconfigured or errors, all sources are kept", "Ranking is persisted but never rejects the job"] }
+  ]
+}

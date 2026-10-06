@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Legacy decisions in shadow mode (JC-01/02/03)",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "flow", "label": "Shadow then compare", "focus": ["legacySite", "shadowPort", "decide", "ledger", "compare"], "note": "The legacy site keeps its answer; the decision layer computes and records what it would have chosen." },
+      { "id": "record", "label": "One row, both sides", "focus": ["decide", "ledger", "compare"], "note": "The legacy answer travels in state flags/signals so the ledger holds both sides of the comparison." }
+    ]
+  },
+  "lanes": [
+    { "id": "legacy", "label": "Legacy sites (live)" },
+    { "id": "shadow", "label": "Shadow (record only)" },
+    { "id": "record", "label": "Ledger" },
+    { "id": "compare", "label": "Compare", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "compute", "label": "Compute both sides", "fromCol": 0, "toCol": 2 },
+    { "id": "persist", "label": "Record", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "comparep", "label": "Compare", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["legacySite", "shadowPort", "decide", "ledger", "compare"],
+  "nodes": [
+    { "id": "legacySite", "lane": "legacy", "col": 0, "type": "cloud", "label": "Legacy sites", "sublabel": "viral · discover · agent", "width": 132 },
+    { "id": "shadowPort", "lane": "shadow", "col": 2, "type": "security", "label": "legacyShadows", "sublabel": "flag-gated", "width": 132 },
+    { "id": "decide", "lane": "shadow", "col": 3, "type": "security", "label": "shadowDecide", "sublabel": "compute only", "width": 132 },
+    { "id": "ledger", "lane": "record", "col": 4, "type": "database", "label": "jev_decisions", "sublabel": "both sides", "width": 132 },
+    { "id": "compare", "lane": "compare", "col": 5, "type": "backend", "label": "Compare golden", "sublabel": "agreementRate", "width": 132 }
+  ],
+  "edges": [
+    { "id": "legacy-shadow", "from": "legacySite", "to": "shadowPort", "label": "shadow", "variant": "dashed" },
+    { "id": "shadow-decide", "from": "shadowPort", "to": "decide", "label": "JC-01/02/03", "variant": "emphasis" },
+    { "id": "decide-ledger", "from": "decide", "to": "ledger", "label": "record", "variant": "emphasis" },
+    { "id": "ledger-compare", "from": "ledger", "to": "compare", "label": "agreement", "variant": "default" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "Nothing acts on a shadow", "items": ["Each shadow returns a value the caller ignores", "A disabled entry makes NO call at all — shadow mode costs nothing until switched on"] },
+    { "dot": "amber", "title": "Both sides, one row", "items": ["JC-01 viral_score, JC-02 discover_rank, JC-03 agent_route", "Cut-over only after the two are compared on a golden set"] }
+  ]
+}

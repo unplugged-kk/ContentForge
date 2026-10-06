@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Chat → opportunity → draft",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "run", "label": "A chat request", "focus": ["msg", "intent", "story", "opp", "genjob", "queue"], "note": "A chat message is classified into format/channel, then becomes a story, opportunity and generation job." }
+    ]
+  },
+  "lanes": [
+    { "id": "chat", "label": "Chat" },
+    { "id": "intent", "label": "Intent" },
+    { "id": "create", "label": "Create" },
+    { "id": "queue", "label": "Queue" }
+  ],
+  "phases": [
+    { "id": "parse", "label": "Parse", "fromCol": 0, "toCol": 1 },
+    { "id": "make", "label": "Create", "fromCol": 2, "toCol": 4, "variant": "emphasis" },
+    { "id": "enqueue", "label": "Enqueue", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["msg", "intent", "story", "opp", "genjob", "queue"],
+  "nodes": [
+    { "id": "msg", "lane": "chat", "col": 0, "type": "frontend", "label": "Chat Message", "sublabel": "POST /api/chat", "width": 132 },
+    { "id": "intent", "lane": "intent", "col": 1, "type": "cloud", "label": "Intent LLM", "sublabel": "format + channel", "width": 132 },
+    { "id": "story", "lane": "create", "col": 2, "type": "backend", "label": "Create Story", "sublabel": "from the message", "width": 132 },
+    { "id": "opp", "lane": "create", "col": 3, "type": "backend", "label": "Opportunity", "sublabel": "format × channel", "width": 132 },
+    { "id": "genjob", "lane": "create", "col": 4, "type": "backend", "label": "Generation Job", "sublabel": "frozen policy", "width": 132 },
+    { "id": "queue", "lane": "queue", "col": 5, "type": "messagebus", "label": "generation.run", "sublabel": "durable job", "width": 132 }
+  ],
+  "edges": [
+    { "id": "msg-intent", "from": "msg", "to": "intent", "label": "classify", "variant": "emphasis" },
+    { "id": "intent-story", "from": "intent", "to": "story", "label": "topic", "variant": "emphasis" },
+    { "id": "story-opp", "from": "story", "to": "opp", "label": "targets", "variant": "default" },
+    { "id": "opp-job", "from": "opp", "to": "genjob", "label": "create", "variant": "emphasis" },
+    { "id": "job-queue", "from": "genjob", "to": "queue", "label": "enqueue", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Model picks the target", "items": ["The chat intent LLM chooses the format and channel", "The same registry validation applies before persistence"] }
+  ]
+}

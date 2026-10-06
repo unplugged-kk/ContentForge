@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Last30days trace — doctor-gated CLI provider",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [860, 700],
+    "views": [
+      { "id": "doctor", "label": "Doctor gate", "focus": ["engine", "provider", "cli"], "note": "The provider runs the CLI doctor first and keeps only cookie-free hosted sources." },
+      { "id": "search", "label": "Search and normalize", "focus": ["provider", "cli", "engine", "store"], "note": "Search is a JSON subprocess call forced to no browser cookies." },
+      { "id": "failure", "label": "Failure classes", "focus": ["cli", "provider", "engine"], "note": "Timeout is transient; no available source is permanent." }
+    ]
+  },
+  "participants": [
+    { "id": "engine", "type": "backend", "label": "Research Engine", "sublabel": "provider fan-out" },
+    { "id": "provider", "type": "backend", "label": "last30days Provider", "sublabel": "discover/search" },
+    { "id": "cli", "type": "external", "label": "last30days CLI", "sublabel": "python3 script" },
+    { "id": "store", "type": "database", "label": "Research Store", "sublabel": "sources + evidence" }
+  ],
+  "segments": [
+    { "from": 150, "to": 300, "label": "Doctor gate" },
+    { "from": 316, "to": 470, "label": "Search" },
+    { "from": 486, "to": 640, "label": "Failure" }
+  ],
+  "messages": [
+    { "from": "engine", "to": "provider", "y": 180, "label": "search(limit)", "variant": "emphasis" },
+    { "from": "provider", "to": "cli", "y": 222, "label": "doctor --json", "variant": "emphasis" },
+    { "from": "cli", "to": "provider", "y": 264, "label": "availableHosted", "variant": "return" },
+    { "from": "provider", "to": "cli", "y": 326, "label": "search --no-browser-cookies", "variant": "emphasis" },
+    { "from": "cli", "to": "provider", "y": 368, "label": "JSON items", "variant": "return" },
+    { "from": "provider", "to": "engine", "y": 410, "label": "NormalizedSource[]", "variant": "return" },
+    { "from": "engine", "to": "store", "y": 452, "label": "dedupe + persist", "variant": "emphasis" },
+    { "from": "provider", "to": "engine", "y": 514, "label": "no source → permanent", "variant": "dashed" },
+    { "from": "cli", "to": "provider", "y": 556, "label": "timeout → transient", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "provider", "from": 174, "to": 470, "type": "backend" },
+    { "participant": "cli", "from": 216, "to": 380, "type": "external" },
+    { "participant": "engine", "from": 174, "to": 196, "type": "backend" },
+    { "participant": "store", "from": 446, "to": 466, "type": "database" },
+    { "participant": "provider", "from": 508, "to": 620, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Registered only when enabled", "items": ["The provider exists only if LAST30DAYS_ENABLED=1 or LAST30DAYS_SCRIPT is set", "Only cookie-free hosted sources are allowed"] },
+    { "dot": "amber", "title": "Opaque process", "items": ["Any model use happens inside the external CLI, not in ContentForge", "2 MiB stdout cap and a hard timeout guard the spawn"] }
+  ]
+}

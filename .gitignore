@@ -45,3 +45,10 @@ playwright/.cache/
 
 # discovery scratch
 research/_raw/
+
+# Archify diagrams (docs/architecture): the SPECS (*.json) and the narrated
+# guides (*.md) are committed — they are the authoring source. The generated,
+# self-contained HTML and the visual-check PNGs are rebuilt from those specs
+# (`archify deliver`, see docs/HANDOVER.md §2) and are ~19 MB, so they stay out.
+docs/architecture/**/*.html
+docs/architecture/**/*.png

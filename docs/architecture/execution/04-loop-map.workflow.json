@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Loop and retry map",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "queue", "label": "Durable retries", "focus": ["researchRetry", "genRetry", "pubRetry", "automationStep"], "note": "Every job type has its own retry budget and backoff before dead-lettering." },
+      { "id": "scheduler", "label": "Scheduled repetition", "focus": ["tick", "occurrence"], "note": "The content scheduler materializes at most one occurrence per schedule per minute." },
+      { "id": "bounded", "label": "Bounded in-request loops", "focus": ["agentLoop", "jevRetry", "reconcile", "xpoll", "igpoll"], "note": "Agent steps, Jev retries and adapter polls all have hard caps." }
+    ]
+  },
+  "lanes": [
+    { "id": "queue", "label": "Queue retries" },
+    { "id": "scheduler", "label": "Scheduler" },
+    { "id": "request", "label": "In-request loops" },
+    { "id": "reconcile", "label": "Reconcile & poll", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "jobs", "label": "Job retry budgets", "fromCol": 0, "toCol": 3 },
+    { "id": "time", "label": "Time-driven", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["researchRetry", "genRetry", "pubRetry", "automationStep", "tick", "occurrence"],
+  "nodes": [
+    { "id": "researchRetry", "lane": "queue", "col": 0, "type": "messagebus", "label": "Research Retry", "sublabel": "3 · 300s backoff", "width": 132 },
+    { "id": "genRetry", "lane": "queue", "col": 1, "type": "messagebus", "label": "Generation Retry", "sublabel": "3 · 60s", "width": 132 },
+    { "id": "pubRetry", "lane": "queue", "col": 2, "type": "messagebus", "label": "Publication Retry", "sublabel": "3 · transient only", "width": 132 },
+    { "id": "automationStep", "lane": "queue", "col": 3, "type": "messagebus", "label": "Automation Step", "sublabel": "≤10 attempts", "width": 132 },
+    { "id": "tick", "lane": "scheduler", "col": 4, "type": "backend", "label": "Minute Tick", "sublabel": "content scheduler", "width": 132 },
+    { "id": "occurrence", "lane": "scheduler", "col": 5, "type": "backend", "label": "Occurrence CAS", "sublabel": "1 / tick", "width": 132 },
+    { "id": "agentLoop", "lane": "request", "col": 0, "type": "backend", "label": "Agent Loop", "sublabel": "≤16 steps", "width": 132 },
+    { "id": "jevRetry", "lane": "request", "col": 1, "type": "cloud", "label": "Jev Retry", "sublabel": "3 · 429/529", "width": 132 },
+    { "id": "reconcile", "lane": "reconcile", "col": 2, "type": "security", "label": "Reconcile", "sublabel": "≤5 attempts", "width": 132 },
+    { "id": "xpoll", "lane": "reconcile", "col": 3, "type": "security", "label": "X Write Poll", "sublabel": "6 attempts", "width": 132 },
+    { "id": "igpoll", "lane": "reconcile", "col": 4, "type": "security", "label": "IG Container Poll", "sublabel": "3–8", "width": 132 }
+  ],
+  "edges": [
+    { "id": "r-g", "from": "researchRetry", "to": "genRetry", "label": "next job", "variant": "emphasis" },
+    { "id": "g-p", "from": "genRetry", "to": "pubRetry", "label": "next job", "variant": "emphasis" },
+    { "id": "p-a", "from": "pubRetry", "to": "automationStep", "label": "chain", "variant": "emphasis" },
+    { "id": "a-t", "from": "automationStep", "to": "tick", "label": "schedules", "variant": "dashed" },
+    { "id": "t-o", "from": "tick", "to": "occurrence", "label": "due", "variant": "emphasis" },
+    { "id": "agent-jev", "from": "agentLoop", "to": "jevRetry", "label": "decide", "variant": "dashed" },
+    { "id": "rec-x", "from": "reconcile", "to": "xpoll", "label": "poll", "variant": "security" },
+    { "id": "x-ig", "from": "xpoll", "to": "igpoll", "label": "poll", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Every loop is bounded", "items": ["Job retries end in a dead-letter queue on exhaustion", "Agent steps cap at 16; Jev retries at 3; adapter polls at 6 / 8"] },
+    { "dot": "rose", "title": "No blind retry after a provider call", "items": ["publication retries are transient-only and pre-call", "Ambiguous outcomes go to bounded reconciliation, not retry"] }
+  ]
+}

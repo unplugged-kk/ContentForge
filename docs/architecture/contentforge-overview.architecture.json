@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ContentForge — How It Actually Works",
+    "quality_profile": "showcase",
+    "viewBox": [1650, 720],
+    "repository": {
+      "url": "https://github.com/unplugged-kk/ContentForge",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "0f3f108a407491c3ebc5870c63d4236321a15c95"
+    },
+    "views": [
+      { "id": "canonical-lifecycle", "label": "Canonical lifecycle", "focus": ["runtime", "research", "storyOpp", "generation", "artifact", "publish", "platforms"], "note": "ResearchJob → Story → Opportunity → Artifact → Publication → Result." },
+      { "id": "decision-and-ai", "label": "Decision + AI boundaries", "focus": ["decisionOS", "aiGateway", "research", "artifact", "automation"], "note": "Jev gates are soft and default-off; quality holds, triage and framing fail open." },
+      { "id": "second-path", "label": "The legacy second path", "focus": ["legacyAgent", "operator", "feedback"], "note": "Most live decisions and the daily autopilot still run inside server/routes.ts." }
+    ]
+  },
+  "components": [
+    { "id": "operator", "type": "frontend", "label": "Operator UI", "pos": [60, 120], "size": [140, 70], "sources": [{ "path": "client/src/main.tsx", "label": "SPA entry" }, { "path": "server/index.ts", "line": 212, "label": "authGate" }] },
+    { "id": "decisionOS", "type": "security", "label": "Decision OS", "pos": [660, 120], "size": [140, 70], "sources": [{ "path": "server/decision/engine.ts", "line": 57, "label": "decide" }, { "path": "server/decision/policies.ts", "line": 99, "label": "master flag" }] },
+    { "id": "aiGateway", "type": "cloud", "label": "AI Gateway", "pos": [860, 120], "size": [140, 70], "sources": [{ "path": "server/ai/chat.ts", "line": 35, "label": "aiCallRouted" }, { "path": "server/ai/router.ts", "line": 75, "label": "resolveRoute" }] },
+    { "id": "legacyAgent", "type": "backend", "label": "Legacy APIs", "pos": [60, 380], "size": [140, 70], "sources": [{ "path": "server/routes.ts", "line": 109, "label": "registerRoutes" }, { "path": "server/autopilot.ts", "line": 456, "label": "rankIdeas" }, { "path": "server/agent/runtime.ts", "line": 144, "label": "agent loop" }] },
+    { "id": "runtime", "type": "messagebus", "label": "Jobs + Cron", "pos": [260, 380], "size": [140, 70], "sources": [{ "path": "server/jobs/runtime.ts", "line": 98, "label": "runtime start" }, { "path": "server/scheduler.ts", "line": 28, "label": "node-cron" }, { "path": "server/content/service.ts", "line": 745, "label": "content tick" }] },
+    { "id": "research", "type": "backend", "label": "Research", "pos": [460, 380], "size": [140, 70], "sources": [{ "path": "server/research/engine.ts", "line": 207, "label": "execute" }, { "path": "server/research/intelligence.ts", "line": 448, "label": "analyzeResearch" }] },
+    { "id": "storyOpp", "type": "backend", "label": "Story → Opp", "pos": [660, 380], "size": [140, 70], "sources": [{ "path": "server/story/service.ts", "line": 106, "label": "createStoryFromResearch" }, { "path": "server/content/opportunity.ts", "line": 119, "label": "createOpportunityFromStory" }] },
+    { "id": "generation", "type": "backend", "label": "Generation", "pos": [860, 380], "size": [140, 70], "sources": [{ "path": "server/content/generation.ts", "line": 319, "label": "runGenerationJob" }, { "path": "server/content/policy.ts", "line": 401, "label": "assembleEffectiveRequest" }] },
+    { "id": "artifact", "type": "backend", "label": "Artifacts", "pos": [1060, 380], "size": [140, 70], "sources": [{ "path": "server/content/artifact.ts", "line": 120, "label": "createArtifact" }, { "path": "server/content/artifact.ts", "line": 269, "label": "submit for review" }] },
+    { "id": "publish", "type": "backend", "label": "Publishing", "pos": [1260, 380], "size": [140, 70], "sources": [{ "path": "server/content/scheduling.ts", "line": 230, "label": "dispatchDueOccurrences" }, { "path": "server/content/publication.ts", "line": 148, "label": "runPublication" }] },
+    { "id": "platforms", "type": "external", "label": "Platforms", "pos": [1460, 380], "size": [140, 70], "sources": [{ "path": "server/content/adapters.ts", "line": 1245, "label": "registerBuiltinChannelAdapters" }] },
+    { "id": "automation", "type": "backend", "label": "Automation", "pos": [260, 560], "size": [140, 70], "sources": [{ "path": "server/content/automation.ts", "line": 741, "label": "advanceAutomationRun" }] },
+    { "id": "researchExt", "type": "external", "label": "Providers", "pos": [460, 560], "size": [140, 70], "sources": [{ "path": "server/research/bootstrap.ts", "line": 28, "label": "registerBuiltinProviders" }] },
+    { "id": "postgres", "type": "database", "label": "Postgres", "pos": [660, 560], "size": [140, 70], "sources": [{ "path": "shared/schema.ts", "line": 1, "label": "schema" }] },
+    { "id": "feedback", "type": "backend", "label": "Optimization", "pos": [1260, 560], "size": [140, 70], "sources": [{ "path": "server/content/policyActivation/activation.ts", "line": 130, "label": "activatePolicyCandidate" }, { "path": "server/content/learning/refresh.ts", "line": 162, "label": "refresh metrics" }] }
+  ],
+  "connections": [
+    { "from": "operator", "to": "legacyAgent", "label": "legacy", "variant": "dashed", "route": "straight", "labelAt": [130, 285] },
+    { "from": "operator", "to": "runtime", "label": "enqueue", "variant": "emphasis", "labelAt": [240, 290] },
+    { "from": "runtime", "to": "research", "label": "run job", "variant": "emphasis", "route": "straight" },
+    { "from": "research", "to": "storyOpp", "label": "evidence", "variant": "emphasis", "route": "straight" },
+    { "from": "storyOpp", "to": "generation", "label": "Opportunity", "variant": "emphasis", "route": "straight" },
+    { "from": "generation", "to": "artifact", "label": "writing", "variant": "emphasis", "route": "straight" },
+    { "from": "artifact", "to": "publish", "label": "approved", "variant": "emphasis", "route": "straight" },
+    { "from": "publish", "to": "platforms", "label": "publish", "variant": "emphasis", "route": "straight" },
+    { "from": "researchExt", "to": "research", "label": "sources", "variant": "dashed", "route": "straight", "labelAt": [530, 505] },
+    { "from": "automation", "to": "research", "label": "drives", "variant": "dashed", "labelAt": [430, 505] },
+    { "from": "decisionOS", "to": "research", "label": "triage", "variant": "security", "fromSide": "bottom", "toSide": "top", "via": [[730, 300], [530, 300]], "labelAt": [630, 300] },
+    { "from": "decisionOS", "to": "artifact", "label": "quality", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[730, 55], [1130, 55]], "labelAt": [930, 55] },
+    { "from": "aiGateway", "to": "generation", "label": "prompt", "variant": "dashed", "route": "straight", "labelAt": [930, 330] },
+    { "from": "publish", "to": "feedback", "label": "metrics", "variant": "dashed", "route": "straight", "labelAt": [1330, 505] },
+    { "from": "feedback", "to": "generation", "label": "context", "variant": "dashed", "labelAt": [1130, 510] },
+    { "from": "generation", "to": "postgres", "label": "state", "labelAt": [830, 505] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One process, two content paths",
+      "items": [
+        "Everything runs in one Express process (server/index.ts) over one Postgres.",
+        "The canonical chain is ResearchJob → Story → Opportunity → Artifact → Publication → Result.",
+        "A second older path (routes.ts + autopilot + discover) owns most live decisions and publishes through its own cron."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Where decisions really live",
+      "items": [
+        "The Decision OS now has ten types; seven decide live and three legacy scores run in shadow mode.",
+        "All of it is still gated by JEV_DECISION_ENGINE_ENABLED, default off.",
+        "Shadow mode records JC-01 viral, JC-02 discover and JC-03 agent routing without acting on them."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Hard gates the code owns",
+      "items": [
+        "Only approved artifacts are schedulable or publishable; content is immutable at insert.",
+        "providerCalled means no blind retry; ambiguous outcomes become outcome:\"unknown\".",
+        "Auto-publish needs an explicit trusted + on_approval policy pair."
+      ]
+    }
+  ]
+}
