@@ -5,7 +5,7 @@ import { stripOverrideKeys, hashInput, toolIdempotencyKey, isForbiddenKey } from
 import { envelope, denied, notFound, invalid } from "./envelope";
 import { authorizeTool, parseGrants } from "./policy";
 import { AgentToolRegistry, unknownToolEnvelope } from "./registry";
-import { createFixtureBackend, createOpenAiCompatibleBackend, createAguiRemoteBackend } from "./backends";
+import { createAgentBackend, createFixtureBackend, createOpenAiCompatibleBackend, createAguiRemoteBackend } from "./backends";
 import { reconstructAguiEvents } from "./events";
 import { createTimeplusSemanticTools } from "./timeplus";
 import { createDisabledExternalProvider } from "./external";
@@ -159,6 +159,121 @@ describe("agent backends", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+
+  it("uses chat completions unless the selected provider detected responses", async () => {
+    const original = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(String(url));
+      if (String(url).endsWith("/responses")) {
+        return new Response(JSON.stringify({ output: [{ type: "message", content: [{ text: "from-responses" }] }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "from-chat" } }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const chat = createOpenAiCompatibleBackend({
+        baseUrl: "http://127.0.0.1:9/v1",
+        apiKey: "secret-key",
+        model: "m",
+        resolve: async () => ({
+          providerId: 1,
+          providerName: "local",
+          baseUrl: "http://127.0.0.1:9/v1",
+          apiKey: "secret-key",
+          model: "local-model",
+          transport: "chat_completions",
+          headers: {},
+          fallbackUsed: false,
+          reason: "route",
+        }),
+      });
+      const chatResult = await chat.run({
+        ownerId: 1,
+        objective: "ping",
+        agentRunId: 1,
+        correlationId: "c",
+        tools: [],
+        history: [],
+        providerSnapshot: { backendId: "openai-compatible" },
+      });
+      assert.equal(chatResult.message, "from-chat");
+      assert.equal(urls.some((url) => url.endsWith("/chat/completions")), true);
+      assert.equal(urls.some((url) => url.endsWith("/responses")), false);
+
+      urls.length = 0;
+      const responses = createOpenAiCompatibleBackend({
+        baseUrl: null,
+        apiKey: null,
+        model: "m",
+        resolve: async () => ({
+          providerId: 2,
+          providerName: "openai",
+          baseUrl: "http://127.0.0.1:9/v1",
+          apiKey: "secret-key",
+          model: "gpt",
+          transport: "responses",
+          headers: {},
+          fallbackUsed: false,
+          reason: "route",
+        }),
+      });
+      const responsesResult = await responses.run({
+        ownerId: 1,
+        objective: "ping",
+        agentRunId: 2,
+        correlationId: "c",
+        tools: [],
+        history: [],
+        providerSnapshot: { backendId: "openai-compatible" },
+      });
+      assert.equal(responsesResult.message, "from-responses");
+      assert.equal(urls.some((url) => url.endsWith("/responses")), true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("redacts the provider key from a failed completion", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("bad secret-key", { status: 401 })) as typeof fetch;
+    try {
+      const backend = createOpenAiCompatibleBackend({
+        baseUrl: "http://127.0.0.1:9/v1",
+        apiKey: "secret-key",
+        model: "m",
+      });
+      const result = await backend.run({
+        ownerId: 1,
+        objective: "ping",
+        agentRunId: 1,
+        correlationId: "c",
+        tools: [],
+        history: [],
+        providerSnapshot: {},
+      });
+      assert.equal(result.status, "failed");
+      assert.equal(result.message?.includes("secret-key"), false);
+      assert.match(result.message ?? "", /\[redacted\]/);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("keeps fixture execution when the run does not ask for a provider", async () => {
+    const backend = createAgentBackend({} as NodeJS.ProcessEnv);
+    const result = await backend.run({
+      ownerId: 1,
+      objective: "go",
+      agentRunId: 1,
+      correlationId: "c",
+      tools: [],
+      history: [],
+      providerSnapshot: { backendId: "fixture", plan: [{ tool: "get_story", arguments: { storyId: 7 } }] },
+    });
+    assert.equal(result.status, "waiting");
+    assert.equal(result.toolRequests?.[0]?.name, "get_story");
+    assert.equal(result.toolRequests?.[0]?.arguments.storyId, 7);
   });
 
   it("AG-UI remote backend maps toolRequests from an external process", async () => {

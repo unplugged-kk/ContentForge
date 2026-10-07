@@ -282,6 +282,9 @@ app.use((req, res, next) => {
   const { createDefaultAgentRouter } = await import("./agent/routes");
   app.use("/api/agent", await createDefaultAgentRouter());
 
+  const { createProviderRouter } = await import("./ai/provider-routes");
+  app.use("/api/ai", createProviderRouter());
+
   const { startSchedulers } = await import("./scheduler");
   startSchedulers();
 

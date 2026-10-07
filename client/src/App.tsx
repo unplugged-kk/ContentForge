@@ -31,6 +31,7 @@ const TodayPage = lazy(() => import("@/pages/today"));
 const CreatePage = lazy(() => import("@/pages/create"));
 const SourcesPage = lazy(() => import("@/pages/sources"));
 const AgentWorkspacePage = lazy(() => import("@/pages/agent"));
+const AiProvidersPage = lazy(() => import("@/pages/ai-providers"));
 const SchedulePage = lazy(() => import("@/pages/schedule"));
 const InsightsPage = lazy(() => import("@/pages/insights"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
@@ -149,6 +150,7 @@ function Router() {
       <Route path="/today" component={TodayPage} />
       <Route path="/create" component={CreatePage} />
       <Route path="/sources" component={SourcesPage} />
+      <Route path="/agent/providers" component={AiProvidersPage} />
       <Route path="/agent" component={AgentWorkspacePage} />
       <Route path="/schedule" component={SchedulePage} />
       <Route path="/insights" component={InsightsPage} />
