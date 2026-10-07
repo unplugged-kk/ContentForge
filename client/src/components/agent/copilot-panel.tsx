@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { CopilotChat, CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { HttpAgent } from "@ag-ui/client";
 import { getCsrfToken } from "@/lib/csrf";
-import "@copilotkit/react-core/v2/styles.css";
 
 export function CopilotPanel() {
   const agent = useMemo(
