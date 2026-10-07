@@ -2077,6 +2077,61 @@ export type InsertAgentRun = z.infer<typeof insertAgentRunSchema>;
 export type AgentToolCall = typeof agentToolCalls.$inferSelect;
 export type InsertAgentToolCall = z.infer<typeof insertAgentToolCallSchema>;
 
+export const aiProviders = pgTable(
+  "ai_providers",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    type: varchar("type", { length: 80 }).notNull().default("openai-compatible"),
+    baseUrl: text("base_url").notNull(),
+    secretCiphertext: text("secret_ciphertext"),
+    organization: varchar("organization", { length: 120 }),
+    project: varchar("project", { length: 120 }),
+    extraHeaders: jsonb("extra_headers").$type<Record<string, string>>().notNull().default({}),
+    transport: varchar("transport", { length: 40 }).notNull().default("auto"),
+    detectedTransport: varchar("detected_transport", { length: 40 }),
+    defaultModel: varchar("default_model", { length: 200 }).notNull(),
+    models: jsonb("models").$type<string[]>().notNull().default([]),
+    enabled: boolean("enabled").notNull().default(true),
+    isDefault: boolean("is_default").notNull().default(false),
+    capabilities: jsonb("capabilities").$type<Record<string, unknown>>().notNull().default({}),
+    lastHealthAt: timestamp("last_health_at"),
+    lastHealthOk: boolean("last_health_ok"),
+    lastHealthError: text("last_health_error"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [index("ai_providers_user_idx").on(table.userId)],
+);
+
+export const aiModelRoutes = pgTable(
+  "ai_model_routes",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    purpose: varchar("purpose", { length: 80 }).notNull(),
+    providerId: integer("provider_id")
+      .notNull()
+      .references(() => aiProviders.id),
+    model: varchar("model", { length: 200 }),
+    priority: integer("priority").notNull().default(0),
+    enabled: boolean("enabled").notNull().default(true),
+    allowFallback: boolean("allow_fallback").notNull().default(false),
+    fallbackProviderId: integer("fallback_provider_id"),
+    fallbackModel: varchar("fallback_model", { length: 200 }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => [
+    index("ai_model_routes_user_idx").on(table.userId),
+    index("ai_model_routes_purpose_idx").on(table.userId, table.purpose),
+  ],
+);
+
+export type AiProviderRow = typeof aiProviders.$inferSelect;
+export type AiModelRouteRow = typeof aiModelRoutes.$inferSelect;
+
 // ── CONTROLLED OPTIMIZATION & EXPERIMENTATION (Phase 29.2) ───────────────────
 // Hypothesis → Experiment → Measure → Decide
 // Provides durable experimentation infrastructure.

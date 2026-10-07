@@ -19,6 +19,7 @@ import { DatabaseAgentStorage } from "./storage";
 import { createContentForgeTools } from "./tools";
 import { createTimeplusProvider, createTimeplusSemanticTools } from "./timeplus";
 import { createAgentBackend } from "./backends";
+import { resolveAgentProvider } from "../ai/resolve";
 import { AgentRuntime } from "./runtime";
 import type { AgentBackendPort } from "./types";
 import type { GenerationJob } from "@shared/schema";
@@ -147,7 +148,7 @@ export function registerAgentTools(): void {
 }
 
 export function getAgentBackend(): AgentBackendPort {
-  if (!backend) backend = createAgentBackend();
+  if (!backend) backend = createAgentBackend(process.env, resolveAgentProvider);
   return backend;
 }
 

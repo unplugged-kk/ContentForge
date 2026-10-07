@@ -565,6 +565,14 @@ export function toAguiProtocolEvents(events: AgentUiEvent[]): Array<Record<strin
         role: "tool",
       });
     } else if (event.type === "RUN_FINISHED") {
+      const raw = typeof payload.message === "string" ? payload.message : "";
+      const text = raw && !["completed", "failed", "cancelled"].includes(raw) ? raw : "";
+      if (text) {
+        const messageId = `m-${runId || "run"}`;
+        out.push({ type: "TEXT_MESSAGE_START", messageId, role: "assistant" });
+        out.push({ type: "TEXT_MESSAGE_CONTENT", messageId, delta: text });
+        out.push({ type: "TEXT_MESSAGE_END", messageId });
+      }
       out.push({ type: "RUN_FINISHED", threadId, runId, result: payload.result ?? "completed" });
     } else if (event.type === "RUN_ERROR") {
       out.push({

@@ -5,6 +5,20 @@ import type {
   AgentToolRequest,
 } from "./types";
 import { collectRefs, resolvePlanArguments } from "./intent";
+import { emitAgentLog } from "./events";
+import { redactSecrets } from "../ai/redact";
+
+export type AgentProviderResolution = {
+  providerId: number;
+  providerName: string;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  transport: "chat_completions" | "responses";
+  headers: Record<string, string>;
+  fallbackUsed: boolean;
+  reason: string;
+};
 
 export function agentBackendConfig(env: NodeJS.ProcessEnv = process.env): {
   id: "fixture" | "openai-compatible" | "agui-remote";
@@ -33,11 +47,26 @@ export function agentBackendConfig(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
-export function createAgentBackend(env: NodeJS.ProcessEnv = process.env): AgentBackendPort {
+export function createAgentBackend(
+  env: NodeJS.ProcessEnv = process.env,
+  resolve?: (input: AgentRunInput) => Promise<AgentProviderResolution | null>,
+): AgentBackendPort {
   const config = agentBackendConfig(env);
-  if (config.id === "openai-compatible") return createOpenAiCompatibleBackend(config);
-  if (config.id === "agui-remote") return createAguiRemoteBackend(config);
-  return createFixtureBackend();
+  const fixture = createFixtureBackend();
+  const openai = createOpenAiCompatibleBackend({ ...config, resolve });
+  const remote = createAguiRemoteBackend(config);
+  const fallback = config.id === "openai-compatible" ? openai : config.id === "agui-remote" ? remote : fixture;
+  return {
+    id: fallback.id,
+    capabilities: fallback.capabilities,
+    async run(input: AgentRunInput): Promise<AgentRunResult> {
+      const requested = input.providerSnapshot.backendId;
+      if (requested === "openai-compatible") return openai.run(input);
+      if (requested === "agui-remote") return remote.run(input);
+      if (requested === "fixture") return fixture.run(input);
+      return fallback.run(input);
+    },
+  };
 }
 
 export function createFixtureBackend(): AgentBackendPort {
@@ -74,13 +103,31 @@ export function createOpenAiCompatibleBackend(config: {
   baseUrl: string | null;
   apiKey: string | null;
   model: string;
+  resolve?: (input: AgentRunInput) => Promise<AgentProviderResolution | null>;
 }): AgentBackendPort {
   return {
     id: "openai-compatible",
     capabilities: { streaming: false, tools: true, remote: true },
     async run(input: AgentRunInput): Promise<AgentRunResult> {
-      if (!config.baseUrl) {
-        return { status: "failed", message: "AGENT_BACKEND_BASE_URL is not configured", failureClass: "permanent" };
+      const resolved = config.resolve ? await config.resolve(input).catch(() => null) : null;
+      const baseUrl = resolved?.baseUrl ?? config.baseUrl;
+      const apiKey = resolved?.apiKey ?? config.apiKey;
+      const model = resolved?.model ?? config.model;
+      const transport = resolved?.transport ?? "chat_completions";
+      if (!baseUrl) {
+        return { status: "failed", message: "No provider is configured. Add one under Agent providers or set AGENT_BACKEND_BASE_URL.", failureClass: "permanent" };
+      }
+      if (resolved) {
+        emitAgentLog("provider_selected", {
+          providerId: resolved.providerId,
+          provider: resolved.providerName,
+          model,
+          transport,
+          fallback: resolved.fallbackUsed,
+          reason: resolved.reason,
+          runId: input.agentRunId,
+          correlationId: input.correlationId,
+        });
       }
       const messages: Array<Record<string, unknown>> = [
         {
@@ -97,32 +144,50 @@ export function createOpenAiCompatibleBackend(config: {
           content: JSON.stringify({ status: prior.status, summary: prior.summary, refs: prior.refs }),
         });
       }
-      const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+      const root = baseUrl.replace(/\/$/, "");
+      const url = transport === "responses" ? `${root}/responses` : `${root}/chat/completions`;
+      const tools = input.tools.map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        },
+      }));
+      const body =
+        transport === "responses"
+          ? {
+              model,
+              input: messages.map((message) => ({
+                role: message.role,
+                content: String(message.content ?? ""),
+              })),
+              tools: tools.map((tool) => ({
+                type: "function",
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters,
+              })),
+            }
+          : { model, messages, tools };
+      const extraHeaders = { ...(resolved?.headers ?? {}) };
+      delete extraHeaders.authorization;
+      delete extraHeaders.Authorization;
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+          ...extraHeaders,
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
         },
-        body: JSON.stringify({
-          model: config.model,
-          messages,
-          tools: input.tools.map((tool) => ({
-            type: "function",
-            function: {
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            },
-          })),
-        }),
+        body: JSON.stringify(body),
         signal: input.signal,
       });
       if (!response.ok) {
-        const body = await response.text();
+        const text = await response.text();
         return {
           status: "failed",
-          message: `OpenAI-compatible backend HTTP ${response.status}: ${body.slice(0, 300)}`,
+          message: redactSecrets(`OpenAI-compatible backend HTTP ${response.status}: ${text.slice(0, 300)}`, [apiKey]),
           failureClass: response.status >= 500 ? "transient" : "permanent",
         };
       }
@@ -132,30 +197,41 @@ export function createOpenAiCompatibleBackend(config: {
             content?: string | null;
             tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
           };
-          finish_reason?: string;
+        }>;
+        output?: Array<{
+          type?: string;
+          name?: string;
+          arguments?: string;
+          content?: Array<{ text?: string }>;
         }>;
       };
-      const message = json.choices?.[0]?.message;
-      const toolCalls = message?.tool_calls ?? [];
-      if (toolCalls.length > 0) {
+      const responseCalls =
+        transport === "responses"
+          ? (json.output ?? []).flatMap((item) =>
+              item.type === "function_call" && item.name ? [{ name: item.name, arguments: item.arguments ?? "{}" }] : [],
+            )
+          : (json.choices?.[0]?.message?.tool_calls ?? []).flatMap((call) =>
+              call.function?.name ? [{ name: call.function.name, arguments: call.function.arguments || "{}" }] : [],
+            );
+      if (responseCalls.length > 0) {
         const toolRequests: AgentToolRequest[] = [];
-        for (const call of toolCalls) {
-          const name = call.function?.name;
-          if (!name) continue;
+        for (const call of responseCalls) {
           let args: Record<string, unknown> = {};
           try {
-            const parsed = JSON.parse(call.function?.arguments || "{}");
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              args = parsed as Record<string, unknown>;
-            }
+            const parsed = JSON.parse(call.arguments || "{}");
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
           } catch {
             args = {};
           }
-          toolRequests.push({ name, arguments: args });
+          toolRequests.push({ name: call.name, arguments: args });
         }
         return { status: "waiting", toolRequests };
       }
-      return { status: "completed", message: message?.content ?? "completed" };
+      const text =
+        transport === "responses"
+          ? (json.output ?? []).flatMap((item) => item.content ?? []).map((part) => part.text ?? "").join("")
+          : json.choices?.[0]?.message?.content ?? "";
+      return { status: "completed", message: text || "completed" };
     },
   };
 }

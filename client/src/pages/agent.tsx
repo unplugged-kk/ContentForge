@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import {
   Bot,
   ChevronDown,
@@ -57,6 +58,7 @@ import {
   VideoAssetCard,
   VisualAssetCard,
 } from "@/components/agent/workspace-cards";
+import { CopilotPanel } from "@/components/agent/copilot-panel";
 import {
   classifyAgentError,
   collectRefs,
@@ -432,6 +434,9 @@ function AgentWorkspaceInner() {
         action={
           <div className="flex items-center gap-2">
             {/* Backend Selector */}
+            <Link href="/agent/providers" className="text-xs underline" data-testid="link-agent-providers">
+              Providers
+            </Link>
             <div className="flex items-center gap-1.5" data-testid="panel-agent-backends">
               <span className="text-xs text-muted-foreground hidden sm:inline">Backend:</span>
               <Select value={backendId} onValueChange={setBackendId}>
@@ -565,6 +570,7 @@ function AgentWorkspaceInner() {
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_20rem] xl:grid-cols-[1fr_22rem]">
         {/* Primary Orchestration Column */}
         <div className="flex flex-col min-w-0 p-4 sm:p-6 space-y-6 max-w-4xl mx-auto w-full">
+          <CopilotPanel />
           {/* Section 1: Composer Card */}
           <Card className="border-border shadow-sm">
             <CardContent className="p-4 sm:p-5 space-y-3">
