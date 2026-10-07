@@ -21,7 +21,7 @@ export function CopilotPanel() {
   );
 
   return (
-    <div className="rounded-lg border bg-card" data-testid="panel-copilotkit">
+    <div className="rounded-lg border bg-card" data-testid="copilotkit-agent-workspace">
       <CopilotKitProvider agentId="contentforge" credentials="include" selfManagedAgents={{ contentforge: agent }}>
         <CopilotChat />
       </CopilotKitProvider>
