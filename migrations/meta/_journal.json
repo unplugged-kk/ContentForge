@@ -239,6 +239,13 @@
       "when": 1791059200000,
       "tag": "0033_jev_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791145600000,
+      "tag": "0034_ai_providers",
+      "breakpoints": true
     }
   ]
 }
