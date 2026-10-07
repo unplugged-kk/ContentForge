@@ -31,7 +31,8 @@ COMPOSE_LOCAL := docker compose -f docker-compose.yml -f docker-compose.local.ym
 COMPOSE_VPS   := docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile tunnel
 
 .PHONY: help up vps deploy-vps down ps logs backup restore check-env \
-        db db-stop db-logs dev install start graph orient
+        db db-stop db-logs dev install start graph orient \
+        e2e e2e-live e2e-vps
 
 # Explain the failure and the fix, instead of a compose stack trace.
 check-env:
@@ -110,6 +111,34 @@ db-stop: ## stop the database
 
 db-logs: ## follow the database logs
 	@docker compose logs -f postgres
+
+# ---------- verification ----------
+
+# Playwright against the ephemeral compose database. Does not read .env.
+e2e: ## Playwright suite (ephemeral DB, production bundle)
+	docker compose -f docker-compose.e2e.yml up -d --wait
+	npm run build
+	DOTENV_CONFIG_PATH=/dev/null CI=true \
+	  DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e \
+	  SESSION_SECRET=ci-e2e-session-secret-not-for-production \
+	  npx playwright test --reporter=line
+
+# Durable-state harness. Creates cf_e2e_live beside the Playwright database.
+e2e-live: ## live harness (fixture on 8088, isolated cf_e2e_live)
+	docker compose -f docker-compose.e2e.yml up -d --wait
+	@exists=$$(docker compose -f docker-compose.e2e.yml exec -T postgres \
+	  psql -U e2e -d contentforge_e2e -tAc "SELECT 1 FROM pg_database WHERE datname = 'cf_e2e_live'"); \
+	  if [ "$$exists" != "1" ]; then \
+	    docker compose -f docker-compose.e2e.yml exec -T postgres createdb -U e2e cf_e2e_live; \
+	  fi
+	npm run build
+	E2E_LIVE_DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/cf_e2e_live \
+	  E2E_LIVE_FIXTURE_PORT=8088 \
+	  node script/e2e-live.mjs
+
+# Read-only. Run on the serving host. Does not deploy.
+e2e-vps: ## deployment smoke (health, loopback, commit, tunnel)
+	node script/e2e-vps-smoke.mjs
 
 # ---------- repo context ----------
 

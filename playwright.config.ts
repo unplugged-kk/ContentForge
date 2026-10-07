@@ -82,6 +82,10 @@ export default defineConfig({
       SESSION_COOKIE_SECURE: "0",
       /** Lets server/ai/config.ts boot without OPENAI_API_KEY (E2E does not call AI). */
       CONTENTFORGE_E2E_SERVER: "1",
+      // Discover intake reaches a loopback feed on 8088. The guard allows 80/443
+      // unless the process names the extra port.
+      SSRF_ADDITIONAL_ALLOWED_PORTS: process.env.SSRF_ADDITIONAL_ALLOWED_PORTS ?? "8088",
+      RESEARCH_ALLOWED_HOSTS: process.env.RESEARCH_ALLOWED_HOSTS ?? "localhost",
     },
   },
 });
