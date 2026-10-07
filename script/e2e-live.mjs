@@ -102,10 +102,11 @@ async function waitFor(fn, options = {}) {
     label = "condition",
     callTimeoutMs = 20_000,
   } = options;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Race each call so a stalled database surfaces as a timeout rather than
-    // hanging the whole wait (the environment's Docker was observed to stall).
+  // Monotonic. A wall-clock step (NTP, wake) made Date.now() cross the deadline
+  // while Postgres had only moved 25s, so the waiter gave up and the cron tick
+  // inserted the row in the same host second.
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
     const value = await Promise.race([
       fn(),
       sleep(callTimeoutMs).then(() => undefined),
@@ -113,7 +114,8 @@ async function waitFor(fn, options = {}) {
     if (value !== undefined && value !== false) return value;
     await sleep(intervalMs);
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for ${label}`);
+  const elapsed = Math.round(performance.now() - start);
+  throw new Error(`timed out after ${elapsed}ms waiting for ${label}`);
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -223,6 +225,17 @@ async function startApp() {
       // periodic tick (not just the HTTP dispatch endpoint) is exercised.
       CONTENT_SCHEDULER_ENABLED: "1",
       CONTENTFORGE_E2E_SERVER: "1",
+      // A developer .env may enable Jev gates. dotenv does not override these,
+      // so the harness stays on the same decision surface CI uses.
+      JEV_DECISION_ENGINE_ENABLED: "0",
+      JEV_RESEARCH_GATE: "0",
+      JEV_RESEARCH_DEPTH: "0",
+      JEV_FRAMING: "0",
+      JEV_CONTENT_GATE: "0",
+      JEV_PUBLISH_GATE: "0",
+      JEV_OPPORTUNITY_SCORE: "0",
+      JEV_CONTENT_STRATEGY: "0",
+      JEV_LEGACY_SCORING: "0",
       // External boundaries are doubled at the transport level only: the model
       // gateway (AI_BASE_URL) and xQuick (XQUICK_API_BASE_URL) point at the
       // deterministic local fixture. ContentForge's own code runs unmodified.
@@ -266,6 +279,9 @@ async function startApp() {
       YOUTUBE_BASE_URL: `${FIXTURE_BASE}/youtube`,
       HN_BASE_URL: `${FIXTURE_BASE}/hn`,
       RESEARCH_ALLOWED_HOSTS: "localhost",
+      // Lets publication issue a provider-media grant the harness can fetch.
+      // The fixture does not dereference that URL; it only records it.
+      CONTENTFORGE_PUBLIC_BASE_URL: APP_BASE,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -1977,15 +1993,16 @@ const observed = {};
   // ── 6c. PHASE 10 RED ARROWS (context assembly foundation) ───────────────────
   phase("Phase 10: context assembly -> GenerationPolicy -> GenerationJob -> Artifact, context A vs B");
 
-  const ctxOwner = 1; // stories in this harness are seeded with user_id 1 throughout
-
   await check(
     "HTTP generation with real context A produces a policy/job whose frozen snapshot carries context A",
     async () => {
       const markerA = `${RUN}-CTX-MARKER-A`;
+      // A reused cf_e2e_live database registers a new owner each run. User 1 is
+      // only the owner on a fresh database, which is why CI passed and a second
+      // local run did not.
       await q(
         `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e context A', $2, true)`,
-        [ctxOwner, markerA],
+        [ownerId, markerA],
       );
 
       const opp = await http("POST", "/api/opportunities", {
@@ -2023,7 +2040,7 @@ const observed = {};
       const markerB = `${RUN}-CTX-MARKER-B`;
       await q(
         `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e context B', $2, true)`,
-        [ctxOwner, markerB],
+        [ownerId, markerB],
       );
 
       const gen = await http("POST", "/api/generation-jobs", {
@@ -2060,7 +2077,7 @@ const observed = {};
       const markerFrozen = `${RUN}-CTX-RESTART-FROZEN`;
       await q(
         `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e restart frozen', $2, true)`,
-        [ctxOwner, markerFrozen],
+        [ownerId, markerFrozen],
       );
       const opp = await http("POST", "/api/opportunities", {
         storyId,
@@ -2080,7 +2097,7 @@ const observed = {};
       const markerAfter = `${RUN}-CTX-RESTART-AFTER`;
       await q(
         `insert into context_vault (user_id, title, content, is_favorite) values ($1, 'e2e restart after', $2, true)`,
-        [ctxOwner, markerAfter],
+        [ownerId, markerAfter],
       );
 
       await killApp("SIGKILL");
@@ -2875,7 +2892,9 @@ const observed = {};
     const pairs = res.body.formats.map((f) => `${f.channel}:${f.format}`);
     assert(pairs.includes("x:x_post"), "missing x_post");
     assert(pairs.includes("linkedin:linkedin_post"), "missing linkedin_post");
-    assert(!pairs.includes("youtube:video"), "must not advertise unsupported YouTube");
+    // youtube:video is a registered format profile and a registered adapter.
+    // Forbidding it was a stale premise from before Phase 28.1.
+    assert(pairs.includes("youtube:video"), "missing registered youtube:video");
     return `${pairs.length} pairs`;
   });
 
@@ -4683,6 +4702,141 @@ const observed = {};
     cookie = savedCookie;
     csrfToken = savedCsrf;
     return "owner isolation holds";
+  });
+
+  // ── Lifecycle gaps the handover still named (F2, F3, F5) ────────────────
+  phase("Lifecycle: durable asset bytes, provider grant, dead generation");
+
+  await check("F3: visual asset bytes survive a process kill and come back identical", async () => {
+    const vis = await http("POST", "/api/visual-generations", {
+      kind: "image",
+      providerId: "local-fixture",
+      intent: { subject: `${RUN} durability` },
+    });
+    assert(vis.status === 201 || vis.status === 200, `visual ${vis.status}: ${vis.text}`);
+    const ready = await waitFor(
+      async () => {
+        const r = await http("GET", `/api/visual-generations/${vis.body.id}`);
+        if (r.body.status === "ready" && r.body.visualAssetId) return r.body;
+        if (r.body.status === "failed") throw new Error(r.body.errorMessage ?? r.text);
+        return false;
+      },
+      { timeoutMs: 60_000, intervalMs: 300, label: "durability visual ready" },
+    );
+    const beforeRes = await fetch(`${APP_BASE}/api/visual-assets/${ready.visualAssetId}/content`, {
+      headers: { cookie },
+    });
+    assert(beforeRes.status === 200, `content before restart ${beforeRes.status}`);
+    const before = Buffer.from(await beforeRes.arrayBuffer());
+    assert(before.length > 0, "empty asset");
+    const assetId = ready.visualAssetId;
+
+    await killApp("SIGKILL");
+    await startApp();
+
+    const afterRes = await fetch(`${APP_BASE}/api/visual-assets/${assetId}/content`, {
+      headers: { cookie },
+    });
+    assert(afterRes.status === 200, `content after restart ${afterRes.status}`);
+    const after = Buffer.from(await afterRes.arrayBuffer());
+    assert(after.equals(before), `bytes changed ${before.length} -> ${after.length}`);
+    return `${after.length} bytes identical after SIGKILL (asset ${assetId})`;
+  });
+
+  await check("F2: a provider grant serves bytes with no session, and dies with the process", async () => {
+    const artifactId = await approvedInstagramImageArtifact(`${RUN}-grant`);
+    const fan = await http("POST", `/api/artifacts/${artifactId}/publications`, {
+      targets: [{ channel: "instagram" }],
+    });
+    assert(fan.status === 207, `fan-out ${fan.status}: ${fan.text}`);
+    const outcome = fan.body.outcomes.find((o) => o.channel === "instagram");
+    assert(outcome?.publicationId, JSON.stringify(fan.body));
+    await waitFor(
+      async () => {
+        const r = await http("GET", `/api/publications/${outcome.publicationId}`);
+        return r.body.state === "published" ? r.body : false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "grant publication" },
+    );
+
+    const stats = JSON.parse((await fixtureGet("/stats")).text);
+    const grantUrl = stats.lastProviderMediaUrl;
+    assert(
+      typeof grantUrl === "string" && grantUrl.includes("/api/provider-media/"),
+      `no provider grant recorded (${grantUrl})`,
+    );
+
+    const first = await fetch(grantUrl);
+    assert(first.status === 200, `anonymous grant ${first.status}`);
+    const grantBytes = Buffer.from(await first.arrayBuffer());
+    assert(grantBytes.length > 0, "grant returned no bytes");
+    assert(first.headers.get("content-type")?.includes("image/"), `mime ${first.headers.get("content-type")}`);
+
+    // Same process, still inside the TTL: a grant is time-bounded, not single-use.
+    // A provider retry must still be able to read the bytes.
+    const second = await fetch(grantUrl);
+    assert(second.status === 200, `in-process reuse ${second.status}`);
+
+    await killApp("SIGKILL");
+    await startApp();
+
+    const reused = await fetch(grantUrl);
+    assert(reused.status === 404, `grant survived restart (${reused.status})`);
+    return `grant ${grantBytes.length} bytes, restart → 404`;
+  });
+
+  await check("F5: a dead generation fails its automation run without another scheduler tick", async () => {
+    await setActiveFeed(`${FIXTURE_BASE}/feed.xml`);
+    const policy = await http("POST", "/api/automation/policies", automationPolicyBody({
+      name: `${RUN}-dead-gen`,
+      researchConfig: {
+        kind: "directed",
+        query: "kubernetes E2E_DEAD_GENERATION",
+        providerIds: ["rss"],
+      },
+    }));
+    assert(policy.status === 201, `policy ${policy.status}: ${policy.text}`);
+    const started = await http("POST", `/api/automation/policies/${policy.body.id}/run`, {
+      requestKey: `${RUN}-dead-gen`,
+    });
+    assert(started.status === 202, `run ${started.status}: ${started.text}`);
+    const runId = started.body.runId;
+
+    await waitFor(
+      async () => {
+        const row = await automationRunFor(runId);
+        if (!row) return false;
+        const outcomes = Array.isArray(row.outcomes) ? row.outcomes : [];
+        if (outcomes.some((outcome) => outcome.generationJobId)) return row;
+        if (["failed", "awaiting_approval", "completed", "partial"].includes(row.status)) {
+          throw new Error(`run reached ${row.status} before a generation job existed`);
+        }
+        await http("POST", "/api/automation/tick", {});
+        return false;
+      },
+      { timeoutMs: 90_000, intervalMs: 400, label: "dead-gen generation job" },
+    );
+
+    const settled = await waitFor(
+      async () => {
+        const row = await automationRunFor(runId);
+        if (!row) return false;
+        if (row.status === "failed") return row;
+        if (["awaiting_approval", "completed", "partial"].includes(row.status)) {
+          throw new Error(`run settled ${row.status} after a dead generation`);
+        }
+        return false;
+      },
+      { timeoutMs: 30_000, intervalMs: 400, label: "run failed without a further tick" },
+    );
+    assert(settled.error_class === "permanent" || settled.status === "failed", settled.status);
+    const outcomes = Array.isArray(settled.outcomes) ? settled.outcomes : [];
+    const generationJobId = outcomes.find((outcome) => outcome.generationJobId)?.generationJobId;
+    assert(Number.isInteger(generationJobId), "no generation job on the failed run");
+    const [job] = await q("select status, error_class from generation_jobs where id = $1", [generationJobId]);
+    assert(job.status === "failed", `generation status ${job.status}`);
+    assert(job.error_class === "permanent", `generation error_class ${job.error_class}`);
+    return `run ${runId} failed with generation ${generationJobId} (${job.error_class})`;
   });
 
   // ── Summary ────────────────────────────────────────────────────────────────

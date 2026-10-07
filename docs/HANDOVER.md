@@ -161,78 +161,105 @@ is a file-wide pattern.
 
 ---
 
-## 4. What is PENDING — the actual work
+## 4. What this pass closed, and what is still open
 
-### 4a. Finish the live harness (top priority)
+Checked against CI job 112326333110 (workflow run 37480293942, commit `c87fb04`)
+and against a local re-run. The two phases below were already green in that CI
+job. The one red check was a stale assertion.
 
-`script/e2e-live.mjs` is the strongest suite here: it boots the real bundle, doubles
-every external boundary with `e2e/fixture/rss-fixture.mjs`, asserts Postgres **and**
-pg-boss state, SIGKILLs the app and proves recovery, and walks the golden path. It now
-produces a **real artifact**, then stops:
+### 4a. Live harness
 
-1. **Queue-transient phase** — `first attempt fails transiently and a retry is durably
-   scheduled` **times out waiting for a transient failure**. The premise is the
-   fixture's flaky feed: check `flaky.xml` in `e2e/fixture/rss-fixture.mjs` and how the
-   phase switches to it (search the harness for `flaky-long` / `setActiveFeed`).
-2. **Artifact approval** — `draft → in_review → approved, with the payload validated by
-   the registry` reports **`readiness=undefined`**, so the next step gets
-   `409: Artifact 1 is "draft"; only approved revisions can be scheduled`. The approval
-   response shape has drifted from the harness's expectation.
+`script/e2e-live.mjs` boots `dist/index.cjs`, points external calls at
+`e2e/fixture/rss-fixture.mjs`, and asserts Postgres and pg-boss.
 
-Then remove `continue-on-error: true` from the `live` job in
-`.github/workflows/e2e.yml` — it exists only while the suite is red, and must not
-become permanent.
+1. Queue-transient. `first attempt fails transiently and a retry is durably scheduled`
+   passed in CI and again in the local re-run (`error_class=transient`, queue state
+   `retry`).
+2. Artifact approval. `draft → in_review → approved` passed. The next schedule step
+   did not return 409.
+3. The remaining CI failure was `must not advertise unsupported YouTube`.
+   `youtube:video` is a registered format profile and a registered adapter. The
+   harness now requires that pair (`script/e2e-live.mjs`).
 
-Reproduce (the harness refuses any database but this one):
+`continue-on-error` is gone from the `live` job in `.github/workflows/e2e.yml`.
+A GitHub run of that job after the removal has not been observed.
 
-```bash
-docker compose -f docker-compose.e2e.yml up -d --wait
-docker compose -f docker-compose.e2e.yml exec -T postgres createdb -U e2e cf_e2e_live
-E2E_LIVE_DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/cf_e2e_live \
-E2E_LIVE_FIXTURE_PORT=8088 node script/e2e-live.mjs      # 8088: see §6
-```
+Reproduce with `make e2e-live`. The harness still refuses any database other than
+`postgresql://e2e:e2e@127.0.0.1:5433/cf_e2e_live`. The fixture port is 8088 (§6).
 
-### 4b. E2E-3 — close the lifecycle test gaps (not started)
+### 4b. Lifecycle checks
 
-- UI intake → a persisted source (today only the button/dialog is asserted).
-- **Media durability across a restart** — the F3 fix, as an E2E assertion.
-- **Run failure when its generation dead-letters** — the F5 fix.
-- **A valid provider-media grant succeeds; a reused one does not** — the F2 fix.
+- Discover intake. `e2e/research-intake.e2e.spec.ts` fills the query, clicks
+  **Start Research**, and waits until a `research_sources` row has canonical URL
+  `https://example.com/contentforge-ui-intake`. The Playwright database has no
+  feed, so the spec serves one on `localhost:8088` and inserts `rss_sources`.
+  RSS search keeps an item only when the query text appears in the item, so the
+  feed title is the query. Measured 2026-10-06. Research job 6 status `complete`.
+  Playwright `2 passed (5.8s)`.
+- Media bytes across SIGKILL (F3), a generation that dead-letters and fails the
+  owning run (F5), and a provider-media grant (F2) are checks at the end of
+  `script/e2e-live.mjs`. Run `livemuwvwbiz` passed all three. A grant is
+  time-bounded. A second fetch in the same process returns 200. After SIGKILL
+  the same URL returns 404. It is not single-use. Making it single-use would
+  break a provider retry and would contradict `server/content/visualStorage.test.ts`.
+- Context vault rows in that harness are inserted for `ownerId`. A reused
+  `cf_e2e_live` database registers a new user each run. Inserting them for
+  user 1 made the context checks fail on the second run (owner was user 5)
+  and pass on the next run.
 
-Reuse, do not reinvent: the fixture's controls, the harness's
-`http()`/`bootstrapSession()`/`q()`/`waitFor()`/`approvedArtifactWithMarker()`,
-`e2e/auth.setup.ts`, `seedApprovedArtifact()`.
+### 4c. Smoke targets
 
-### 4c. E2E-4 — VPS deployment smoke (not started)
+`make e2e`, `make e2e-live`, and `make e2e-vps` exist.
 
-A read-only suite run after a deploy: `/api/health` + `/api/ready` 200; **the host
-listens only on loopback** (`ss` shows `127.0.0.1` for 3000/5432 — the check that
-caught a stale `.env`); the running commit matches `main`; the tunnel routes. Plus
-`make e2e`, `make e2e-live`, `make e2e-vps` targets.
+`make e2e-vps` runs `script/e2e-vps-smoke.mjs`. It does not deploy. On this Mac
+on 2026-10-06 it passed against local listeners. `ss` here is a broken
+iproute2mac binary, so the script falls back to `lsof`. Ports 3000 and 5432
+were `127.0.0.1` via `gvproxy`. `/api/health` and `/api/ready` returned 200.
+HEAD matched `origin/main` (`c87fb04`). The tunnel was not checked because
+`CONTENTFORGE_PUBLIC_URL` was unset. That Mac run is not VPS verification.
+On 2026-10-07 the VPS itself was deployed and checked. See §5.
+
+`make e2e` was re-run on 2026-10-07. 275 passed, 2 flaky, 2 skipped, 0 failed, exit 0.
+The flaky specs are `e2e/agent-publish.e2e.spec.ts` and `e2e/dialog-focus.e2e.spec.ts`.
+Both passed on retry.
 
 ### 4d. Known, non-blocking
 
-- `e2e/agent-publish.e2e.spec.ts` is **flaky** (Playwright retries it; CI passes).
+- `e2e/agent-publish.e2e.spec.ts` and `e2e/dialog-focus.e2e.spec.ts` were flaky
+  on the 2026-10-07 full run. Both passed on retry. The suite exit was 0.
 - `insights`, `settings-labels`, `full-product-audit` and `discovery-ownership` were
   load-flaky, not broken — all pass in isolation. The worker cap fixed the full-suite
   run; watch it if a suite gets slower.
 
 ---
 
-## 5. State of everything (as of this handover)
+## 5. State of everything (updated 2026-10-07)
 
 ```
-branch            main @ 67985c3, origin in sync, tracked tree clean
-unit suite        1033 passed, 0 failed, 1 skipped   (direct DB — see §6)
-tsc               clean
-Playwright        CI shape: 275 passed, 1 flaky, 2 skipped, 0 failed
-live harness      PARTIAL: research → story → opportunity → real artifact, then §4a
-CI                Migration Guard green · E2E Tests green · Live E2E non-blocking
-VPS               129.159.224.196 / hermes-nic, /home/ubuntu/git/ContentForge,
-                  deployed 39f2980 — behind main; `make deploy-vps` (.env is present)
+branch            main @ c87fb04. Local harness, workflow, and doc edits are
+                  uncommitted. origin/main is still c87fb04.
+unit suite        1034 passed, 0 failed, 0 skipped, exit 0
+                  DATABASE_URL and TEST_DATABASE_URL were the e2e Postgres
+                  on 127.0.0.1:5433/contentforge_e2e. A run with neither set
+                  exits 1 because server/db.ts throws at import.
+tsc               exit 0
+Playwright        make e2e: 275 passed, 2 flaky, 2 skipped, 0 failed, exit 0
+live harness      livemuxk64c9: 193 passed, 0 failed, exit 0
+                  log /tmp/cf-e2e-live-rerun4.log
+                  The earlier livemuwxqv7y run (132 passed, 61 failed) happened
+                  while the host clock ran ~10 minutes ahead of the Docker
+                  Postgres clock. The same checks passed once the clocks matched.
+                  waitFor uses a monotonic deadline and reports elapsed time.
+CI                continue-on-error is removed in the working tree only.
+                  origin/main still has continue-on-error: true on the live job.
+                  No GitHub run of the blocking job has been observed.
+VPS               VERIFIED 2026-10-07. make deploy-vps on 129.159.224.196
+                  fast-forwarded 67985c3 to c87fb04. Loopback /api/health and
+                  /api/ready returned 200. ss showed 127.0.0.1:3000 and
+                  127.0.0.1:5432. The public URL returned the same uptime as
+                  the new process, so the tunnel is the ingress.
 Railway           decommissioned: files deleted, repo secrets deleted
-docs/architecture 20 MB total, but only the 0.2 MB of specs + guides are committed
-                  (the generated HTML is ignored on purpose — see §2)
+docs/architecture unchanged this pass
 ```
 
 ---
@@ -297,11 +324,8 @@ Knobs added in this pass: `CONTENTFORGE_ENV_FILE` (env file location),
 
 ## 8. Suggested next prompt
 
-> Read `docs/HANDOVER.md` first. Finish §4a: fix the two stale phases in
-> `script/e2e-live.mjs` (the queue-transient premise and the artifact
-> approval/readiness contract), get the harness fully green locally with
-> `E2E_LIVE_FIXTURE_PORT=8088`, then remove `continue-on-error` from the `live` job.
-> Then do §4b (the four lifecycle gaps) and §4c (the VPS smoke suite + `make e2e*`
-> targets). Verify every fix by running it, never by reading it — and if a diagram
-> would help you understand a subsystem, author one with archify (§2), grounded in
-> `graft` spans.
+> Read `docs/HANDOVER.md` first. Do not redo the live harness, the unit suite,
+> Playwright, or the VPS deploy. Those were measured on 2026-10-07. The open
+> work is to commit the local workflow change and watch a GitHub live job that
+> no longer has `continue-on-error`. That job is blocking only in the working
+> tree. `origin/main` still has `continue-on-error: true`.

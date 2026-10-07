@@ -122,6 +122,8 @@ function emptyFeedXml() {
 let flakyHits = 0;
 let flakyLongHits = 0;
 let requests = 0;
+/** Last Instagram image_url that pointed at a ContentForge provider grant. */
+let lastProviderMediaUrl = null;
 let tweetCounter = 0;
 /** When true, the next completion returns a payload that fails validation. */
 let invalidNext = false;
@@ -329,6 +331,12 @@ async function handlePost(req, res, url) {
     // Style analysis (Phase 11) — keyed off the analyzer's own system prompt marker.
     if (prompt.includes("WRITING STYLE")) {
       return send(200, styleObservationCompletionBody());
+    }
+    // A research query carrying this marker must dead-letter generation.
+    // The marker rides in the Story the automation run synthesizes, so the
+    // failure is specific to that run and cannot be stolen by another call.
+    if (prompt.includes("E2E_DEAD_GENERATION")) {
+      return send(200, completionBody("x_post", true));
     }
     // Forced invalid payload: fails the format registry's validation.
     if (invalidNext) {
@@ -559,12 +567,16 @@ async function handlePost(req, res, url) {
     const body = await readBody(req);
     instagramSeq += 1;
     const id = `ic-${RUN}-${instagramSeq}`;
+    if (typeof body.image_url === "string" && body.image_url.includes("/api/provider-media/")) {
+      lastProviderMediaUrl = body.image_url;
+    }
     instagramContainers.set(id, {
       caption: body.caption ?? "",
       status: "FINISHED",
       children: body.children,
       mediaType: body.media_type ?? null,
       videoUrl: body.video_url ?? null,
+      imageUrl: body.image_url ?? null,
     });
     return send(200, { id });
   }
@@ -891,7 +903,11 @@ const server = http.createServer(async (req, res) => {
       flakyLongHits = 0;
       return send(200, "reset", "text/plain");
     case "/stats":
-      return send(200, JSON.stringify({ flakyHits, flakyLongHits, requests }), "application/json");
+      return send(
+        200,
+        JSON.stringify({ flakyHits, flakyLongHits, requests, lastProviderMediaUrl }),
+        "application/json",
+      );
     default:
       return send(404, "not found", "text/plain");
   }

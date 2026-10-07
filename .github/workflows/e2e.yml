@@ -127,12 +127,6 @@ jobs:
     name: Live E2E (durable state)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # NON-BLOCKING until the harness is green. It currently reaches the golden
-    # path and then stops at two stale expectations (the queue-transient premise
-    # and the artifact approval/readiness contract) — see docs/HANDOVER.md.
-    # Running it anyway surfaces real output in CI while that is finished; remove
-    # this line the moment the job passes, so it starts protecting the suite.
-    continue-on-error: true
 
     services:
       postgres:
