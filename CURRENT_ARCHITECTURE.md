@@ -13,7 +13,7 @@
 
 ## 1. Runtime shape
 
-React (client/) + Express 5 (server/) + Postgres/Drizzle + pg-boss + node-cron. Single operator, session auth, CSRF, global auth gate on `/api`.
+React (client/) + Express 5 (server/) + Postgres/Drizzle + pg-boss + node-cron. Single operator, session auth (password, direct Google, or Auth0 Universal Login exchanged for the session; Auth0 bearer tokens also accepted, see `docs/AUTH0.md`), CSRF, global auth gate on `/api`.
 
 One LLM gateway: `server/ai/chat.ts:aiCallRouted` with a task router (`server/ai/router.ts`) — `default` → the configured OpenAI-compatible provider (Command Code in this deployment), `video.*` → Gemini, with graceful fallback to `default` if Gemini is unkeyed. `aiCall()` retains its positional signature and delegates, so ~40 call sites are untouched.
 
@@ -139,7 +139,7 @@ Tables that matter for a decision layer: `researchJobs/Sources/Evidence/Analyses
 **Jev:** `TYPESAFE_TRANSPORT`, `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`, `TYPESAFE_TIMEOUT_MS`, `JEV_CLI_ENABLED`, `JEV_CLI_PATH`, `JEV_TRIAGE_PURSUE`, `JEV_TRIAGE_WATCH`, `JEV_RESEARCH_GATE`, `JEV_FRAMING`, `CONTENTFORGE_EXPERTISE`, `CONTENTFORGE_AUDIENCE`.
 **AI:** `AI_BASE_URL`/`AI_API_KEY`, `AI_TEXT_MODEL`, `VIDEO_TEXT_MODEL`, `VIDEO_MAIN_MODEL`, `VIDEO_PREMIUM_MODEL`, `VIDEO_GEMINI_FALLBACK`, `GEMINI_*`.
 **Research:** `LAST30DAYS_ENABLED`/`LAST30DAYS_SCRIPT`, `WEB_RESEARCH_URLS`, `VIDEO_RESEARCH_URLS`, `YOUTUBE_CHANNEL_IDS`, `REDDIT_SUBREDDITS`, `HN_TAGS`.
-**Execution:** `XQUIK_ALLOW_WRITE_RETRIES`, `CONTENT_SCHEDULER_ENABLED`, `DISABLE_CRON`, `REGISTRATION_DISABLED`, `TRUST_PROXY`, `SESSION_COOKIE_SECURE`, `CONTENTFORGE_E2E_SERVER`.
+**Execution:** `XQUIK_ALLOW_WRITE_RETRIES`, `CONTENT_SCHEDULER_ENABLED`, `DISABLE_CRON`, `REGISTRATION_DISABLED`, `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` / `AUTH0_AUDIENCE` (public), `TRUST_PROXY`, `SESSION_COOKIE_SECURE`, `CONTENTFORGE_E2E_SERVER`.
 
 ---
 

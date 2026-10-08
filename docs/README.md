@@ -19,6 +19,7 @@ operational or historical.
 | [`LOCAL_E2E_ACCEPTANCE_REPORT.md`](LOCAL_E2E_ACCEPTANCE_REPORT.md) | Findings F1–F16 from the local acceptance run, plus the fix addendum. |
 | [`LOCAL_VPS_DEPLOYMENT.md`](LOCAL_VPS_DEPLOYMENT.md) | Local / VPS deploy runbook. |
 | [`DB_MIGRATION_WORKFLOW.md`](DB_MIGRATION_WORKFLOW.md) | Production-safe migration workflow. |
+| [`AUTH0.md`](AUTH0.md) | Sign-in through Auth0: architecture, dashboard setup, account linking, logout, rollback. |
 | [`DOGFOODING.md`](DOGFOODING.md) | Dogfooding guide. |
 | [`DOGFOODING_REPORT_TEMPLATE.md`](DOGFOODING_REPORT_TEMPLATE.md) | Dogfooding report template. |
 | [`channel-onboarding.md`](channel-onboarding.md) | Adding a distribution channel. |
