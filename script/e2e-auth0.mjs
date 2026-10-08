@@ -88,6 +88,9 @@ const app = spawn("node", ["dist/index.cjs"], {
   cwd: ROOT,
   env: {
     PATH: process.env.PATH,
+    // The server loads dotenv from its cwd; a developer .env would leak real
+    // keys and Jev gates into this run.
+    DOTENV_CONFIG_PATH: path.join(ROOT, ".env.e2e-auth0-none"),
     NODE_ENV: "production",
     PORT: String(APP_PORT),
     DATABASE_URL: DB_URL,
@@ -351,10 +354,19 @@ try {
     assert(res.status === 403, `got ${res.status}`);
   });
 
-  await check("legacy direct Google login route still redirects to Google", async () => {
+  await check("legacy direct Google login route still redirects to Google with a state nonce", async () => {
     const res = await fetch(`${APP}/api/auth/google`, { redirect: "manual" });
     const location = res.headers.get("location") ?? "";
     assert(res.status === 302 && location.startsWith("https://accounts.google.com/"), `${res.status} ${location}`);
+    assert(new URL(location).searchParams.get("state")?.length >= 16, "no OAuth state");
+  });
+
+  await check("legacy Google callback without the session's state is refused before any token exchange", async () => {
+    const res = await fetch(`${APP}/api/auth/google/callback?code=attacker-code&state=forged`, { redirect: "manual" });
+    const location = res.headers.get("location") ?? "";
+    assert(res.status === 302 && location.includes("error=google_auth_failed"), `${res.status} ${location}`);
+    const sid = /connect\.sid=([^;]+)/.exec(res.headers.get("set-cookie") ?? "")?.[1];
+    assert(!sid || (await meWithCookie(sid)).status === 401, "a session was established");
   });
 
   await check("callback URL with a foreign returnTo stays on this origin", async () => {
