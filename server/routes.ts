@@ -27,7 +27,7 @@ import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
 import { upload, validateImageBuffer, validateUploadedImage } from "./middleware/upload";
 import { safeFetch } from "./security/ssrf";
-import { handleLogout } from "./httpHardening";
+import { establishSession, handleLogout } from "./httpHardening";
 
 /**
  * Sanitize HTML before persisting. The Tiptap editor and AI generation both
@@ -2518,15 +2518,16 @@ Return ONLY the improved content text. Keep the same format and length constrain
         if (!req.user) {
           return res.redirect("/?error=google_auth_failed");
         }
-        req.session.userId = req.user.id;
-        req.session.save((err: Error | null) => {
-          if (err) {
+        establishSession(req, req.user.id, "google").then(
+          () => {
+            console.log(`[google oauth] login ok user=${req.user.id}`);
+            res.redirect("/");
+          },
+          (err) => {
             console.error("[google oauth] session save failed:", err);
-            return res.redirect("/?error=session_save_failed");
-          }
-          console.log(`[google oauth] login ok user=${req.user.id} sid=${req.session.id}`);
-          res.redirect("/");
-        });
+            res.redirect("/?error=session_save_failed");
+          },
+        );
       }
     );
   }
@@ -2548,7 +2549,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const existing = await getUserByEmail(email);
       if (existing) return res.status(409).json({ message: "An account with that email already exists" });
       const user = await createUser(email, password, name);
-      req.session.userId = user.id;
+      await establishSession(req, user.id, "password");
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title });
     } catch (err: any) {
       console.error("Register error:", err);
@@ -2564,7 +2565,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       if (!user || !user.passwordHash) return res.status(401).json({ message: "Invalid email or password" });
       const valid = await comparePassword(password, user.passwordHash);
       if (!valid) return res.status(401).json({ message: "Invalid email or password" });
-      req.session.userId = user.id;
+      await establishSession(req, user.id, "password");
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
     } catch (err: any) {
       console.error("Login error:", err);

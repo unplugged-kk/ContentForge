@@ -104,7 +104,7 @@ describe("handleLogout", () => {
     );
     assert.equal(cleared, "connect.sid");
     assert.equal(destroyed, true);
-    assert.deepEqual(body, { success: true });
+    assert.deepEqual(body, { success: true, idpLogout: false });
   });
 
   it("still clears the cookie when there is no session", () => {
@@ -118,7 +118,7 @@ describe("handleLogout", () => {
       },
     );
     assert.equal(cleared, "connect.sid");
-    assert.deepEqual(body, { success: true });
+    assert.deepEqual(body, { success: true, idpLogout: false });
   });
 
   it("still responds success when session destroy fails", () => {
@@ -130,6 +130,6 @@ describe("handleLogout", () => {
         json: (b) => { body = b; },
       },
     );
-    assert.deepEqual(body, { success: true });
+    assert.deepEqual(body, { success: true, idpLogout: false });
   });
 });

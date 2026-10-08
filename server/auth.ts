@@ -78,6 +78,7 @@ export { requireAuthMiddleware as requireAuth } from "./middleware/userContext";
 declare module "express-session" {
   interface SessionData {
     userId?: number;
+    authMethod?: import("./httpHardening").SessionAuthMethod;
     youtubeOAuth?: {
       state: string;
       ownerUserId?: number;
