@@ -24,7 +24,7 @@ const BUTTON_LABELS: Record<string, string> = {
 };
 
 function labelUnnamedButtons(root: ParentNode) {
-  for (const button of root.querySelectorAll("button")) {
+  for (const button of Array.from(root.querySelectorAll("button"))) {
     if (button.getAttribute("aria-label")?.trim()) continue;
     if (button.getAttribute("aria-labelledby")?.trim()) continue;
     if (button.innerText.trim()) continue;
