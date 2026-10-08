@@ -2493,10 +2493,13 @@ Return ONLY the improved content text. Keep the same format and length constrain
         : "http://localhost:5000/api/auth/google/callback");
 
     passport.use(new GoogleStrategy(
-      { clientID: googleClientId!, clientSecret: googleClientSecret!, callbackURL },
+      // state: true stores a nonce in the session and rejects a callback
+      // without it, so a third party cannot log the browser into their account.
+      { clientID: googleClientId!, clientSecret: googleClientSecret!, callbackURL, state: true },
       async (_accessToken, _refreshToken, profile, done) => {
         try {
-          const email = profile.emails?.[0]?.value || null;
+          const verified = (profile as { _json?: { email_verified?: boolean } })._json?.email_verified === true;
+          const email = verified ? profile.emails?.[0]?.value || null : null;
           const avatar = profile.photos?.[0]?.value || null;
           const user = await findOrCreateGoogleUser(profile.id, email, profile.displayName, avatar);
           done(null, user);
