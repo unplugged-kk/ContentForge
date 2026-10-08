@@ -91,8 +91,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 67, `expected 67 tables, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 31, "all thirty-one migrations recorded");
+      assert.equal(tables.length, 73, `expected 73 tables, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), readJournal().length, "every journal migration recorded");
 
       for (const table of [
         "research_jobs",
@@ -220,8 +220,8 @@ describeDb("migration chain (db)", () => {
       await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
 
       const tables = await publicTables(pool);
-      assert.equal(tables.length, 67, `expected 67 tables after upgrade, got ${tables.length}`);
-      assert.equal(await migrationCount(pool), 31, "0003-0030 recorded after upgrade");
+      assert.equal(tables.length, 73, `expected 73 tables after upgrade, got ${tables.length}`);
+      assert.equal(await migrationCount(pool), readJournal().length, "every journal migration recorded after upgrade");
       assert.ok(tables.includes("audit_logs"), "0003 table created on the upgrade path");
       assert.ok(tables.includes("research_jobs"), "0005 table created on the upgrade path");
       assert.ok(tables.includes("stories"), "0006 table created on the upgrade path");
