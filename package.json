@@ -30,7 +30,8 @@
     "test:e2e:visual": "node script/e2e-visual.mjs",
     "test:e2e:agent": "node script/e2e-agent.mjs",
     "test:e2e:workspace": "node script/e2e-workspace.mjs",
-    "test:media:certify": "node script/media-certify.mjs"
+    "test:media:certify": "node script/media-certify.mjs",
+    "test:e2e:auth0": "node script/e2e-auth0.mjs"
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.28.2",
