@@ -31,6 +31,8 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/no-empty-interface
     interface Request {
       userId?: number;
+      /** Set by authGate when an Auth0 bearer token, not the session, authenticated the request. */
+      authMethod?: "bearer";
     }
   }
 }

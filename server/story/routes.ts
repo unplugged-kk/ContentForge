@@ -92,10 +92,10 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
       try {
         // Phase 30.1: the /api authGate guarantees an authenticated session;
         // never default to owner 1.
-        const sessionUserId = (req as any).session?.userId;
-        if (!sessionUserId) throw new Error("story creation requires an authenticated session");
+        const ownerId = req.userId;
+        if (!ownerId) throw new Error("story creation requires an authenticated session");
         const story = await deps.stories.insertStory({
-          userId: sessionUserId,
+          userId: ownerId,
           researchJobId: null,
           provenance: "human",
           title: synthesis.title,

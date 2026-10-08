@@ -1,4 +1,5 @@
 import Tokens from "csrf";
+import { PUBLIC_AUTH_PATHS } from "./authGate";
 import type { Request, RequestHandler, Response } from "express";
 
 /**
@@ -12,8 +13,10 @@ import type { Request, RequestHandler, Response } from "express";
  *   3. verifyCsrf compares the header against tokens.create(req.session.csrfSecret).
  *
  * Skipped for:
- *   - /api/auth/*   (login flows use a password, not cookie-borne credentials;
- *                    also we want users to log in without first hitting /api/csrf-token)
+ *   - requests authGate authenticated with an Auth0 bearer token: no cookie
+ *     authenticated them, and browsers cannot attach that header cross-site
+ *   - login, register, logout and the Auth0 session exchange (they run
+ *     before a CSRF token can exist; /api/auth/me is NOT exempt)
  *   - /api/webhooks/* (signed via HMAC instead, applied per-webhook)
  *   - GET / HEAD / OPTIONS (safe methods)
  */
@@ -48,7 +51,7 @@ function safeMethod(method: string): boolean {
 
 function isExempt(path: string): boolean {
   return (
-    path.startsWith("/api/auth/") ||
+    PUBLIC_AUTH_PATHS.includes(path.toLowerCase()) ||
     path.startsWith("/api/webhooks/") ||
     path === "/api/csrf-token"
   );
@@ -56,6 +59,7 @@ function isExempt(path: string): boolean {
 
 export const verifyCsrf: RequestHandler = (req, res, next) => {
   if (safeMethod(req.method)) return next();
+  if (req.authMethod === "bearer") return next();
   if (isExempt(req.path)) return next();
 
   const secret = req.session?.csrfSecret;
