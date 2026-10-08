@@ -115,6 +115,11 @@ describeDb("research vertical slice (db)", () => {
 
     const app = express();
     app.use(express.json());
+    // Stands in for authGate: the router requires an authenticated owner.
+    app.use((req, _res, next) => {
+      req.userId = 1;
+      next();
+    });
     app.use(
       "/api/research",
       createResearchRouter({
