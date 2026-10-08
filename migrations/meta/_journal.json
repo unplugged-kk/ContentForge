@@ -246,6 +246,13 @@
       "when": 1791145600000,
       "tag": "0034_ai_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791232000000,
+      "tag": "0035_auth0_subject",
+      "breakpoints": true
     }
   ]
 }
