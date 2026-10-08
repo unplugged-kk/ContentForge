@@ -12,6 +12,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/auth";
+import { Auth0Boundary, AUTH0_CALLBACK_PATH } from "@/lib/auth0";
 import { QuickCapture } from "@/components/quick-capture";
 import { AnnouncerProvider } from "@/components/ui-shared/announcer";
 
@@ -210,8 +211,11 @@ function AppShell() {
     queryFn: getQueryFn({ on401: "returnNull" }),
     retry: false,
   });
+  const [location] = useLocation();
 
-  if (isLoading) {
+  // The Auth0 redirect lands here and leaves once the session exchange
+  // settles, so the sign-in form never flashes in between.
+  if (isLoading || (!user && location === AUTH0_CALLBACK_PATH)) {
     return (
       <div className={`flex ${SHELL_HEIGHT} items-center justify-center`}>
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -271,7 +275,9 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <AnnouncerProvider>
-            <AppShell />
+            <Auth0Boundary>
+              <AppShell />
+            </Auth0Boundary>
             <Toaster />
           </AnnouncerProvider>
         </TooltipProvider>

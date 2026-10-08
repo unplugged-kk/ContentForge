@@ -2,6 +2,8 @@ import { CalendarCheck, Sparkles, Database, Bot, Calendar, BarChart3, Settings, 
 import { useLocation, Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { invalidateCsrfToken } from "@/lib/csrf";
+import { useAuth0Session } from "@/lib/auth0";
 import {
   Sidebar,
   SidebarContent,
@@ -98,13 +100,19 @@ export function AppSidebar({ user }: { user?: SidebarUser }) {
   const [location] = useLocation();
   const { toast } = useToast();
 
+  const auth0 = useAuth0Session();
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/auth/logout", {});
+      const res = await apiRequest("POST", "/api/auth/logout", {});
+      return (await res.json()) as { idpLogout?: boolean };
     },
-    onSuccess: () => {
+    onSuccess: async ({ idpLogout }) => {
+      invalidateCsrfToken();
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.clear();
+      // An Auth0 session also ends at Auth0, or the next sign-in click would
+      // silently reuse it. This navigates away and back to the origin.
+      if (idpLogout && auth0) await auth0.logout();
     },
     onError: () => {
       toast({ title: "Logout failed", variant: "destructive" });

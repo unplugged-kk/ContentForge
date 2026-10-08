@@ -1,7 +1,13 @@
 import helmet from "helmet";
 import type { RequestHandler } from "express";
+import { readAuth0Config } from "../auth0/token";
 
 const isProd = process.env.NODE_ENV === "production";
+
+// The SPA calls the Auth0 token endpoint and may open Auth0 in a hidden
+// iframe for silent authentication; both must reach exactly the issuer.
+const auth0Config = readAuth0Config();
+const auth0Origin = auth0Config ? [new URL(auth0Config.issuer).origin] : [];
 
 /**
  * Helmet configuration tuned for ContentForge:
@@ -27,8 +33,9 @@ export const securityHeaders: RequestHandler = helmet({
       imgSrc: ["'self'", "data:", "blob:", "https:"],
       mediaSrc: ["'self'", "https:", "blob:"],
       connectSrc: isProd
-        ? ["'self'", "https:"]
+        ? ["'self'", "https:", ...auth0Origin]
         : ["'self'", "ws:", "wss:", "http:", "https:"],
+      frameSrc: ["'self'", ...auth0Origin],
       frameAncestors: ["'none'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
