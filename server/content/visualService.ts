@@ -494,6 +494,8 @@ export async function runVisualGeneration(
             ...(typeof output.usage.downloadMs === "number" ? { downloadMs: output.usage.downloadMs } : {}),
             ...(typeof output.usage.providerVoiceId === "string" ? { providerVoiceId: output.usage.providerVoiceId } : {}),
             ...(typeof output.usage.locale === "string" ? { locale: output.usage.locale } : {}),
+            ...(typeof output.usage.language === "string" ? { language: output.usage.language } : {}),
+            ...(typeof output.usage.languageStatus === "string" ? { languageStatus: output.usage.languageStatus } : {}),
             ...(typeof output.usage.contractVersion === "string"
               ? { contractVersion: output.usage.contractVersion }
               : {}),

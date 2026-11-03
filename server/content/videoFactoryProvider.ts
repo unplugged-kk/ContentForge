@@ -77,10 +77,13 @@ function buildRequest(request: VisualGenerationRequest, defaultVoiceId: string):
   const intent = snapshot.intent && typeof snapshot.intent === "object" ? (snapshot.intent as Record<string, unknown>) : {};
   // Producer-side default (the frozen parser still reads an absent voice as disabled, so it is filled in here).
   const defaulted = intent.voice === undefined || intent.voice === null;
+  const language = typeof intent.language === "string" ? intent.language : "en";
+  // English keeps the Kokoro default. Other languages omit the id so the factory picks that language's voice.
+  const defaultVoice = language === "en" ? { enabled: true, id: defaultVoiceId } : { enabled: true };
   try {
     return buildVideoFactoryJobRequest({
       generationId: request.generationId,
-      snapshot: defaulted ? { ...snapshot, intent: { ...intent, voice: { enabled: true, id: defaultVoiceId } } } : snapshot,
+      snapshot: defaulted ? { ...snapshot, intent: { ...intent, voice: defaultVoice } } : snapshot,
     });
   } catch (error) {
     if (error instanceof InvalidVisualInputError) {
@@ -96,6 +99,7 @@ async function importDone(
   job: VideoFactoryJobRequest,
   providerId: string,
   modelId: string,
+  observed?: { language?: string | null; languageStatus?: string | null },
 ): Promise<VisualGenerationOutput> {
   const output = await transport.getOutput(job.jobId);
   if (!output) {
@@ -123,6 +127,8 @@ async function importDone(
       externalJobId: job.jobId,
       outputIdentity: output.outputIdentity,
       externalState: "done",
+      ...(job.language ? { language: job.language } : {}),
+      ...(observed?.languageStatus ? { languageStatus: observed.languageStatus } : {}),
     },
   };
 }
@@ -233,7 +239,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
       for (;;) {
         status = await transport.getStatus(job.jobId);
         const classified = classifyVideoFactoryState(status.state);
-        if (classified === "completed") return importDone(transport, job, providerId, request.model ?? "local/default");
+        if (classified === "completed") return importDone(transport, job, providerId, request.model ?? "local/default", status);
         if (classified === "permanent") {
           throw JobFailure.permanent(status.error || `Video Factory job ${job.jobId} failed`);
         }
@@ -245,7 +251,7 @@ export function createVideoFactoryProvider(options: VideoFactoryProviderOptions)
       }
 
       const last = classifyVideoFactoryState(status.state);
-      if (last === "completed") return importDone(transport, job, providerId, request.model ?? "local/default");
+      if (last === "completed") return importDone(transport, job, providerId, request.model ?? "local/default", status);
       if (last === "permanent") {
         throw JobFailure.permanent(status.error || `Video Factory job ${job.jobId} failed`);
       }

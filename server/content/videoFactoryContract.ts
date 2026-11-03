@@ -43,6 +43,9 @@ const MAX_SCRIPT = 50_000;
 const MAX_STORYBOARD = 50_000;
 const MAX_VOICE_ID = 80;
 
+export const VIDEO_FACTORY_LANGUAGES = ["en", "hi", "hi-en", "or"] as const;
+export type VideoFactoryLanguage = (typeof VIDEO_FACTORY_LANGUAGES)[number];
+
 export interface VideoFactoryVoiceSpec {
   enabled: boolean;
   /** Provider-approved identifier only; never a shell argument. */
@@ -63,6 +66,8 @@ export interface VideoFactoryJobRequest {
   script: string | null;
   storyboard: string | null;
   voice: VideoFactoryVoiceSpec;
+  /** Omitted for English so an English contract stays the original shape. */
+  language?: Exclude<VideoFactoryLanguage, "en">;
   render: VideoFactoryRenderSpec;
   durationMs: number | null;
 }
@@ -75,6 +80,9 @@ export interface VideoFactoryStatus {
   /** Observation only — never treated as publication/generation truth. */
   observational: boolean;
   error?: string | null;
+  language?: string | null;
+  languageStatus?: string | null;
+  failureCode?: string | null;
 }
 
 export interface VideoFactoryOutputRef {
@@ -178,6 +186,17 @@ export function videoFactoryRenderArgs(spec: VideoFactoryRenderSpec): ["--qualit
   return ["--quality", spec.quality];
 }
 
+export function parseVideoFactoryLanguage(value: unknown): VideoFactoryLanguage | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "en" || value === "hi" || value === "hi-en" || value === "or") return value;
+  throw new InvalidVisualInputError([`Video Factory language "${String(value).slice(0, 20)}" is not supported`]);
+}
+
+function languageField(value: unknown): { language: Exclude<VideoFactoryLanguage, "en"> } | Record<string, never> {
+  const language = parseVideoFactoryLanguage(value);
+  return language && language !== "en" ? { language } : {};
+}
+
 function boundedText(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const cleaned = value.replace(/\0/g, "").replace(/\r\n/g, "\n");
@@ -261,6 +280,7 @@ export function buildVideoFactoryJobRequest(input: BuildVideoFactoryRequestInput
     script,
     storyboard,
     voice: parseVoice(intent.voice),
+    ...languageField(intent.language ?? spec.language),
     render: validateVideoFactoryRenderSpec(intent.render),
     durationMs,
   };
@@ -294,6 +314,7 @@ export function parseVideoFactoryJobRequest(raw: unknown): VideoFactoryJobReques
     script: boundedText(record.script, MAX_SCRIPT),
     storyboard: boundedText(record.storyboard, MAX_STORYBOARD),
     voice: parseVoice(voiceRaw),
+    ...languageField(record.language),
     render: validateVideoFactoryRenderSpec(renderRaw),
     durationMs:
       typeof record.durationMs === "number" && Number.isInteger(record.durationMs) && record.durationMs > 0

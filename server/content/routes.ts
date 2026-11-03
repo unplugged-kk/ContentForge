@@ -218,6 +218,7 @@ const serializeVisualGeneration = (g: VisualGeneration) => ({
   generationJobId: g.generationJobId,
   errorClass: g.errorClass,
   errorMessage: g.errorMessage,
+  language: typeof g.intent?.language === "string" ? g.intent.language : "en",
   correlationId: g.correlationId,
   variationCount: g.variationCount,
   specId: g.specId,
@@ -241,6 +242,7 @@ const serializeVisualAsset = (a: VisualAsset) => ({
   sampleRate: typeof a.metadata?.sampleRate === "number" ? a.metadata.sampleRate : null,
   channels: typeof a.metadata?.channels === "number" ? a.metadata.channels : null,
   providerVoiceId: typeof a.metadata?.providerVoiceId === "string" ? a.metadata.providerVoiceId : null,
+  languageStatus: typeof a.metadata?.languageStatus === "string" ? a.metadata.languageStatus : null,
   contentHash: a.contentHash,
   /**
    * Finding F4: the review surface could only show metadata because the only
