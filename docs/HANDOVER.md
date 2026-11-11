@@ -64,19 +64,20 @@ One Craft Anything run (2026-11-04 → 11) worked in this checkout and left a la
 working directory at the repository root. This pass separated the product
 deliverable from the workspace noise.
 
-> **The Craft Anything process was still alive during this pass.** At 15:40 IST
-> it committed `d2331a1 feat(site): add public marketing site…` and pushed it to
-> `origin/feat/auth0-migration`, and it kept editing `site/*.ts` and rebuilding
-> `dist/` while these documents were being written. Two consequences:
+> **The Craft Anything process overlapped this pass, then exited.** It committed
+> and pushed `d2331a1` at 15:40 IST, kept editing `site/*.ts` and rebuilding
+> `dist/`, and stopped at ~16:20 IST. Its final iteration was verified and
+> committed as `05d70e2`.
 >
-> 1. **`site/*.ts` in the working tree can be newer than the commit.** Treat the
->    marketing site as in-progress until that process exits; its own target is a
->    90% visual match and it reports ~47% at round 15.
-> 2. **No clean full Playwright run exists for this pass** (§5.1) because the
->    suite serves `dist/` and that directory was being rewritten underneath it.
+> Consequence for anyone reading history: `d2331a1` is a mid-run checkpoint, not
+> the finished site. `05d70e2` is the last word, and it still reports **47%
+> visual match against a 90% target** — the marketing pages are improved but
+> explicitly unfinished. The gap is mostly imagery (the reference uses
+> illustrations and product screenshots; these are CSS mockups), brand wording,
+> and the DM font.
 >
 > Its commit also added a root `HANDOVER.md` and `server/site.test.ts`. That root
-> handover explicitly defers capability status to `docs/CAPABILITY_MATRIX.md` and
+> handover defers capability status to `docs/CAPABILITY_MATRIX.md` and
 > `docs/ROADMAP.md`, so there is no competing source of truth — but note that two
 > files named HANDOVER exist, and the `docs/` one is authoritative.
 
@@ -91,6 +92,7 @@ pgrep -fl "craft-anything|claude -p --output-format stream-json" || echo "quiet"
 | Change | Files |
 |---|---|
 | Public marketing site, served by the app and emitted as static files | `site/{render,home,agent,layout,icons,styles,script}.ts`, `server/site.ts`, `script/build.ts`, `tsconfig.json`, `server/index.ts` |
+| Site layout/content second pass (47% visual match, target 90%) | `site/{agent,home,icons,layout,styles}.ts`, root `HANDOVER.md` |
 | Test hermeticity (`server/testing/hermeticEnv.ts`) + script wiring | `package.json`, `server/testing/hermeticEnv.ts` |
 
 **Recovered and committed (documentation):**
@@ -187,10 +189,10 @@ Everything below was executed on this machine against the ephemeral
 |---|---|
 | `npx tsc --noEmit` | exit 0, no diagnostics |
 | `npm run test:unit` | **1072 passed, 0 failed, 0 skipped** (includes `server/site.test.ts`) |
-| `npm run test:db` | **388 passed, 0 failed** |
+| `npm run test:db` | **388 passed, 0 failed** on a freshly created database |
 | `npm run build` | exit 0; `dist/index.cjs` 4.3 MB; marketing pages + `_site/` emitted to `dist/` |
 | Marketing site, production bundle | `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork`, `/_site/site.css` → 200; `/api/health` → 200 JSON; `/today` falls through to the SPA |
-| `npx playwright test` | see §5.1 |
+| `npx playwright test` | **276 passed, 2 skipped, 0 failed, exit 0** (see §5.1) |
 | Real external publish | **not performed and not authorised** |
 
 ### 5.1 Playwright
@@ -199,17 +201,23 @@ The suite needs `npx playwright install chromium` on a fresh machine; without it
 every browser spec fails at launch with `Executable doesn't exist`, which reads
 like a product failure and is not one.
 
-Recorded result on this pass:
+Recorded result on a quiet tree, after the two spec defects below were fixed:
 
-- Full run on the pre-fix tree: **270 passed, 2 skipped, 7 failed**.
-- Six of the seven were load flake. Re-run serially with one retry:
-  **25 passed, 2 flaky, 1 failed**.
-- The one consistent failure and one spec that encoded the old product behaviour
-  were real defects, both fixed (§5.2). Their spec files now pass **12/12**.
-- A final full-suite run was started and **deliberately abandoned**: a Craft
-  Anything process was rebuilding `dist/` underneath the Playwright web server,
-  so the number would have measured the race, not the code. **A clean full-suite
-  run on a quiet tree is the first thing the next agent should record.**
+- **276 passed, 2 skipped, 0 failed, exit 0** (3.2 min, `CI=true` so retries were
+  available; none were needed).
+- The first full run, before the spec fixes, was 270 passed / 2 skipped /
+  7 failed. Six of those seven were load flake (they passed serially and on
+  retry); the seventh was a real expired-date defect.
+
+### 5.1b One caveat on `test:db`
+
+On a **reused** database the full DB suite can report two failures in the
+queue-timing suites — `content/autonomy/scheduler.dbtest.ts` ("10 simultaneous
+same-owner same-scope triggers…") and `jobs/researchRuntime.dbtest.ts` ("retries a
+transient research failure…"). Both pass in isolation (29/29) and the whole suite
+is green on a freshly created database. The cause is accumulated pg-boss state
+from earlier runs, not the code. A CI service container is fresh on every run, so
+P0-1 will not see it; when running locally, recreate the database first.
 
 ### 5.2 Defects found and fixed in this pass
 
@@ -360,8 +368,10 @@ rest was gitignored rather than deleted, so nothing on disk was lost.
 
 **`d2331a1` was authored and pushed by the Craft Anything process, not by this
 pass.** It carries `site/`, `server/site.ts`, the build wiring, `server/site.test.ts`
-and a root `HANDOVER.md`. This pass commits on top of it — test hermeticity, test
-fixes, and the documentation reconciliation — and does not rewrite it.
+and a root `HANDOVER.md`. Its later, final site iteration is `05d70e2` (committed
+here after that process exited). This pass commits on top of that — test
+hermeticity, test fixes, and the documentation reconciliation — and does not
+rewrite any of it.
 
 There is one stash, `stash@{0}: On phase-33.7-discovery-ownership: phase-33.7
 wip`, which predates this pass and was **not** touched. Inspect it before

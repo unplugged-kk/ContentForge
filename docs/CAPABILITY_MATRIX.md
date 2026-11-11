@@ -119,7 +119,7 @@ Classification is `EXISTS / EXTEND / GENERALIZE / REFACTOR / NEW / EXTERNAL / DE
 |---|---|---|---|---|
 | Auth — password, Google, Auth0 (Universal Login + bearer) | EXISTS | IMPLEMENTED | `docs/AUTH0.md`, `server/auth*` | — |
 | CSRF, owner scoping, rate limits | EXISTS | IMPLEMENTED | `httpHardening.ts`, owner-isolation DB suites | — |
-| Public marketing site | NEW | VERIFIED LIVE (2026-11-11) | `site/`, `server/site.ts`; served at `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork` | Agent pages describe the MCP connector as planned; its URL is a placeholder |
+| Public marketing site | NEW | VERIFIED LIVE (2026-11-11) | `site/`, `server/site.ts`; served at `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork` | Serves correctly, but visual match to the reference is ~47% against a 90% target (`05d70e2`). Agent pages describe the MCP connector as planned; its URL is a placeholder |
 
 ## Verification performed in this pass
 
@@ -131,7 +131,7 @@ Classification is `EXISTS / EXTEND / GENERALIZE / REFACTOR / NEW / EXTERNAL / DE
 | Production build | `npm run build` | exit 0; `dist/index.cjs`, SPA in `dist/public`, marketing pages + `_site/` assets emitted to `dist/` |
 | Marketing routes | `NODE_ENV=production node dist/index.cjs` then HTTP GET | `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork`, `/_site/site.css` → 200 |
 | API health | same process | `/api/health` → 200 JSON; `/today` falls through to the SPA |
-| Playwright | `npx playwright test` | 270 passed / 2 skipped / 7 failed pre-fix; 6 were load flake (serial re-run with retry: 25 passed, 2 flaky, 1 failed), and the 2 real spec defects are fixed and pass 12/12. A clean full re-run is **NOT VERIFIED** — a concurrent Craft Anything run was rebuilding `dist/`. Details in `docs/HANDOVER.md` §5.1 |
+| Playwright | `npx playwright test` | **276 passed, 2 skipped, 0 failed, exit 0** on a quiet tree (first run pre-fix: 270/2 skipped/7 failed; 6 flake, 2 real spec defects fixed). Details in `docs/HANDOVER.md` §5.1 |
 
 **Not verified:** live provider publishing (no real post was made from this pass),
 last30days, Agent Reach (inert), MCP server (does not exist), Video Factory
