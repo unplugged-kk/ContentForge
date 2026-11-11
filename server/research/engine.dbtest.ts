@@ -28,6 +28,11 @@ const RUN = `r${Date.now().toString(36)}`;
 let testPool: pg.Pool;
 let db!: NodePgDatabase<typeof schema>;
 
+/** Relative dates: a fixed one silently expires out of the `last_30d` window. */
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
 function source(nativeId: string, text: string, provider = "fake"): NormalizedSource {
   const canonicalUrl = `https://${RUN}.test/${nativeId}`;
   return {
@@ -40,8 +45,8 @@ function source(nativeId: string, text: string, provider = "fake"): NormalizedSo
     canonicalUrl,
     title: `title ${nativeId}`,
     author: { name: "Ada" },
-    publishedAt: new Date("2026-09-01T00:00:00Z").toISOString(),
-    retrievedAt: new Date("2026-09-10T00:00:00Z").toISOString(),
+    publishedAt: daysAgo(5),
+    retrievedAt: daysAgo(1),
     excerpt: text,
     contentHash: `hash-${nativeId}`,
     metadata: { feedUrl: "https://example.com/rss" },

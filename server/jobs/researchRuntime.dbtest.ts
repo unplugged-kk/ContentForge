@@ -62,7 +62,10 @@ async function waitFor(
 
 async function alignToSingletonWindow(seconds: number): Promise<void> {
   const windowMs = seconds * 1000;
-  while (Date.now() % windowMs > windowMs / 2) {
+  // Land in the first QUARTER of the bucket: the dedupe assertion enqueues twice
+  // and on a loaded full-suite run the gap between them can cross a bucket
+  // boundary, which makes the second enqueue look genuinely new.
+  while (Date.now() % windowMs > windowMs / 4) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
