@@ -12,10 +12,12 @@ operational or historical.
 
 | Doc | What it is |
 |---|---|
-| [`../CURRENT_ARCHITECTURE.md`](../CURRENT_ARCHITECTURE.md) | Authoritative architecture, "as built, not as documented". Dated 2026-10-02. **Start here.** |
+| [`../CURRENT_ARCHITECTURE.md`](../CURRENT_ARCHITECTURE.md) | Authoritative architecture, "as built, not as documented". Dated 2026-10-02, with a 2026-11-11 verification note. **Start here.** |
 | [`../JEV_DECISION_MAP.md`](../JEV_DECISION_MAP.md) | Decision-system map (Jev): boundaries, policies, failure modes. Companion to the above. |
-| [`STATUS.md`](STATUS.md) | Short pointer. Current state lives in `CURRENT_ARCHITECTURE.md`. |
-| [`HANDOVER.md`](HANDOVER.md) | **Current work handover** (2026-10-04): what is done and verified, what remains, and how to run every suite. |
+| [`HANDOVER.md`](HANDOVER.md) | **Current handover** (2026-11-11): verified state, what the Craft Anything run changed, debt, and the exact next task. |
+| [`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md) | Every capability with its status and evidence, plus the verification table for this pass. |
+| [`ROADMAP.md`](ROADMAP.md) | Ordered backlog (P0–P3) and the top tickets with acceptance criteria. |
+| [`STATUS.md`](STATUS.md) | Short pointer. Current state lives in `HANDOVER.md` and `CURRENT_ARCHITECTURE.md`. |
 | [`LOCAL_E2E_ACCEPTANCE_REPORT.md`](LOCAL_E2E_ACCEPTANCE_REPORT.md) | Findings F1–F16 from the local acceptance run, plus the fix addendum. |
 | [`LOCAL_VPS_DEPLOYMENT.md`](LOCAL_VPS_DEPLOYMENT.md) | Local / VPS deploy runbook. |
 | [`DB_MIGRATION_WORKFLOW.md`](DB_MIGRATION_WORKFLOW.md) | Production-safe migration workflow. |
@@ -38,6 +40,7 @@ contradict the code. Open only to answer "what did we do in phase N".
 |---|---|
 | [`archive/status-phase-history.md`](archive/status-phase-history.md) | Full phase status log (28.2B → 31), newest-first. This is the old 87 KB `STATUS.md`. |
 | [`archive/`](archive/) | Phase reports 29 → 34 (`phase-*.md`), plus superseded pre-June plans (`PLAN.md`, `HANDOFF.md`, `replit.md`, the `JEV-*.md` design set). |
+| [`archive/ux-intelligence-2026-09/`](archive/ux-intelligence-2026-09/) | ContentForge UX discovery package (2026-09): findings, IA, journeys, feature matrix, "don't build" list. Evidence for UX work, **not** a current roadmap. |
 | [`archive/audits/`](archive/audits/) | Phase-28/29 design and final-audit reports. |
 | [`archive/phases-final/`](archive/phases-final/) | Final phase audit set. |
 | [`architecture/`](architecture/) | Generated architecture artifacts (Archify). Partly superseded by `CURRENT_ARCHITECTURE.md`. |

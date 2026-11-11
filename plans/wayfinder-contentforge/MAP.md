@@ -2,6 +2,23 @@
 
 Label: `wayfinder:map` | Workstream: ContentForge only
 
+> **Status 2026-11-11 — decisions landed; this map is a decision record.**
+> The Phase 1 exit test this map aimed at has been met: one generic topic runs
+> research → story → artifact → schedule → publish → result, and a second format
+> reuses the research (proof: `server/research/verticalSlice.dbtest.ts` and
+> `server/content/visualPublication.dbtest.ts`). Tickets 01–08 are closed as
+> *decisions*; ticket 03 (domain model) shipped, and 04/05/06 (research, story,
+> scheduling) shipped as `server/research`, `server/story` and
+> `server/content/*`.
+>
+> **Do not plan execution from this file.** The ordered backlog now lives in
+> [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) and the capability/verification
+> state in [`../../docs/CAPABILITY_MATRIX.md`](../../docs/CAPABILITY_MATRIX.md).
+> Two things below are now history, not future: "Not yet specified" (autonomous
+> discovery ranking, analytics model, review UX) has been designed and built, and
+> the registered-demand list was implemented as the generic model it asked for.
+> Keep this file for the *rationale* behind the locked decisions.
+
 ## Destination
 
 A complete, decision-locked architecture for the ContentForge Content Intelligence
