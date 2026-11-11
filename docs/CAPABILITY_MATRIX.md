@@ -126,7 +126,7 @@ Classification is `EXISTS / EXTEND / GENERALIZE / REFACTOR / NEW / EXTERNAL / DE
 | Check | Command | Result |
 |---|---|---|
 | Typecheck | `npx tsc --noEmit` | exit 0, no diagnostics |
-| Unit + client suite | `npm run test:unit` | **1069 passed, 0 failed** |
+| Unit + client suite | `npm run test:unit` | **1072 passed, 0 failed** (includes `server/site.test.ts`) |
 | DB integration suite | `npm run test:db` | **388 passed, 0 failed** |
 | Production build | `npm run build` | exit 0; `dist/index.cjs`, SPA in `dist/public`, marketing pages + `_site/` assets emitted to `dist/` |
 | Marketing routes | `NODE_ENV=production node dist/index.cjs` then HTTP GET | `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork`, `/_site/site.css` → 200 |

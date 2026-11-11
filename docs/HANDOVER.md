@@ -186,7 +186,7 @@ Everything below was executed on this machine against the ephemeral
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | exit 0, no diagnostics |
-| `npm run test:unit` | **1069 passed, 0 failed, 0 skipped** |
+| `npm run test:unit` | **1072 passed, 0 failed, 0 skipped** (includes `server/site.test.ts`) |
 | `npm run test:db` | **388 passed, 0 failed** |
 | `npm run build` | exit 0; `dist/index.cjs` 4.3 MB; marketing pages + `_site/` emitted to `dist/` |
 | Marketing site, production bundle | `/`, `/chatgpt`, `/dots`, `/claude`, `/claude-cowork`, `/_site/site.css` → 200; `/api/health` → 200 JSON; `/today` falls through to the SPA |
@@ -244,6 +244,12 @@ Recorded result on this pass:
 7. **A scheduling spec used an expired date.** It filled `2026-10-15`, which
    `SchedulePicker` correctly rejects because it is in the past, leaving the
    confirm button disabled. The date is now computed relative to today.
+8. **The unit suite was order-dependent.** The Threads HTTP tests read the global
+   `connected_accounts` store. A row written by an earlier E2E run against the
+   same database — encrypted with that run's key — made three tests fail with
+   "Failed to decrypt stored accessToken". `test:db` already ran a preflight
+   purge; `test:unit` did not. Both now run `script/test-db-guard.ts` first, so
+   the suite result no longer depends on what ran before it.
 
 ## 6. Integrations: working vs incomplete
 
@@ -332,6 +338,10 @@ make e2e-live
 - **Your shell may already export production credentials.** This is what made
   the suite publish to X. `test:unit` / `test:db` now strip them, but if you run
   `node --test` directly, you bypass that. Use the npm scripts.
+- **`test:unit` and `test:db` both purge `connected_accounts` on a local/test
+  database.** That is what makes them repeatable, but it means you must never
+  point them at a database whose channel connections you want to keep. The guard
+  refuses to purge a database that is neither local nor named like a test one.
 - **`.env` points at a Neon pooler**, not the compose database. Pool-dependent
   tests misbehave there; set `TEST_DATABASE_URL` to a direct connection.
 - **One app process runs web + workers + schedulers.** Never add a second worker
