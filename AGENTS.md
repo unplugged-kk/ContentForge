@@ -7,11 +7,21 @@ every session, so every line here costs tokens.
 
 - **`CURRENT_ARCHITECTURE.md`** — the authoritative architecture doc (dated,
   "as built, not as documented"). Read it before any architecture question.
-- **`docs/README.md`** — the index of every other doc, each tagged `CURRENT`
-  or `HISTORICAL`. Anything tagged HISTORICAL describes a past phase and may
+- **`docs/HANDOVER.md`** — current state, what was verified and when, the debt,
+  and the exact next task. Read it before starting any work.
+- **`docs/README.md`** — the index of every other doc, each tagged `CURRENT` or
+  `HISTORICAL`. Anything tagged HISTORICAL describes a past phase and may
   contradict the code. Do not treat it as current.
 - **`docs/archive/`** — frozen history (pre-June plans, phase reports). Open
   only to answer "what did we do in phase N".
+
+## Verification
+
+Use `npm run test:unit` and `npm run test:db` — never raw `node --test`. The npm
+scripts load `server/testing/hermeticEnv.ts` first, which strips distribution
+credentials, model keys and Jev flags. Without it a test process inherits
+whatever the shell exports and can reach the live X provider or a billable model.
+Neither suite runs in CI yet; see `docs/ROADMAP.md` P0-1.
 
 ## Use the graph before grepping
 

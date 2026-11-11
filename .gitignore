@@ -52,3 +52,70 @@ research/_raw/
 # (`archify deliver`, see docs/HANDOVER.md §2) and are ~19 MB, so they stay out.
 docs/architecture/**/*.html
 docs/architecture/**/*.png
+
+# ---------------------------------------------------------------------------
+# Local Craft Anything / agent workspace — NOT product code.
+#
+# One Craft Anything run (2026-11-04 → 11) left its working directory at the repo
+# root: browser captures, 32 MB session logs, curl dumps of e2e responses, and a
+# copy of another project's Next.js site. None of it is imported by the app, and
+# `local.txt` in particular is a libcurl COOKIE JAR containing a live
+# `connect.sid` — committing this family is how a session token reaches a remote.
+# The files stay on disk; they are only excluded from version control.
+#
+# The product deliverable of that run is `site/` + `server/site.ts` + the build
+# wiring, which ARE tracked.
+# ---------------------------------------------------------------------------
+/local.txt
+/agent-session.jsonl
+/build-activity.log
+/craft.json
+/feed.json
+/transcript.json
+/usage.json
+/art.txt
+/art2.txt
+# Ad-hoc response dumps captured while verifying the local e2e lifecycle.
+/ex.json
+/intake.json
+/lap.json
+/lar.json
+/lj.json
+/lj2.json
+/ljs.json
+/ljs2.json
+/lop.json
+/lreg.json
+/lst.json
+/lsub.json
+/pol.json
+/r.json
+/rr.json
+/run.json
+/vg.json
+/vg2.json
+# Capture / audit evidence directories (screenshots dominate the size).
+/checks/
+/capture/
+/investigation.cany/
+/.scratch/
+/uploads/
+/inbox/
+/prompts/
+# A different product ("Artha", personal finance) copied in with Next.js
+# `app/` files plus two `probe.ts` stubs. Not imported here; kept on disk only.
+/src/
+# Pre-implementation design drafts for the wider estate, and repo research.
+# Superseded by CURRENT_ARCHITECTURE.md and docs/ for this product.
+/architecture/
+/research/
+/roadmap/
+# Agent tooling and decision logs local to this machine.
+/.agents/
+/.audit/
+/.commandcode/
+/.gemini/
+/.grok/
+/.kimchi/
+/.kiro/
+/.windsurf/

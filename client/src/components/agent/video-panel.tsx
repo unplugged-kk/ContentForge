@@ -11,8 +11,10 @@ type GenerationView = {
   id: number;
   status: string;
   providerId?: string | null;
+  language?: string | null;
+  errorMessage?: string | null;
   visualAssetId?: number | null;
-  assets?: Array<{ id: number; durationMs?: number | null; width?: number | null; height?: number | null; status?: string }>;
+  assets?: Array<{ id: number; durationMs?: number | null; width?: number | null; height?: number | null; status?: string; languageStatus?: string | null }>;
 };
 
 type RepurposeView = {
@@ -32,6 +34,7 @@ export function VideoPanel({
   onGeneration?: (id: number) => void;
 }) {
   const [subject, setSubject] = useState("Short explainer");
+  const [language, setLanguage] = useState("en");
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState<string>();
   const [activeId, setActiveId] = useState<number | null>(generationId ?? null);
@@ -77,7 +80,12 @@ export function VideoPanel({
         kind: "video",
         providerId,
         ...(modelId ? { model: modelId } : {}),
-        intent: { subject: trimmed, title: trimmed, aspectRatio: "9:16" },
+        intent: {
+          subject: trimmed,
+          title: trimmed,
+          aspectRatio: "9:16",
+          ...(language !== "en" ? { language } : {}),
+        },
         durationMs: 3000,
       });
       return res.json() as Promise<{ id: number; status: string }>;
@@ -127,6 +135,17 @@ export function VideoPanel({
           placeholder="Video subject"
           data-testid="input-video-subject"
         />
+        <select
+          value={language}
+          onChange={(event) => setLanguage(event.target.value)}
+          data-testid="select-video-language"
+          className="h-8 w-full rounded-md border bg-background px-2 text-xs"
+        >
+          <option value="en">English</option>
+          <option value="hi">Hindi, not production-ready</option>
+          <option value="hi-en">Hinglish, experimental</option>
+          <option value="or">Odia, blocked until a voice exists</option>
+        </select>
         <Button
           size="sm"
           onClick={() => createMutation.mutate()}
@@ -139,7 +158,12 @@ export function VideoPanel({
           <div className="space-y-1" data-testid="card-video-generation">
             <p className="text-xs" data-testid="text-video-progress">
               Generation {generation.id} · {generation.status}
+              {generation.language && generation.language !== "en" ? ` · ${generation.language}` : ""}
+              {asset?.languageStatus ? ` · ${asset.languageStatus}` : ""}
             </p>
+            {generation.errorMessage ? (
+              <p className="text-xs text-destructive" data-testid="text-video-error">{generation.errorMessage}</p>
+            ) : null}
             <Badge variant="secondary">{generation.providerId ?? "provider"}</Badge>
             {asset ? (
               <div className="text-xs text-muted-foreground" data-testid={`card-video-asset-${asset.id}`}>

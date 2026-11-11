@@ -41,7 +41,6 @@ export const auditLog: RequestHandler = (req: Request, res: Response, next) => {
   if (SAFE_METHODS.has(req.method) || shouldSkip(req.path)) return next();
 
   const start = Date.now();
-  const userId = req.session?.userId ?? null;
   const ip = (req.ip || req.socket.remoteAddress || "").toString().slice(0, 64);
   const userAgent = (req.header("user-agent") || "").slice(0, 1024);
   const bodyHash = req.rawBody ? sha256(String(req.rawBody)).slice(0, 64) : null;
@@ -52,6 +51,9 @@ export const auditLog: RequestHandler = (req: Request, res: Response, next) => {
       // error log already captures these.
       return;
     }
+    // Read at finish, not at entry: authGate runs after this middleware and
+    // is what sets req.userId for bearer-authenticated requests.
+    const userId = req.userId ?? null;
     db.insert(auditLogs)
       .values({
         userId,

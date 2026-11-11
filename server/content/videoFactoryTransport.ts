@@ -62,13 +62,19 @@ export interface MemoryVideoFactoryTransport extends VideoFactoryTransport {
   setReachable(value: boolean): void;
 }
 
-function observationalStatus(jobId: string, state: VideoFactoryExternalState, error?: string | null): VideoFactoryStatus {
+function observationalStatus(
+  jobId: string,
+  state: VideoFactoryExternalState,
+  error?: string | null,
+  extra: Pick<VideoFactoryStatus, "language" | "languageStatus" | "failureCode"> = {},
+): VideoFactoryStatus {
   return {
     contractVersion: VIDEO_FACTORY_CONTRACT_VERSION,
     jobId,
     state,
     observational: true,
     error: error ?? null,
+    ...extra,
   };
 }
 
@@ -308,7 +314,14 @@ export function createFilesystemVideoFactoryTransport(root: string): VideoFactor
       const stateJson = await readJsonIfPresent(stateFile);
       if (stateJson) {
         const observed = parseExternalState(stateJson.status);
-        return observationalStatus(id, observed, typeof stateJson.error === "string" ? stateJson.error : null);
+        const code = typeof stateJson.permanentFailureCode === "string" ? stateJson.permanentFailureCode : null;
+        const rawError = typeof stateJson.error === "string" ? stateJson.error : "";
+        const error = code && rawError && !rawError.includes(code) ? `[${code}] ${rawError}` : rawError || (code ? `[${code}]` : null);
+        return observationalStatus(id, observed, error, {
+          language: typeof stateJson.language === "string" ? stateJson.language : null,
+          languageStatus: typeof stateJson.languageStatus === "string" ? stateJson.languageStatus : null,
+          failureCode: code,
+        });
       }
 
       const outputFile = assertInsideRoot(resolvedRoot, path.join(resolvedRoot, "output", `${id}.mp4`));

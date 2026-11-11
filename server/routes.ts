@@ -27,7 +27,8 @@ import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
 import { upload, validateImageBuffer, validateUploadedImage } from "./middleware/upload";
 import { safeFetch } from "./security/ssrf";
-import { handleLogout } from "./httpHardening";
+import { establishSession, handleLogout } from "./httpHardening";
+import { bearerToken } from "./middleware/authGate";
 
 /**
  * Sanitize HTML before persisting. The Tiptap editor and AI generation both
@@ -55,11 +56,12 @@ function sanitizeHtml(input: unknown): string {
 const uploadsDir = process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-function sessionUserId(req: { session?: { userId?: number } }): number {
+function sessionUserId(req: { userId?: number }): number {
   // Phase 30.1: fail closed. The /api authGate guarantees an authenticated
-  // session before any handler runs; reaching here without one is an
-  // invariant violation, never grounds for defaulting to owner 1.
-  const id = req.session?.userId;
+  // identity (session or Auth0 bearer) on req.userId before any handler runs;
+  // reaching here without one is an invariant violation, never grounds for
+  // defaulting to owner 1.
+  const id = req.userId;
   if (!id) throw new Error("sessionUserId requires an authenticated session");
   return id;
 }
@@ -2491,10 +2493,13 @@ Return ONLY the improved content text. Keep the same format and length constrain
         : "http://localhost:5000/api/auth/google/callback");
 
     passport.use(new GoogleStrategy(
-      { clientID: googleClientId!, clientSecret: googleClientSecret!, callbackURL },
+      // state: true stores a nonce in the session and rejects a callback
+      // without it, so a third party cannot log the browser into their account.
+      { clientID: googleClientId!, clientSecret: googleClientSecret!, callbackURL, state: true },
       async (_accessToken, _refreshToken, profile, done) => {
         try {
-          const email = profile.emails?.[0]?.value || null;
+          const verified = (profile as { _json?: { email_verified?: boolean } })._json?.email_verified === true;
+          const email = verified ? profile.emails?.[0]?.value || null : null;
           const avatar = profile.photos?.[0]?.value || null;
           const user = await findOrCreateGoogleUser(profile.id, email, profile.displayName, avatar);
           done(null, user);
@@ -2518,21 +2523,51 @@ Return ONLY the improved content text. Keep the same format and length constrain
         if (!req.user) {
           return res.redirect("/?error=google_auth_failed");
         }
-        req.session.userId = req.user.id;
-        req.session.save((err: Error | null) => {
-          if (err) {
+        establishSession(req, req.user.id, "google").then(
+          () => {
+            console.log(`[google oauth] login ok user=${req.user.id}`);
+            res.redirect("/");
+          },
+          (err) => {
             console.error("[google oauth] session save failed:", err);
-            return res.redirect("/?error=session_save_failed");
-          }
-          console.log(`[google oauth] login ok user=${req.user.id} sid=${req.session.id}`);
-          res.redirect("/");
-        });
+            res.redirect("/?error=session_save_failed");
+          },
+        );
       }
     );
   }
 
+  const { auth0FromEnv } = await import("./auth0");
+
+  // Everything here is public: the SPA needs the Auth0 domain, client id and
+  // API audience to start Universal Login. There is no client secret.
   app.get("/api/auth/config", (_req, res) => {
-    res.json({ googleEnabled });
+    const auth0 = auth0FromEnv()?.config;
+    res.json({
+      googleEnabled,
+      auth0: auth0 ? { domain: auth0.domain, clientId: auth0.clientId, audience: auth0.audience } : null,
+    });
+  });
+
+  // Auth0 → application session. The SPA presents the access token it got
+  // through Universal Login (Code + PKCE); the server validates it, resolves
+  // users.id and issues a fresh session. From here on the browser uses the
+  // same cookie session as every other login. Login CSRF is not possible:
+  // a cross-site page cannot attach an Authorization header without CORS.
+  app.post("/api/auth/auth0/session", authLimiter, async (req, res) => {
+    const auth0 = auth0FromEnv();
+    const token = bearerToken(req.headers.authorization);
+    if (!auth0 || !token) return res.status(401).json({ message: "Unauthorized" });
+    const result = await auth0.authenticate(token);
+    if (!result.ok) return res.status(result.status).json({ message: result.message });
+    try {
+      await establishSession(req, result.userId, "auth0");
+    } catch (err) {
+      console.error("[auth0] session save failed:", err);
+      return res.status(500).json({ message: "Login failed" });
+    }
+    const user = await getUserById(result.userId);
+    res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
   });
 
   app.post("/api/auth/register", authLimiter, async (req, res) => {
@@ -2548,7 +2583,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const existing = await getUserByEmail(email);
       if (existing) return res.status(409).json({ message: "An account with that email already exists" });
       const user = await createUser(email, password, name);
-      req.session.userId = user.id;
+      await establishSession(req, user.id, "password");
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title });
     } catch (err: any) {
       console.error("Register error:", err);
@@ -2564,7 +2599,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       if (!user || !user.passwordHash) return res.status(401).json({ message: "Invalid email or password" });
       const valid = await comparePassword(password, user.passwordHash);
       if (!valid) return res.status(401).json({ message: "Invalid email or password" });
-      req.session.userId = user.id;
+      await establishSession(req, user.id, "password");
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
     } catch (err: any) {
       console.error("Login error:", err);
@@ -2582,8 +2617,8 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.get("/api/auth/me", async (req, res) => {
     try {
-      if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
-      const user = await getUserById(req.session.userId);
+      if (!req.userId) return res.status(401).json({ message: "Not authenticated" });
+      const user = await getUserById(req.userId);
       if (!user) return res.status(401).json({ message: "User not found" });
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
     } catch (err: any) {
@@ -2593,11 +2628,11 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.put("/api/auth/me", async (req, res) => {
     try {
-      if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
+      if (!req.userId) return res.status(401).json({ message: "Not authenticated" });
       const { name, title, bio, avatar } = req.body;
       const [updated] = await db.update(usersTable)
         .set({ name, title, bio, avatar, updatedAt: new Date() })
-        .where(eq(usersTable.id, req.session.userId!))
+        .where(eq(usersTable.id, req.userId))
         .returning();
       res.json({ id: updated.id, email: updated.email, name: updated.name, avatar: updated.avatar, title: updated.title, bio: updated.bio });
     } catch (err: any) {

@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, cp } from "fs/promises";
+import { rm, readFile, cp, mkdir, writeFile } from "fs/promises";
+import path from "path";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -37,6 +38,17 @@ async function buildAll() {
 
   console.log("building client...");
   await viteBuild();
+
+  // The public marketing site, as plain static files at the top of dist/ (the
+  // app itself lives in dist/public). The server renders the same pages from
+  // site/render.ts; these files let the site be hosted on its own as well.
+  console.log("building marketing site...");
+  const { renderSite, staticFileFor } = await import("../site/render");
+  for (const [route, page] of Object.entries(renderSite())) {
+    const file = path.join("dist", staticFileFor(route));
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, page.body);
+  }
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));

@@ -448,10 +448,15 @@ describeDb("visual delivery — image publication through X (db)", () => {
       runPublication(publication.id, { ...pubDeps(), owner: "worker-b" }),
       runPublication(publication.id, { ...pubDeps(), owner: "worker-c" }),
     ]);
-    const publishedCount = [a, b, c].filter((r) => r.status === "published").length;
-    const skippedCount = [a, b, c].filter((r) => r.status === "skipped").length;
+    // A delivery that arrives after the first one finished is an idempotent
+    // replay: it returns `status: "published"` with `reused: true` and must not
+    // be counted as a second publish. Whether a racer sees the lease or the
+    // finished row is a scheduling detail, so the assertion is on actual
+    // publishes, not on the mix of "skipped" and "reused".
+    const publishedCount = [a, b, c].filter((r) => r.status === "published" && r.reused === false).length;
+    const accountedFor = [a, b, c].filter((r) => r.status === "skipped" || r.reused === true).length;
     assert.equal(publishedCount, 1, "the DB lease is the sole arbiter — only one delivery actually publishes");
-    assert.equal(publishedCount + skippedCount, 3, "the others are cleanly skipped, never a second post");
+    assert.equal(publishedCount + accountedFor, 3, "the others are cleanly skipped or replayed, never a second post");
 
     const resultRows = await db.select().from(results).where(eq(results.publicationId, publication.id));
     assert.equal(resultRows.length, 1, "exactly one logical Result survives duplicate delivery");

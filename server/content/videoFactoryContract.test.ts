@@ -61,6 +61,22 @@ describe("video-factory.contract.v1", () => {
     const parsed = parseVideoFactoryJobRequest(JSON.parse(serializeVideoFactoryJobRequest(request)));
     assert.equal(parsed.jobId, "cfvg-42");
     assert.equal(parsed.durationMs, 1500);
+    assert.equal(parsed.language, undefined);
+    assert.equal(serializeVideoFactoryJobRequest(request).includes("\"language\""), false);
+  });
+
+  it("sends a non-English language and leaves the voice id for the factory", () => {
+    const request = buildVideoFactoryJobRequest({
+      generationId: 42,
+      snapshot: snapshot({ language: "hi", script: "\u0915\u0941\u092c\u0947\u0930\u0928\u0947\u091f\u094d\u0938" }),
+    });
+    assert.equal(request.language, "hi");
+    const parsed = parseVideoFactoryJobRequest(JSON.parse(serializeVideoFactoryJobRequest(request)));
+    assert.equal(parsed.language, "hi");
+    assert.throws(
+      () => buildVideoFactoryJobRequest({ generationId: 1, snapshot: snapshot({ language: "ta" }) }),
+      InvalidVisualInputError,
+    );
   });
 
   it("rejects unsupported contract versions", () => {
@@ -200,6 +216,15 @@ describe("video-factory provider adapter", () => {
       const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0, defaultVoiceId: "bf_emma" });
       await assert.rejects(() => generate(provider, 35), JobFailure);
       assert.deepEqual(transport.jobs.get("cfvg-35")?.request.voice, { enabled: true, id: "bf_emma" });
+    });
+
+    it("a Hindi intent does not inherit the English voice id", async () => {
+      const transport = createMemoryVideoFactoryTransport();
+      const provider = createVideoFactoryProvider({ transport, pollBudgetMs: 0 });
+      await assert.rejects(() => generate(provider, 38, { language: "hi" }), JobFailure);
+      const job = transport.jobs.get("cfvg-38")?.request;
+      assert.equal(job?.language, "hi");
+      assert.deepEqual(job?.voice, { enabled: true });
     });
 
     it("a malformed default id fails permanently, names the setting, and submits nothing", async () => {
@@ -370,6 +395,21 @@ describe("video-factory filesystem transport", () => {
       await writeFile(path.join(root, "state", "cfvg-5.json"), JSON.stringify({ id: "cfvg-5", status: "done" }));
       const status = await transport.getStatus("cfvg-5");
       assert.equal(status.state, "done");
+      await writeFile(
+        path.join(root, "state", "cfvg-5.json"),
+        JSON.stringify({
+          status: "failed",
+          permanentFailureCode: "language_blocked",
+          error: "Odia (or) cannot be produced",
+          language: "or",
+          languageStatus: "blocked",
+        }),
+      );
+      const blocked = await transport.getStatus("cfvg-5");
+      assert.equal(blocked.state, "failed");
+      assert.equal(blocked.failureCode, "language_blocked");
+      assert.match(blocked.error ?? "", /\[language_blocked\] Odia/);
+      assert.equal(blocked.languageStatus, "blocked");
       const output = await transport.getOutput("cfvg-5");
       assert.ok(output);
       assert.equal(output.mime, "video/mp4");

@@ -31,6 +31,8 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/no-empty-interface
     interface Request {
       userId?: number;
+      /** Set by authGate when an Auth0 bearer token, not the session, authenticated the request. */
+      authMethod?: "bearer";
     }
   }
 }
@@ -79,6 +81,9 @@ export function requireAuthMiddleware(req: Request, res: Response, next: NextFun
   if (!req.session?.userId) {
     return res.status(401).json({ message: "Unauthorized" });
   }
+  // Handlers read req.userId, so the gate sets it for the session path just as
+  // it does for the bearer path, independent of sessionUser being mounted.
+  req.userId = req.session.userId;
   next();
 }
 

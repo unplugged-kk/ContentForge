@@ -2,6 +2,25 @@
 
 Label: `wayfinder:map` | Workstream: ContentForge only
 
+> **Status 2026-11-11 — decisions 01–08 landed; 09 and 10 are still open.**
+> Tickets 01–08 are closed as *decisions*: ticket 03 (domain model) shipped, and
+> 04/05/06 (research, story, scheduling) shipped as `server/research`,
+> `server/story` and `server/content/*`.
+>
+> **The Phase 1 exit test in ticket 10 is NOT verified end-to-end.** The parts
+> that exist are covered by DB tests against a local fixture:
+> `server/research/verticalSlice.dbtest.ts` drives research → story →
+> opportunity, and `server/content/visualPublication.dbtest.ts` drives artifact →
+> approval → schedule → publication → result with concurrent duplicate delivery.
+> What has not been observed is the exit test's last clauses: a **real X publish**
+> and **a second format produced from the same research without re-research**.
+> Ticket 09 (the Video Factory contract) is also still unresolved.
+>
+> **Do not plan execution from this file.** The ordered backlog now lives in
+> [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) and the capability/verification
+> state in [`../../docs/CAPABILITY_MATRIX.md`](../../docs/CAPABILITY_MATRIX.md).
+> Keep this file for the *rationale* behind the locked decisions.
+
 ## Destination
 
 A complete, decision-locked architecture for the ContentForge Content Intelligence

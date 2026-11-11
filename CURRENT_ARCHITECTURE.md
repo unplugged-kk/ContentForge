@@ -8,12 +8,20 @@
 > is deployed. `JEV_DECISION_MAP.md`'s "As-built status" section is authoritative
 > for what exists, what is wired, and what is verified live; §3 and §9 below
 > describe the pre-decision-layer state and are kept for the rationale.
+>
+> **Verified 2026-11-11** (branch `feat/auth0-migration`): `tsc` clean, 1069 unit
+> tests and 388 DB tests green, production build emits the app plus the public
+> marketing site, and the site's routes were served and fetched. See
+> `docs/CAPABILITY_MATRIX.md` for the verification table. Three statements below
+> were already stale when this was checked and are marked inline: the
+> `selectForResearch` defect (§3.1), the "dead" `composeOpportunityScore` (§3.2),
+> and the "does not exist" quality/expertise rows (§4).
 
 ---
 
 ## 1. Runtime shape
 
-React (client/) + Express 5 (server/) + Postgres/Drizzle + pg-boss + node-cron. Single operator, session auth, CSRF, global auth gate on `/api`.
+React (client/) + Express 5 (server/) + Postgres/Drizzle + pg-boss + node-cron. Single operator, session auth (password, direct Google, or Auth0 Universal Login exchanged for the session; Auth0 bearer tokens also accepted, see `docs/AUTH0.md`), CSRF, global auth gate on `/api`.
 
 One LLM gateway: `server/ai/chat.ts:aiCallRouted` with a task router (`server/ai/router.ts`) — `default` → the configured OpenAI-compatible provider (Command Code in this deployment), `video.*` → Gemini, with graceful fallback to `default` if Gemini is unkeyed. `aiCall()` retains its positional signature and delegates, so ~40 call sites are untouched.
 
@@ -62,11 +70,17 @@ ResearchJob ──▶ Story ──▶ Opportunity[N] ──▶ GenerationJob ─
 | `research_triage` | `decision/jev.ts:triageCandidates` ← `research/triageGate.ts` ← `research/engine.ts:287`, flag `JEV_RESEARCH_GATE=1` | keep `pursue`; else `watch`; else nothing | fail-**open** (keep all) |
 | `format_select` (framing) | `content/framing.ts:createJevFraming` ← `content/automation.ts:985`, flag `JEV_FRAMING=1` | narrow-only over the policy's `format × channel` set | fail-**open** (policy set stands) |
 
-**Known defect:** `selectForResearch` is all-or-nothing — if *any* candidate is `pursue`, every `watch` is discarded.
+**Known defect — FIXED (2026-11-11):** `selectForResearch` used to be all-or-nothing
+— if *any* candidate was `pursue`, every `watch` was discarded. That duplicate
+policy was removed; there is now one keep-set policy in the decision registry,
+env-tunable via `JEV_TRIAGE_KEEP` (default `pursue+watch`), and each triage is
+ledgered.
 
-### 3.2 Jev, built but dead
+### 3.2 Jev, previously dead — WIRED (2026-11-11)
 
-`composeOpportunityScore` (`decision/jev.ts:342`) — a complete, tested weighted composer with **no production caller**. `Opportunity.score` is a free caller-supplied field nobody computes. `decision/intake.ts` + `POST /api/decision/{triage,intake}` exist but are not in any funnel.
+`composeOpportunityScore` (`decision/jev.ts:342`) was a complete, tested weighted composer with **no production caller**. It now backs the `opportunity_score` decision: `content/opportunityScoring.ts` → `decision/decisions/opportunity.ts` → the composer, wired in `content/service.ts` and gated on `JEV_DECISION_ENGINE_ENABLED` + `JEV_OPPORTUNITY_SCORE`. With the flag off, `Opportunity.score` stays null exactly as before — so "no caller" is now a configuration state, not missing code.
+
+`decision/intake.ts` + `POST /api/decision/{triage,intake}` still exist and are still not in any funnel.
 
 ### 3.3 Model-made decisions (the real target list = JC-01…JC-11)
 
@@ -89,8 +103,8 @@ Research `intelligence.ts` ranking (versioned `research-analysis-v1`), `classify
 | Research | **Real** | `server/research/*`, 7 providers |
 | Last30 | **Real, off by default** | `research/providers/last30days.ts`, doctor-gated; `LAST30DAYS_ENABLED=1` |
 | Agent Reach | **Inert** | Only a hardcoded capability record (`research/routes.ts:259`, `available:false`, `local-agent-only`), an e2e assertion, and an agent-side skill under `.agents/skills/agent-reach/`. Never registered, never dispatched. |
-| Content Quality | **Does not exist** | No module scores quality/slop. `approveArtifact` performs no quality check. Nearest: legacy `viral_score` (advisory), `autopilot.computeEngagementScore` (ideas), research source ranking. |
-| Personal Expertise | **Does not exist** | Only `user_profile.niche`/`messagingPillars` via ContextAssembly, `style_profiles` (observed *style*, not domain expertise), and Jev's transient `relevance_to_expertise` question. No table, no module, no output type. |
+| Content Quality | **Exists — CORRECTED 2026-11-11** | `server/intelligence/quality/signals.ts` computes repetition, hedging, link/emoji density and profile-length signals; `content/qualityGate.ts` turns them into a `quality_gate` decision at `submitArtifactForReview`. Still true: `approveArtifact` itself performs no quality check, and a REJECT is a hold, not a score stored on the Artifact. |
+| Personal Expertise | **Exists — CORRECTED 2026-11-11** | `server/intelligence/expertise/{profile,signals}.ts` (`buildExpertiseProfile`, `expertiseAlignment`, `expertiseBand`). Fed from `user_profile` + history via the context reader. Confidence grading is still shallow; there is no domain-history table. |
 | Performance Analytics | **Real** | `results.metrics` → `learning/refresh.ts` → `performance_signals` (impressions, likes, comments, shares, clicks, saves, replies, followers_gained, engagement_rate; **absent ≠ 0**) |
 | Experimentation | **Real** | `content/experimentation/*` — deterministic hash assignment, guardrailed evaluation, `policy_candidates` (human-gated activation) |
 | Autonomy | **Real, bounded** | `content/autonomy/*` — non-configurable "repeatable" evidence floor, oscillation ceiling 1 |
@@ -139,7 +153,7 @@ Tables that matter for a decision layer: `researchJobs/Sources/Evidence/Analyses
 **Jev:** `TYPESAFE_TRANSPORT`, `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`, `TYPESAFE_TIMEOUT_MS`, `JEV_CLI_ENABLED`, `JEV_CLI_PATH`, `JEV_TRIAGE_PURSUE`, `JEV_TRIAGE_WATCH`, `JEV_RESEARCH_GATE`, `JEV_FRAMING`, `CONTENTFORGE_EXPERTISE`, `CONTENTFORGE_AUDIENCE`.
 **AI:** `AI_BASE_URL`/`AI_API_KEY`, `AI_TEXT_MODEL`, `VIDEO_TEXT_MODEL`, `VIDEO_MAIN_MODEL`, `VIDEO_PREMIUM_MODEL`, `VIDEO_GEMINI_FALLBACK`, `GEMINI_*`.
 **Research:** `LAST30DAYS_ENABLED`/`LAST30DAYS_SCRIPT`, `WEB_RESEARCH_URLS`, `VIDEO_RESEARCH_URLS`, `YOUTUBE_CHANNEL_IDS`, `REDDIT_SUBREDDITS`, `HN_TAGS`.
-**Execution:** `XQUIK_ALLOW_WRITE_RETRIES`, `CONTENT_SCHEDULER_ENABLED`, `DISABLE_CRON`, `REGISTRATION_DISABLED`, `TRUST_PROXY`, `SESSION_COOKIE_SECURE`, `CONTENTFORGE_E2E_SERVER`.
+**Execution:** `XQUIK_ALLOW_WRITE_RETRIES`, `CONTENT_SCHEDULER_ENABLED`, `DISABLE_CRON`, `REGISTRATION_DISABLED`, `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` / `AUTH0_AUDIENCE` (public), `TRUST_PROXY`, `SESSION_COOKIE_SECURE`, `CONTENTFORGE_E2E_SERVER`.
 
 ---
 

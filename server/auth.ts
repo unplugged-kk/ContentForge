@@ -2,7 +2,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { db } from "./db";
 import { users, userProfile } from "@shared/schema";
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const scryptAsync = promisify(scrypt);
 
@@ -39,12 +39,17 @@ export async function createUser(email: string, password: string, name: string) 
   return user;
 }
 
+/**
+ * Legacy direct-Google login, kept during the Auth0 migration. `email` must
+ * be null unless Google marked it verified. The google_id match wins; the
+ * email is consulted only when no user carries this google_id, so a row
+ * matched by id is never swapped for a different row matched by email.
+ */
 export async function findOrCreateGoogleUser(googleId: string, email: string | null, name: string, avatar: string | null) {
-  // 1. Try to find by googleId first
-  const conditions: any[] = [eq(users.googleId, googleId)];
-  if (email) conditions.push(eq(users.email, email.toLowerCase()));
-
-  const existing = await db.select().from(users).where(or(...conditions)).limit(1);
+  let existing = await db.select().from(users).where(eq(users.googleId, googleId)).limit(1);
+  if (existing.length === 0 && email) {
+    existing = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+  }
 
   if (existing.length > 0) {
     const user = existing[0];
@@ -78,6 +83,7 @@ export { requireAuthMiddleware as requireAuth } from "./middleware/userContext";
 declare module "express-session" {
   interface SessionData {
     userId?: number;
+    authMethod?: import("./httpHardening").SessionAuthMethod;
     youtubeOAuth?: {
       state: string;
       ownerUserId?: number;

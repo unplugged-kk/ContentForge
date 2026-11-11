@@ -189,8 +189,19 @@ describe("authGate wiring (static pins)", () => {
     // Widening this list is a security decision, so it is pinned. Adding
     // /api/provider-media/ was deliberate (finding F2): exactly one route lives
     // under it, and the grant token is its credential.
-    assert.deepEqual([...PUBLIC_API_PREFIXES], ["/api/auth/", "/api/provider-media/"]);
-    assert.deepEqual([...PUBLIC_API_EXACT], ["/api/csrf-token", "/api/health", "/api/ready"]);
+    assert.deepEqual([...PUBLIC_API_PREFIXES], ["/api/provider-media/"]);
+    assert.deepEqual([...PUBLIC_API_EXACT], [
+      "/api/auth/config",
+      "/api/auth/register",
+      "/api/auth/login",
+      "/api/auth/logout",
+      "/api/auth/google",
+      "/api/auth/google/callback",
+      "/api/auth/auth0/session",
+      "/api/csrf-token",
+      "/api/health",
+      "/api/ready",
+    ]);
   });
 
   it("isPublicApiPath classifies correctly", () => {
@@ -208,6 +219,8 @@ describe("authGate wiring (static pins)", () => {
     assert.equal(isPublicApiPath("/api/accounts"), false);
     assert.equal(isPublicApiPath("/api/images/generate"), false);
     assert.equal(isPublicApiPath("/api"), false);
+    assert.equal(isPublicApiPath("/api/auth/me"), false);
+    assert.equal(isPublicApiPath("/api/auth/anything-new"), false);
   });
 
   it("the gate is mounted before any route registration", () => {
@@ -232,5 +245,104 @@ describe("authGate wiring (static pins)", () => {
       "utf8",
     );
     assert.ok(!/getUserId\(req as never\) \?\? 1/.test(agentText), "agent ownerId() must not default to owner 1");
+  });
+});
+
+describe("authGate bearer mode (HTTP boundary)", () => {
+  let baseUrl = "";
+  let server: ReturnType<typeof express.application.listen> | undefined;
+  const seen: Array<number | undefined> = [];
+
+  before(async () => {
+    const { createAuthGate } = await import("./authGate");
+    const { verifyCsrf } = await import("./csrf");
+    // Stands in for the Auth0 authenticator: two known tokens, one refusal.
+    const authenticate = async (token: string) =>
+      token === "token-for-42"
+        ? ({ ok: true, userId: 42 } as const)
+        : token === "token-unverified"
+          ? ({ ok: false, status: 403, message: "Verify your email address" } as const)
+          : ({ ok: false, status: 401, message: "Unauthorized" } as const);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      const cookie = String(req.headers.cookie ?? "");
+      if (cookie.includes("testsess=valid")) {
+        (req as unknown as { session: { userId: number } }).session = { userId: 7 };
+        req.userId = 7;
+      }
+      next();
+    });
+    app.use(createAuthGate(async () => authenticate));
+    app.use(verifyCsrf);
+    app.get("/api/whoami", (req, res) => {
+      seen.push(req.userId);
+      res.json({ userId: req.userId });
+    });
+    app.post("/api/whoami", (req, res) => res.json({ userId: req.userId }));
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server!.address();
+    baseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+  });
+
+  after(() => new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve())));
+
+  const call = (init: { method?: string; headers?: Record<string, string> } = {}) =>
+    fetch(`${baseUrl}/api/whoami`, { method: init.method ?? "GET", headers: init.headers });
+
+  it("authenticates a valid bearer as the resolved users.id", async () => {
+    const res = await call({ headers: { authorization: "Bearer token-for-42" } });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { userId: 42 });
+  });
+
+  it("rejects an invalid bearer with 401 and never reaches the handler", async () => {
+    const before = seen.length;
+    for (const authorization of ["Bearer nope", "Bearer", "Basic dXNlcjpwYXNz", "token-for-42"]) {
+      const res = await call({ headers: { authorization } });
+      assert.equal(res.status, 401, authorization);
+      assert.deepEqual(await res.json(), { message: "Unauthorized" });
+    }
+    assert.equal(seen.length, before);
+  });
+
+  it("passes an identity refusal through as 403 with its message", async () => {
+    const res = await call({ headers: { authorization: "Bearer token-unverified" } });
+    assert.equal(res.status, 403);
+    assert.deepEqual(await res.json(), { message: "Verify your email address" });
+  });
+
+  it("does not fall back to the session cookie when the bearer is bad", async () => {
+    const res = await call({ headers: { authorization: "Bearer nope", cookie: "testsess=valid" } });
+    assert.equal(res.status, 401);
+  });
+
+  it("uses the bearer identity, not the cookie, when both are present", async () => {
+    const res = await call({ headers: { authorization: "Bearer token-for-42", cookie: "testsess=valid" } });
+    assert.deepEqual(await res.json(), { userId: 42 });
+  });
+
+  it("skips CSRF for a bearer-authenticated write but not a cookie one", async () => {
+    const bearer = await call({ method: "POST", headers: { authorization: "Bearer token-for-42" } });
+    assert.equal(bearer.status, 200);
+    const cookie = await call({ method: "POST", headers: { cookie: "testsess=valid" } });
+    assert.equal(cookie.status, 403);
+  });
+
+  it("rejects every bearer when Auth0 is not configured", async () => {
+    const { createAuthGate } = await import("./authGate");
+    const app = express();
+    app.use(createAuthGate(async () => null));
+    app.get("/api/x", (_req, res) => res.json({ ok: true }));
+    const srv = app.listen(0, "127.0.0.1");
+    await new Promise((r) => srv.once("listening", r));
+    const addr = srv.address();
+    const res = await fetch(`http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/api/x`, {
+      headers: { authorization: "Bearer token-for-42" },
+    });
+    await new Promise((r) => srv.close(r));
+    assert.equal(res.status, 401);
   });
 });

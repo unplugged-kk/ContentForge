@@ -10,7 +10,8 @@ The rule this map encodes:
 
 ## As-built status (AUTHORITATIVE — supersedes the phase plan and the tables below)
 
-Seven decision types are registered. Each has a policy id + version, a declared
+Ten decision types are registered: **seven at lifecycle boundaries** and **three
+in shadow** over legacy paths. Each has a policy id + version, a declared
 fallback class, its own flag, and a ledger row. "Verified live" means observed on
 the production instance, not inferred from tests.
 

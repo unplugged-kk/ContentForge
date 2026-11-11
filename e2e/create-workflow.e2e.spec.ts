@@ -469,7 +469,10 @@ test.describe("Create + Review Workflow (Phase 28.2C)", () => {
     const timeInput = scheduleDialog.locator('input[type="time"]');
 
     if (await dateInput.isVisible()) {
-      await dateInput.fill("2026-10-15");
+      // SchedulePicker rejects a start time at or before now, so this must be a
+      // date relative to today. A fixed date silently expires.
+      const futureDate = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+      await dateInput.fill(futureDate);
       await timeInput.fill("14:30");
       await expect(confirmScheduleBtn).toBeEnabled();
       await confirmScheduleBtn.click();

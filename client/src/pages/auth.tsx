@@ -6,7 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Sparkles, Loader2, Mail, Lock, User, ArrowRight } from "lucide-react";
+import { Sparkles, Loader2, Mail, Lock, User, ArrowRight, ShieldCheck, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useAuth0Session } from "@/lib/auth0";
+import { invalidateCsrfToken } from "@/lib/csrf";
 import { SiGoogle } from "react-icons/si";
 
 export default function AuthPage() {
@@ -17,6 +20,8 @@ export default function AuthPage() {
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
 
+  const auth0 = useAuth0Session();
+  const [auth0Starting, setAuth0Starting] = useState(false);
   const { data: authConfig } = useQuery<{ googleEnabled: boolean }>({
     queryKey: ["/api/auth/config"],
     retry: false,
@@ -30,6 +35,7 @@ export default function AuthPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      invalidateCsrfToken();
       queryClient.setQueryData(["/api/auth/me"], data);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
@@ -44,6 +50,7 @@ export default function AuthPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      invalidateCsrfToken();
       queryClient.setQueryData(["/api/auth/me"], data);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       toast({ title: "Account created", description: `Welcome to ContentForge, ${data.name}` });
@@ -71,6 +78,45 @@ export default function AuthPage() {
         </div>
 
         <Card className="p-6 shadow-lg border-border/50">
+          {auth0?.failure && (
+            <Alert variant="destructive" className="mb-5" data-testid="alert-auth0-failure">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="space-y-2">
+                <p>{auth0.failure}</p>
+                <button
+                  type="button"
+                  className="font-medium underline underline-offset-4"
+                  onClick={() => auth0.logout()}
+                  data-testid="button-auth0-switch-account"
+                >
+                  Use a different account
+                </button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {auth0 && (
+            <div className="mb-5">
+              <Button
+                className="w-full gap-2 font-medium"
+                disabled={auth0Starting}
+                onClick={() => {
+                  setAuth0Starting(true);
+                  auth0.login().catch(() => setAuth0Starting(false));
+                }}
+                data-testid="button-auth0-signin"
+              >
+                {auth0Starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                Sign in or create an account
+              </Button>
+              <div className="flex items-center gap-3 mt-4">
+                <div className="flex-1 border-t border-border" />
+                <span className="text-xs text-muted-foreground">or use your existing login</span>
+                <div className="flex-1 border-t border-border" />
+              </div>
+            </div>
+          )}
+
           {googleEnabled && (
             <div className="mb-5">
               <Button

@@ -12,8 +12,8 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test": "npm run test:unit",
-    "test:unit": "NODE_ENV=test CONTENTFORGE_E2E_SERVER=1 node --import tsx --test \"server/**/*.test.ts\" \"client/src/lib/**/*.test.ts\"",
-    "test:db": "NODE_ENV=test node --import tsx script/test-db-guard.ts && NODE_ENV=test node --import tsx --test --test-concurrency=1 \"server/**/*.dbtest.ts\"",
+    "test:unit": "NODE_ENV=test node --import tsx script/test-db-guard.ts && NODE_ENV=test CONTENTFORGE_E2E_SERVER=1 node --import tsx --import ./server/testing/hermeticEnv.ts --test \"server/**/*.test.ts\" \"client/src/lib/**/*.test.ts\"",
+    "test:db": "NODE_ENV=test node --import tsx script/test-db-guard.ts && NODE_ENV=test CONTENTFORGE_E2E_SERVER=1 node --import tsx --import ./server/testing/hermeticEnv.ts --test --test-concurrency=1 \"server/**/*.dbtest.ts\"",
     "test:e2e:live": "node script/e2e-live.mjs",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
@@ -30,9 +30,11 @@
     "test:e2e:visual": "node script/e2e-visual.mjs",
     "test:e2e:agent": "node script/e2e-agent.mjs",
     "test:e2e:workspace": "node script/e2e-workspace.mjs",
-    "test:media:certify": "node script/media-certify.mjs"
+    "test:media:certify": "node script/media-certify.mjs",
+    "test:e2e:auth0": "node script/e2e-auth0.mjs"
   },
   "dependencies": {
+    "@auth0/auth0-react": "^2.28.2",
     "@copilotkit/react-core": "^1.72.0",
     "@copilotkit/react-ui": "^1.72.0",
     "@jridgewell/trace-mapping": "^0.3.25",
@@ -79,6 +81,7 @@
     "framer-motion": "^11.13.1",
     "helmet": "^8.2.0",
     "isomorphic-dompurify": "^3.18.0",
+    "jose": "^6.2.12",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.453.0",
     "memorystore": "^1.6.7",

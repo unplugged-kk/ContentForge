@@ -12,6 +12,8 @@
  *   error is logged server-side by the caller).
  * - `handleLogout` — destroy the server session AND clear the session cookie
  *   so a logged-out cookie cannot be replayed.
+ * - `establishSession` — issue a fresh session id on every login so an id
+ *   planted before authentication never becomes an authenticated one.
  */
 
 export function resolveSessionSecret(env: NodeJS.ProcessEnv): string {
@@ -73,8 +75,10 @@ export async function readinessPayload(probe: ReadinessProbe): Promise<Readiness
   }
 }
 
+export type SessionAuthMethod = "password" | "google" | "auth0";
+
 export interface LogoutRequest {
-  session?: { destroy: (cb: (err?: unknown) => void) => void };
+  session?: { authMethod?: SessionAuthMethod; destroy: (cb: (err?: unknown) => void) => void };
 }
 
 export interface LogoutResponse {
@@ -85,7 +89,8 @@ export interface LogoutResponse {
 /**
  * Log out: clear the client cookie immediately, then destroy the server-side
  * session. The response is always success — a missing session (or a session
- * store outage) must not leave a usable cookie behind.
+ * store outage) must not leave a usable cookie behind. `idpLogout` tells the
+ * client the session came from Auth0, whose own SSO session it must end too.
  */
 export function handleLogout(
   req: LogoutRequest,
@@ -98,10 +103,37 @@ export function handleLogout(
     ...(opts.secureCookie ? { secure: true } : {}),
   });
   if (!req.session) {
-    res.json({ success: true });
+    res.json({ success: true, idpLogout: false });
     return;
   }
+  const idpLogout = req.session.authMethod === "auth0";
   req.session.destroy(() => {
-    res.json({ success: true });
+    res.json({ success: true, idpLogout });
+  });
+}
+
+export interface RegenerableSession {
+  regenerate: (cb: (err?: unknown) => void) => void;
+  save: (cb: (err?: unknown) => void) => void;
+  userId?: number;
+  authMethod?: SessionAuthMethod;
+}
+
+/**
+ * Replace the session with a new id, then bind the user to it. Anything held
+ * by the pre-login session (CSRF secret, OAuth state) is dropped with it.
+ */
+export function establishSession(
+  req: { session: RegenerableSession },
+  userId: number,
+  authMethod: SessionAuthMethod,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((regenerateErr) => {
+      if (regenerateErr) return reject(regenerateErr);
+      req.session.userId = userId;
+      req.session.authMethod = authMethod;
+      req.session.save((saveErr) => (saveErr ? reject(saveErr) : resolve()));
+    });
   });
 }

@@ -44,7 +44,11 @@ async function waitFor(
  */
 async function alignToSingletonWindow(seconds: number): Promise<void> {
   const windowMs = seconds * 1000;
-  while (Date.now() % windowMs > windowMs / 2) {
+  // Land in the first QUARTER of the window, not merely the first half: the
+  // dedupe assertion enqueues twice, and on a loaded full-suite run the gap
+  // between them can cross a window boundary. A quarter leaves 7.5s of margin
+  // on a 10s window.
+  while (Date.now() % windowMs > windowMs / 4) {
     await new Promise((r) => setTimeout(r, 50));
   }
 }

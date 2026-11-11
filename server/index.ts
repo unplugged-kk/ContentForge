@@ -4,6 +4,7 @@ import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
+import { mountSite } from "./site";
 import { createServer } from "http";
 import { pool, db } from "./db";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -319,6 +320,9 @@ app.use((req, res, next) => {
   app.use("/api", (_req, res) => {
     res.status(404).json({ message: "Not found" });
   });
+
+  // Public marketing pages (home + AI agent pages) ahead of the SPA fallback.
+  mountSite(app);
 
   // Standardized error handler: logs full error server-side, returns
   // sanitized message to client. Replaces the prior inline handler so stack

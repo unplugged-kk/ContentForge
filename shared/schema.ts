@@ -421,6 +421,7 @@ export const users = pgTable("users", {
   email: varchar("email", { length: 255 }).unique(),
   passwordHash: text("password_hash"),
   googleId: varchar("google_id", { length: 255 }).unique(),
+  auth0Subject: text("auth0_subject").unique(),
   name: varchar("name", { length: 200 }),
   avatar: text("avatar"),
   bio: text("bio"),
