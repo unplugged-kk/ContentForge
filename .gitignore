@@ -64,7 +64,10 @@ docs/architecture/**/*.png
 # The files stay on disk; they are only excluded from version control.
 #
 # The product deliverable of that run is `site/` + `server/site.ts` + the build
-# wiring, which ARE tracked.
+# wiring, which ARE tracked. The `postiz-*` files are an earlier, flatter variant
+# of the same pages: nothing imports them and the run's own handover says they are
+# not mounted and can be deleted. Kept on disk, out of history.
+/site/postiz-*.ts
 # ---------------------------------------------------------------------------
 /local.txt
 /agent-session.jsonl
