@@ -10,13 +10,13 @@ const STATS_A = [
   { v: "x2", l: "Threads posts", t: "threads", g: "linear-gradient(110deg,#3b16d8,#5a14e0)" },
   { v: "x1", l: "Carousel, 2-10 slides", t: "instagram", g: "linear-gradient(110deg,#4b14d8,#2a0a8a)" },
   { v: "x1", l: "YouTube script", t: "youtube", g: "linear-gradient(110deg,#6a0aa8,#8a0fd0)" },
+  { v: "x5", l: "Shorts concepts", t: "video", g: "linear-gradient(110deg,#5a0ab0,#7a0ad0)" },
 ];
 const STATS_B = [
   { v: "7", l: "Research providers", t: "rss", g: "linear-gradient(110deg,#7a0ad0,#9a14e0)" },
   { v: "50", l: "Sources per research job", t: "web", g: "linear-gradient(110deg,#7a0aa8,#9a12b0)" },
   { v: "1", l: "Approval per exact revision", t: "linkedin", g: "linear-gradient(110deg,#9012b4,#b015b4)" },
   { v: "0", l: "Blind retries after a send", t: "x", g: "linear-gradient(110deg,#b015b4,#c8189a)" },
-  { v: "x5", l: "Shorts concepts", t: "video", g: "linear-gradient(110deg,#c8189a,#d81b80)" },
   { v: "x10", l: "Quote cards", t: "instagram", g: "linear-gradient(110deg,#8a0f6f,#5c0a50)" },
 ];
 
@@ -26,17 +26,17 @@ const stat = (s: (typeof STATS_A)[number]) =>
 const WHO = [
   {
     icon: '<svg viewBox="0 0 76 76" fill="none" stroke="#e879f9" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="38" cy="38" r="33"/><path d="M26 30v3M48 29v4M24 44c8 10 22 10 30 0-10 2-20 2-30 0Z"/></svg>',
-    h: "Creators and solo operators",
+    h: "AI-first marketers",
     p: "Write in your own voice without starting from a blank page. ContentForge researches the topic, drafts every format and waits for your approval.",
   },
   {
     icon: '<svg viewBox="0 0 76 76" fill="none" stroke="#a78bfa" stroke-width="2.4" stroke-linejoin="round" aria-hidden="true"><path d="M14 26h48l-4 42H18l-4-42Z"/><path d="M28 26c0-14 20-14 20 0"/></svg>',
-    h: "Developers and agent builders",
+    h: "Developers",
     p: "Drive the whole lifecycle through typed domain tools: research, stories, artifacts, approvals and publications. Agents never write to the database.",
   },
   {
     icon: '<svg viewBox="0 0 76 76" fill="none" stroke="#6366f1" stroke-width="2.4" stroke-linejoin="round" aria-hidden="true"><path d="M8 36 38 8l30 28M18 28v40h40V28"/><path d="M32 68V50h12v18"/></svg>',
-    h: "Content teams",
+    h: "Automation teams",
     p: "Run research on a schedule, review a daily opportunity feed, batch-approve a campaign and let durable publishing handle the rest.",
   },
 ];
@@ -50,33 +50,33 @@ function winMock(title: string, glyph: string, ask: string, bg: string): string 
 const VIA = [
   {
     cls: "g-gpt", glyph: "chatgpt", h: "Via ChatGPT", href: "/chatgpt",
-    p: "Use OpenAI models as the writing backend, and drive ContentForge from ChatGPT once the MCP connector ships.",
+    p: "Use OpenAI models as the writing backend today. The ChatGPT connector is planned.",
     mock: winMock("ChatGPT", AGENT_GLYPH.chatgpt, "Research AI search trends and draft 3 LinkedIn posts in my voice.", "#3f9f87"),
   },
   {
     cls: "g-claude flip", glyph: "claude", h: "Via Claude", href: "/claude",
-    p: "Plan research, review evidence and request drafts from Claude through the ContentForge domain tools.",
+    p: "Plan research, review evidence and request drafts from Claude models. The Claude connector is planned.",
     mock: winMock("Claude", AGENT_GLYPH.claude, "Turn yesterday's story into a 7-post campaign for next week.", "#d4774d"),
   },
   {
-    cls: "g-code", glyph: "code", h: "Via your terminal",
-    p: "Script the lifecycle with the same API the app uses: research, generate, approve and schedule.",
+    cls: "g-code", glyph: "code", h: "Via Claude Code",
+    p: "Script the lifecycle from your terminal with the same API the app uses: research, generate, approve and schedule.",
     mock: `<div class="mock"><div class="term"><div class="dots"><i></i><i></i><i></i></div><div class="box">ContentForge agent <span>· 29 domain tools</span><br><br><span>&gt; research_topic "creator economy"</span><br><span>&gt; repurpose_story st_42 --formats x_thread,linkedin</span><br><span>&gt; approve_artifact art_901@rev3</span><br><br>Recent activity<br><span>1h ago  4 artifacts awaiting approval</span></div></div></div>`,
   },
   {
-    cls: "g-gem flip", glyph: "gemini", h: "Via Gemini",
-    p: "Video research and transcript extraction route to Gemini, with graceful fallback to your default provider.",
-    mock: winMock("Gemini", AGENT_GLYPH.gemini, "Extract the claims from this video and find what is new.", "#3c6be0"),
+    cls: "g-gem flip", glyph: "dots", h: "Via Grok Bot",
+    p: "Point any OpenAI-compatible model, including Grok, at ContentForge and choose a model per task.",
+    mock: winMock("Grok Bot", AGENT_GLYPH.dots, "Find my best post from last month and turn it into a fresh LinkedIn post.", "#222"),
   },
   {
-    cls: "g-open", glyph: "local", h: "Via any OpenAI-compatible model",
-    p: "Point ContentForge at OpenRouter, a local model or your own gateway. One router, per-task model choice.",
-    mock: `<div class="mock"><div class="win" style="grid-template-columns:1fr"><div class="body"><b style="color:#fff">AI providers</b><div class="msg" style="top:56px;left:20px;right:20px;max-width:none;background:#2a2a2a">default → openai-compatible · text model</div><div class="msg" style="top:110px;left:20px;right:20px;max-width:none;background:#2a2a2a">video.* → gemini · fallback default</div><div class="msg" style="top:164px;left:20px;right:20px;max-width:none;background:#2a2a2a">Usage and cost logged per call</div></div></div></div>`,
+    cls: "g-open", glyph: "local", h: "Via Hermes / OpenClaw",
+    p: "Run an always-on agent against the same tools, with approval gates before anything publishes.",
+    mock: winMock("Hermes Agent", AGENT_GLYPH.local, "Watch these 4 sources and draft a post when something new appears.", "#7c3aed"),
   },
   {
-    cls: "g-agent flip", glyph: "workspace", h: "Via the Agent workspace",
-    p: "Chat with an agent that researches, writes, critiques and asks for your approval before anything is published.",
-    mock: winMock("Agent", AGENT_GLYPH.workspace, "What should I publish this week?", "#7c3aed"),
+    cls: "g-agent flip", glyph: "workspace", h: "Via Muse",
+    p: "Chat with the in-app agent that researches, writes, critiques and asks for your approval.",
+    mock: winMock("Muse", AGENT_GLYPH.gemini, "What should I publish this week?", "#3c6be0"),
   },
 ];
 
@@ -118,7 +118,7 @@ export const HOME_FAQ: [string, string][] = [
 
 export const faqList = (items: [string, string][]) =>
   `<div class="faq-list">${items
-    .map(([q, a]) => `<details><summary><h3>${q}</h3>${I.plus}</summary><p>${a}</p></details>`)
+    .map(([q, a], i) => `<details${i === 0 ? " open" : ""}><summary><h3>${q}</h3>${I.plus}</summary><p>${a}</p></details>`)
     .join("")}</div>`;
 
 export function renderHome(): string {
@@ -130,7 +130,7 @@ export function renderHome(): string {
       .join("")}${ghostEnds ? '<span class="big-tile ghost"></span>' : ""}</div>`;
 
   const body = `
-<section class="hero" aria-labelledby="hero-title">
+<section class="hero" aria-labelledby="hero-title"><div class="hero-in">
   <span class="hero-doodle left">${DOODLE.squiggle}</span>
   <span class="hero-doodle right">${DOODLE.sparkle}</span>
   <div class="laurels" aria-label="Research once, create many, publish everywhere">
@@ -139,14 +139,14 @@ export function renderHome(): string {
       return `<div class="laurel">${DOODLE.laurel}<span>${a}<b>${b}</b></span><span style="transform:scaleX(-1)">${DOODLE.laurel}</span></div>`;
     }).join("")}
   </div>
-  <h1 id="hero-title" class="head">Run your content engine on autopilot with
-    <span class="rotor" data-rotor="${esc(JSON.stringify(ROTOR))}"><span class="rotor-icon" style="background:${first.bg}">${first.svg}</span><span class="rotor-word">${first.name}</span></span></h1>
+  <h1 id="hero-title" class="head">Run your social media on autopilot with AI agents
+    <span class="rotor" data-rotor="${esc(JSON.stringify(ROTOR))}"><span class="rotor-icon" style="background:${first.bg}">${first.svg}</span><span class="rotor-word">${first.name}</span><span class="sr-only"> ${ROTOR.slice(1).map((r) => r.name).join(" ")} AI agents</span></span></h1>
   <p class="hero-sub">ContentForge is the content operating system: AI agents discover topics, research them with sources and draft every format, and you approve everything before it ships.</p>
   <a class="btn btn-light btn-lg" href="${APP_PATH}">Start your first research for $0 ${I.arrows}</a>
   <div class="channel-strip" aria-label="Channels and research sources">${strip.map((t) => tile(t)).join("")}</div>
-</section>
+</div></section>
 
-<section class="demo-sec" aria-label="Product demo">
+<section class="demo-sec" aria-label="Product demo"><div class="demo-in">
   <div class="toggle-row"><span id="mode-a">I need agentic research</span>
     <button class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="mode-a mode-b" data-mode-switch
       data-agent-title="Tell AI What You Want to Create" data-classic-title="Research once. Publish everywhere."
@@ -171,9 +171,9 @@ export function renderHome(): string {
     </div></div>
   </div>
   <a class="support" href="https://github.com/unplugged-kk/ContentForge/issues">${I.github}GitHub Support</a>
-</section>
+</div></section>
 
-<section class="sec" id="repurposing" aria-labelledby="stats-title">
+<section class="sec flush" id="repurposing" aria-labelledby="stats-title">
   <p id="stats-title" class="stats-title head">One story becomes a whole campaign</p>
   <div class="marquee"><div class="track">${[...STATS_A, ...STATS_A, ...STATS_A, ...STATS_A].map(stat).join("")}</div></div>
   <div class="marquee rev"><div class="track">${[...STATS_B, ...STATS_B, ...STATS_B, ...STATS_B].map(stat).join("")}</div></div>
@@ -190,6 +190,7 @@ export function renderHome(): string {
   <div class="poster">
     <div class="poster-kicker">RESEARCH ONCE</div>
     <div class="poster-big" aria-hidden="true">PUBLISH</div>
+    <p class="life-line">Research, story, opportunity, policy, artifact, approval, schedule, result</p>
     <ol class="lifecycle" aria-label="Lifecycle">${LIFECYCLE.map((s, i) => `<li class="step"><i>${i + 1}</i>${s}</li>`).join("")}</ol>
   </div>
 </div></section>
@@ -212,7 +213,7 @@ export function renderHome(): string {
 </div></section>
 
 <section class="tools" id="distribution" aria-labelledby="tools-title"><div class="wrap">
-  <h2 id="tools-title" class="sec-title head">All the tools you need for content<br>growth in one place</h2>
+  <h2 id="tools-title" class="sec-title head">All the tools you need for social media<br>growth in one place</h2>
   <span class="underline">${DOODLE.underline}</span>
   <div class="tools-grid">
     <article class="tool t-plan"><span class="tag">Planning</span><h3 class="head">Schedule everywhere at once</h3>

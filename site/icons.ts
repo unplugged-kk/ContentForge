@@ -63,11 +63,16 @@ export const AGENT_GLYPH: Record<string, string> = {
 };
 
 export const ROTOR: { name: string; bg: string; svg: string }[] = [
-  { name: "ChatGPT", bg: "#3f9f87", svg: AGENT_GLYPH.chatgpt.replace("currentColor", "#fff") },
-  { name: "Claude", bg: "#d4774d", svg: AGENT_GLYPH.claude.replace("currentColor", "#fff") },
-  { name: "Gemini", bg: "#3c6be0", svg: AGENT_GLYPH.gemini.replace("currentColor", "#fff") },
-  { name: "AI agents", bg: "#7c3aed", svg: AGENT_GLYPH.workspace.replace(/currentColor/g, "#fff") },
-];
+  ["ChatGPT", "#3f9f87", "chatgpt"],
+  ["Claude", "#d4774d", "claude"],
+  ["Claude Code", "#c2603a", "code"],
+  ["Grok Bot", "#222222", "dots"],
+  ["Muse", "#3c6be0", "gemini"],
+  ["OpenAI dots", "#6d3ef0", "dots"],
+  ["OpenClaw", "#b0343a", "local"],
+  ["Hermes Agent", "#7c3aed", "workspace"],
+  ["AI agents", "#7c3aed", "workspace"],
+].map(([name, bg, g]) => ({ name, bg, svg: AGENT_GLYPH[g].replace(/currentColor/g, "#fff") }));
 
 /** Channels ContentForge publishes to (registered adapters) and sources it researches. */
 export type Tile = { key: string; label: string; glyph: string; bg: string; fg?: string; kind: "channel" | "source" | "service" };

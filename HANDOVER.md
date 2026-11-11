@@ -20,7 +20,7 @@ Two requests, one session:
 
 ## Honest state
 
-- Visual match to the reference, measured by `rebuild_check`: **46% on the current ContentForge-branded build** (home 38%, `/chatgpt` 53%, `/dots` 48%, `/claude` 47%, `/claude-cowork` 44%), up from 39% for the flatter Postiz-labelled variant (`site/postiz-*.ts`, not committed, not mounted). The target is 90%, so this is **not done**.
+- Visual match to the reference, measured by `rebuild_check`: **47% on the current ContentForge-branded build** (home 36%, `/chatgpt` 52%, `/dots` 51%, `/claude` 48%, `/claude-cowork` 48%; structure similarity 59-68%). The target is 90%, so this is **not done**. Remaining gap is mostly imagery (the reference uses illustrated mascots and product screenshots; ours are CSS mockups), brand-specific wording, the "DM" font family name, and card counts per row at tablet widths.
 - Type check and the new route test pass. The existing test suites (`npm test`, `npm run test:db`, e2e) were **not run**.
 - The ContentForge MCP server does not exist. Only an MCP *client* does (`server/agent/external.ts`). The agent pages show a placeholder URL and say "planned".
 

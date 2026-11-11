@@ -58,18 +58,13 @@ export function header(): string {
 
 export function footer(cta = true): string {
   return `<footer class="site-footer">
-  <div class="wrap">
+  <div class="fwrap">
     ${cta ? `<div class="foot-cta">
       <h3 class="head">Ready to get started?</h3>
       <p>Research once, create many formats, publish everywhere and learn what works.</p>
       <a class="btn btn-light" href="${APP_PATH}">Start for $0 ${I.arrows}</a>
     </div>
-    <div class="foot-art" aria-hidden="true">
-      <div><b>Research</b>Sourced evidence with provenance</div>
-      <div><b>Story</b>Editorial meaning, reusable</div>
-      <div><b>Artifacts</b>Immutable, approved revisions</div>
-      <div><b>Results</b>Measured, fed back into learning</div>
-    </div>` : ""}
+    <div class="foot-art" aria-hidden="true"><b>Research</b> <span>to</span> <b>Story</b> <span>to</span> <b>Artifact</b> <span>to</span> <b>Approval</b> <span>to</span> <b>Schedule</b> <span>to</span> <b>Result</b></div>` : ""}
     <div class="foot-grid">
       <div class="foot-brand">
         <a class="logo" href="/">${LOGO}<span>contentforge</span></a>
@@ -113,9 +108,9 @@ export function page(opts: { title: string; description: string; path: string; b
 <body>
 <a class="sr-only" href="#main">Skip to content</a>
 ${header()}
-<main id="main">
+<main id="main"><div class="mx">
 ${opts.body}
-</main>
+</div></main>
 ${footer(opts.footerCta ?? true)}
 </body>
 </html>`;

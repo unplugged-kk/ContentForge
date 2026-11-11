@@ -42,18 +42,18 @@ const COMMON_FAQ = (n: string): [string, string][] => [
 ];
 
 const CAPS = (n: string): [string, string, string][] => [
-  ["chat", "Just ask in plain English", `Tell ${n} what to research and what to make. It calls research_topic, create_story and repurpose_story for you.`],
+  ["chat", "Just Ask in Plain English", `Tell ${n} what to research and what to make. It calls research_topic, create_story and repurpose_story for you.`],
   ["globe", "Research with sources", "Seven providers, deduplicated and ranked, with evidence and provenance kept apart from interpretation."],
   ["layers", "One story, every format", "Threads, LinkedIn posts, carousels, newsletters and scripts adapted to each platform."],
-  ["calendar", "Plan and schedule ahead", "Approved revisions go into durable schedules that survive restarts and never double-post."],
-  ["image", "Images and video requests", "Generate brand-aware images, and send video scripts to Video Factory through a versioned contract."],
-  ["lock", "Stays in your account", "Owner-scoped tools, audit logs and a human approval gate on everything that publishes."],
+  ["calendar", "Plan & Schedule Ahead", "Approved revisions go into durable schedules that survive restarts and never double-post."],
+  ["image", "Generate Images & Videos", "Generate brand-aware images, and send video scripts to Video Factory through a versioned contract."],
+  ["lock", "Stays in Your Account", "Owner-scoped tools, audit logs and a human approval gate on everything that publishes."],
 ];
 
 const AGENTS: AgentCfg[] = [
   {
     path: "/chatgpt", name: "ChatGPT", glyph: "chatgpt", theme: "t-gpt", acc: "#5fe3c6", orb: "#3f9f87",
-    title: "Create and Schedule Content with ChatGPT",
+    title: "Schedule Social Media Posts with ChatGPT",
     bullets: ["OpenAI models as your ContentForge writing backend today", "Research, draft and schedule by asking", "Publish to X, LinkedIn, Threads, Instagram and YouTube"],
     primary: "Set up OpenAI", where: "Settings → AI providers",
     asks: [
@@ -69,7 +69,7 @@ const AGENTS: AgentCfg[] = [
   },
   {
     path: "/dots", name: "OpenAI dots", glyph: "dots", theme: "t-dots", acc: "#b69cff", orb: "#6d3ef0",
-    title: "Run Your Content Engine with OpenAI dots",
+    title: "Schedule Social Media Posts with OpenAI dots",
     bullets: ["Hand an always-on agent your recurring content jobs", "It researches and drafts on a schedule, 24/7", "Your approval rules decide what ships"],
     primary: "Set up automation", where: "Automation → Policies",
     asks: [
@@ -85,7 +85,7 @@ const AGENTS: AgentCfg[] = [
   },
   {
     path: "/claude", name: "Claude", glyph: "claude", theme: "t-claude", acc: "#ffac85", orb: "#d4774d",
-    title: "Create Content with Claude",
+    title: "Post to Social Media from Claude",
     bullets: ["Use Claude models through any OpenAI-compatible gateway", "Draft, critique and repurpose by asking", "Every draft waits for your approval"],
     primary: "Set up a provider", where: "Settings → AI providers",
     asks: [
@@ -101,7 +101,7 @@ const AGENTS: AgentCfg[] = [
   },
   {
     path: "/claude-cowork", name: "Claude Cowork", glyph: "cowork", theme: "t-claude", acc: "#ffac85", orb: "#b85a2e",
-    title: "Run Content Workflows with Claude Cowork",
+    title: "Schedule Social Media Posts with Claude Cowork",
     bullets: ["A desktop agent for your recurring content work", "Research, draft and cross-post across channels", "No terminal and no direct database access"],
     primary: "Read the docs", where: "Docs → Agent runtime",
     asks: [
@@ -117,6 +117,18 @@ const AGENTS: AgentCfg[] = [
   },
 ];
 
+const MORE_AGENTS: [string, string, string, string][] = [
+  ["Claude Code", "Terminal scripts today, MCP planned", "code", "#c2603a"],
+  ["Codex", "Terminal scripts today, MCP planned", "code", "#3b5bdb"],
+  ["Cursor", "MCP planned", "local", "#2b2b2b"],
+  ["Gemini", "Gemini models via the AI router", "gemini", "#3c6be0"],
+  ["Hermes Agent", "Planned via MCP", "workspace", "#7c3aed"],
+  ["OpenClaw", "Planned via MCP", "local", "#b0343a"],
+  ["Grok Bot", "OpenAI-compatible models today", "dots", "#222222"],
+  ["Muse", "Planned via MCP", "gemini", "#3c6be0"],
+  ["MCP Server", "Planned, roadmap phase B", "workspace", "#6d3ef0"],
+  ["AI Agents CLI", "Domain tools over the API", "code", "#444444"],
+]
 const T = Object.fromEntries(TILES.map((t) => [t.key, t]));
 const CH = ["x", "linkedin", "threads", "instagram", "youtube"];
 
@@ -143,7 +155,7 @@ function renderAgent(a: AgentCfg): string {
   const caps = CAPS(a.name);
   const firstChip = a.chips[0];
   const body = `
-<section class="a-hero ${a.theme}" style="--acc:${a.acc}" aria-labelledby="a-title"><div class="wrap">
+<div class="a-hero ${a.theme}" style="--acc:${a.acc}"><div class="wrap">
   <div>
     <div class="a-badge"><i>${AGENT_GLYPH[a.glyph]}</i>${a.name} + ContentForge</div>
     <h1 id="a-title" class="head">${a.title}</h1>
@@ -152,12 +164,12 @@ function renderAgent(a: AgentCfg): string {
     <p class="a-note">ContentForge is the AI-native content operating system that ${a.name} can drive through domain tools. Every publish passes a human approval gate. Part of the <a href="${DOCS_URL}">ContentForge agent docs</a>.</p>
   </div>
   ${heroArt(a)}
-</div></section>
+</div></div>
 
 <div style="--acc:${a.acc}">
-<section class="a-sec" aria-labelledby="s-connect">
-  <h2 id="s-connect" class="head">How do I connect ContentForge to ${a.name}?</h2>
-  <p class="lead">Today you use ${a.name} inside ContentForge by configuring it in ${a.where}. Next, the ContentForge MCP server will let ${a.name} call the same 29 domain tools from its own app, signed in to your server over OAuth.</p>
+<section class="a-sec" aria-labelledby="s-connect"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-connect" class="head">How do I connect ContentForge to ${a.name}?</h2>
+  <p class="lead">Today you use ${a.name} inside ContentForge by configuring it in ${a.where}. Next, the ContentForge MCP server will let ${a.name} call the same 29 domain tools from its own app, signed in to your server over OAuth.</p></header>
   <div class="steps2">
     <div class="panel"><div class="panel-top"><span class="n">1</span>Connect<small>about a minute</small></div>
       <h3 class="head">Add ContentForge to ${a.name}</h3>
@@ -177,72 +189,74 @@ function renderAgent(a: AgentCfg): string {
     <li><i>3</i>Open the Agent workspace and ask for research, drafts or a plan.</li>
     <li><i>4</i>Review the exact revision in the approval inbox, then schedule it.</li>
   </ol>
-</section>
+</div></section>
 
-<section class="band ${a.theme}" aria-labelledby="s-band"><div class="wrap">
+<div class="band ${a.theme}" role="region" aria-labelledby="s-band"><div class="wrap">
   <h2 id="s-band" class="head">One ${a.name} connection reaches every channel you run</h2>
   <p class="lead">Connect your channels in ContentForge once. From then on ${a.name} can research, draft and schedule for any of them, and ContentForge publishes at the time you set.</p>
   ${orbit(a)}
-</div></section>
+</div></div>
 
-<section class="a-sec" aria-labelledby="s-compare">
-  <h2 id="s-compare" class="head">${a.compare.h}</h2>
-  <p class="lead">Start in the Agent workspace today. Move to the connector when it ships if you prefer to stay in ${a.name}.</p>
+<section class="a-sec" aria-labelledby="s-compare"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-compare" class="head">${a.compare.h}</h2>
+  <p class="lead">Start in the Agent workspace today. Move to the connector when it ships if you prefer to stay in ${a.name}.</p></header>
   <div class="table" role="table"><div class="tr" role="row"><span role="columnheader"></span><span role="columnheader">Agent workspace</span><span role="columnheader">MCP connector</span></div>
     ${a.compare.rows.map((r) => `<div class="tr" role="row">${r.map((c) => `<span role="cell">${c}</span>`).join("")}</div>`).join("")}</div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-caps">
-  <h2 id="s-caps" class="head">What can ${a.name} do with ContentForge?</h2>
-  <p class="lead">Research, create, repurpose, schedule and measure, all through the domain tools it discovers once connected.</p>
+<section class="a-sec" aria-labelledby="s-caps"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-caps" class="head">What can ${a.name} do with ContentForge?</h2>
+  <p class="lead">Research, create, repurpose, schedule and measure, all through the domain tools it discovers once connected.</p></header>
   <div class="cards3">${caps.map(([ic, h, p]) => `<div class="fcard"><span class="ic">${(I as Record<string, string>)[ic]}</span><h3 class="head">${h}</h3><p>${p}</p></div>`).join("")}</div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-mcp">
-  <h2 id="s-mcp" class="head">What are the ContentForge domain tools?</h2>
-  <p class="lead">The same typed tools power the Agent workspace and the planned MCP server. They validate input, check ownership and return a structured envelope; agents never touch the database.</p>
+<section class="a-sec" aria-labelledby="s-mcp"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-mcp" class="head">What are the ContentForge domain tools?</h2>
+  <p class="lead">The same typed tools power the Agent workspace and the planned MCP server. They validate input, check ownership and return a structured envelope; agents never touch the database.</p></header>
   <div class="cards2">
     <div class="fcard"><span class="ic">${I.layers}</span><h3 class="head">How ${a.name} uses ContentForge</h3><p>research_topic, research_url, create_story, find_opportunities, repurpose_story, generate_artifact, generate_image, approve_artifact, schedule_publication, get_analytics and more.</p></div>
     <div class="fcard"><span class="ic">${I.shield}</span><h3 class="head">Guardrails it cannot skip</h3><p>Only approved revisions publish, research text is data and never instructions, rate limits apply, and uncertain publications are reconciled before any retry.</p></div>
   </div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-ask">
-  <h2 id="s-ask" class="head">What can you ask ${a.name} to make?</h2>
+<section class="a-sec" aria-labelledby="s-ask"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-ask" class="head">What can you ask ${a.name} to make?</h2></header>
   <div class="cards4">${a.asks.map((x) => `<div class="fcard"><span class="ic">${I.edit}</span><h3 class="head">${x.h}</h3><q>${x.q}</q></div>`).join("")}</div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-plat">
-  <h2 id="s-plat" class="head">Which platforms can ${a.name} reach?</h2>
+<section class="a-sec" aria-labelledby="s-plat"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-plat" class="head">Which platforms can ${a.name} reach?</h2></header>
   <div class="plats">${TILES.map((t) => `<div class="plat">${tile(t)}<span>${t.label}<small>${t.kind === "channel" ? "Publish" : t.kind === "source" ? "Research" : "Video service"}</small></span></div>`).join("")}</div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-same">
-  <h2 id="s-same" class="head">${a.same.q}</h2>
+<section class="a-sec" aria-labelledby="s-same"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-same" class="head">${a.same.q}</h2></header>
   <div class="cards3">${a.same.cards.map(([h, p]) => `<div class="fcard"><h3 class="head" style="margin-top:0">${h}</h3><p>${p}</p></div>`).join("")}</div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-trouble">
-  <h2 id="s-trouble" class="head">Pricing, security and troubleshooting</h2>
+${a.path === "/claude" ? `<section class="a-sec" aria-labelledby="s-trouble"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-trouble" class="head">Pricing, security and troubleshooting</h2></header>
   <div class="cards3">
     <div class="fcard"><span class="ic">${I.check}</span><h3 class="head">How much does it cost?</h3><p>ContentForge is self-hosted with no subscription. You pay only your own model provider and any channel API costs, and AI usage is logged per call.</p></div>
     <div class="fcard"><span class="ic">${I.shield}</span><h3 class="head">How is access secured?</h3><p>Session or Auth0 sign-in, CSRF protection, an authentication gate on every API route, owner-scoped data and audit logs.</p></div>
     <div class="fcard"><span class="ic">${I.search}</span><h3 class="head">Something not working?</h3><p>Check the provider in Settings → AI providers, the channel connection in Settings, and the run history in the Agent workspace.</p></div>
   </div>
-</section>
+</div></section>
 
-<section class="a-sec" aria-labelledby="s-others">
-  <h2 id="s-others" class="head">Other AI agents that work with ContentForge</h2>
-  <div class="agents">${AGENT_PAGES.map((p) => `<a href="${p.path}"${p.path === a.path ? ' aria-current="page"' : ""}><i style="background:${p.bg}">${AGENT_GLYPH[p.glyph]}</i>${p.name}</a>`).join("")}<a href="${REPO_URL}"><i style="background:#333">${I.github}</i>Your own agent</a></div>
-</section>
+` : ""}
 
-<section class="a-sec" aria-labelledby="s-faq">
-  <h2 id="s-faq" class="head">Frequently asked questions about ${a.name} and ContentForge</h2>
+<section class="a-sec" aria-labelledby="s-others"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-others" class="head">Other AI agents that work with ContentForge</h2></header>
+  <div class="agents">${AGENT_PAGES.map((p) => `<a href="${p.path}"${p.path === a.path ? ' aria-current="page"' : ""}><i style="background:${p.bg}">${AGENT_GLYPH[p.glyph]}</i><span>${p.name}<small>${p.note}</small></span></a>`).join("")}${MORE_AGENTS.map(([n, d, g, bg]) => `<div class="soon"><i style="background:${bg}">${AGENT_GLYPH[g]}</i><span>${n}<small>${d}</small></span></div>`).join("")}<a href="${REPO_URL}"><i style="background:#333">${I.github}</i><span>Your own agent<small>Use the API directly</small></span></a></div>
+</div></section>
+
+<section class="a-sec" aria-labelledby="s-faq"><div class=\"wrap\">
+  <header class="sec-head"><h2 id="s-faq" class="head">Frequently asked questions about ${a.name} and ContentForge</h2></header>
   ${faqList(a.faq)}
-</section>
+</div></section>
 
 <section class="a-cta ${a.theme}" aria-labelledby="s-cta"><div class="wrap">
-  <h2 id="s-cta" class="head">Let ${a.name} run your content engine</h2>
+  <h2 id="s-cta" class="head">Let ${a.name} run your social media</h2>
   <p>Research once, create every format and publish after your approval.</p>
   <div class="a-btns"><a class="btn btn-light" href="${APP_PATH}">${a.primary}</a><a class="btn btn-ghost" href="${APP_PATH}">Start for $0 ${I.arrows}</a></div>
 </div></section>
