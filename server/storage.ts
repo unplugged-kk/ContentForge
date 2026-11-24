@@ -28,6 +28,17 @@ import { db } from "./db";
 import { eq, desc, sql, and, gte, inArray } from "drizzle-orm";
 import { decryptSecret, ensureEncrypted, isEncrypted } from "./middleware/crypto";
 import { forUser } from "./middleware/userContext";
+import { ideaQueryLimit } from "./content/ideaAvailability";
+
+/**
+ * Run 57: the row bound for the unbatched idea query.
+ *
+ * `getDiscoveredIdeas(userId)` feeds the RANKING POOL for every drafting site, so
+ * its limit must cover the eligible set, not page it. This is deliberately far
+ * above the current table size (463 rows) and is a runaway guard, not a policy:
+ * a cap tuned to today's pool silently truncates tomorrow's.
+ */
+export const IDEA_POOL_QUERY_LIMIT = ideaQueryLimit(463, 4, 5000);
 
 /**
  * Transparent decryption helper for connected_accounts rows. Stored values
@@ -108,7 +119,7 @@ export interface IStorage {
 
   createReferenceContent(userId: number, rc: InsertReferenceContent): Promise<ReferenceContent>;
 
-  getDiscoveredIdeas(userId: number, batchId?: string): Promise<DiscoveredIdea[]>;
+  getDiscoveredIdeas(userId: number, batchId?: string, limit?: number): Promise<DiscoveredIdea[]>;
   createDiscoveredIdeas(userId: number, ideas: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]>;
   updateDiscoveredIdeaStatus(userId: number, id: number, status: string): Promise<DiscoveredIdea | undefined>;
 
@@ -465,11 +476,27 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getDiscoveredIdeas(userId: number, batchId?: string): Promise<DiscoveredIdea[]> {
+  /**
+   * Run 57: the no-batchId branch used to be `LIMIT 50`, which was not a page size
+   * but a silent cap on the RANKING POOL. Three drafting sites call this to build
+   * the pool they rank, and the filters (status / niche / viral) run AFTER the
+   * LIMIT, so the loss was not proportional: 50 rows yielded 29 ranked candidates
+   * while the table held 329. Ideas outside the window were not rejected, they were
+   * never seen — 272 of them, 74 with a viral score >= 9.0.
+   *
+   * The limit is now explicit and generous rather than tuned to the pool as it was
+   * on the day it was written. `discoverRefresh` also reads this query for its
+   * 14-day de-dupe window, where the old cap meant a source older than 50 rows
+   * could be re-discovered daily.
+   *
+   * Callers that want a smaller page (a UI listing) must pass `limit` themselves;
+   * a default that truncates the ranker's input is the defect, not the fix.
+   */
+  async getDiscoveredIdeas(userId: number, batchId?: string, limit = IDEA_POOL_QUERY_LIMIT): Promise<DiscoveredIdea[]> {
     if (batchId) {
       return db.select().from(discoveredIdeas).where(and(eq(discoveredIdeas.userId, userId), eq(discoveredIdeas.batchId, batchId))).orderBy(discoveredIdeas.rank);
     }
-    return db.select().from(discoveredIdeas).where(eq(discoveredIdeas.userId, userId)).orderBy(desc(discoveredIdeas.discoveredAt), discoveredIdeas.rank).limit(50);
+    return db.select().from(discoveredIdeas).where(eq(discoveredIdeas.userId, userId)).orderBy(desc(discoveredIdeas.discoveredAt), discoveredIdeas.rank).limit(limit);
   }
 
   async createDiscoveredIdeas(userId: number, ideaList: InsertDiscoveredIdea[]): Promise<DiscoveredIdea[]> {

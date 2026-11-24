@@ -20,6 +20,7 @@ import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "
 import { addThreadNumbering } from "./utils/threadUtils";
 import { resolvePillarWeight } from "./pillarWeights";
 import { AUTO_GENERATED_POST_STATUS, occupiesSlot } from "./content/postStatus";
+import { isIdeaAvailable } from "./content/ideaAvailability";
 import { getBrandSystemPrompt } from "./brandSystemPrompt";
 import type { DiscoveredIdea, Template } from "@shared/schema";
 
@@ -582,7 +583,12 @@ export async function autofillCalendar(ownerUserId: number, days = 1): Promise<A
 
   const ideas = await storage.getDiscoveredIdeas(ownerUserId);
   const pillars = await storage.getPillars(ownerUserId);
-  const ranked = rankIdeas(ideas.filter((i) => i.status !== "used"), pillars);
+  // Run 57: was `.filter((i) => i.status !== "used")`. That deny-list excluded one
+  // of the three statuses a consumed idea can carry — `runDailyAutoPost` and
+  // `scheduleManualPost` mark their idea `"scheduled"`, `rssAutopost` marks
+  // `"auto-drafted"` — so an idea that already produced a post stayed eligible to
+  // produce another. Ask the module that names the consumed set instead.
+  const ranked = rankIdeas(ideas.filter((i) => isIdeaAvailable(i.status)), pillars);
 
   if (ranked.length === 0) {
     try {
@@ -710,7 +716,12 @@ export async function runDailyAutoPost(ownerUserId: number): Promise<DailyAutoPo
 
   const [pillars, templates] = await Promise.all([storage.getPillars(ownerUserId), storage.getTemplates(ownerUserId)]);
   const allIdeas = await storage.getDiscoveredIdeas(ownerUserId, refreshResult.batchId);
-  const ranked = rankIdeas(allIdeas, pillars, pulse);
+  // Run 57: this site filtered nothing at all. The batch query returns every row in
+  // the batch regardless of status, so a batch whose ideas were already consumed
+  // (re-running the daily job, or a batch from a previous day) handed the ranker
+  // consumed rows and would draft from them again. The other two sites had a
+  // one-word deny-list; this one had no list.
+  const ranked = rankIdeas(allIdeas.filter((i) => isIdeaAvailable(i.status)), pillars, pulse);
 
   const topIdeas: DailyAutoPostResult["topIdeas"] = [];
   let postsScheduled = 0;
@@ -929,7 +940,9 @@ export async function generateWeekendContent(
   const ideas = await storage.getDiscoveredIdeas(ownerUserId);
   const pillars = await storage.getPillars(ownerUserId);
   const pulse = await getMarketPulse();
-  const ranked = rankIdeas(ideas.filter((i) => i.status !== "used"), pillars, pulse);
+  // Run 57: same deny-list defect as autofillCalendar — `"scheduled"` and
+  // `"auto-drafted"` ideas were still eligible to be drafted again.
+  const ranked = rankIdeas(ideas.filter((i) => isIdeaAvailable(i.status)), pillars, pulse);
 
   if (!ranked.length) return { postType: type, postId: null, ideaTitle: "(none)", tweetCount: 0, scheduledAt, error: "No ideas available" };
 
