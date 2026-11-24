@@ -3,6 +3,7 @@ import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
 import { addThreadNumbering } from "../utils/threadUtils";
+import { summariseAnalyticsRefresh } from "./xAnalyticsSummary";
 
 /** X API monthly read budget (Basic tier). Warn at 70% (7000 reads). */
 export const X_MONTHLY_READ_LIMIT = 10_000;
@@ -659,17 +660,21 @@ export async function tryPublishPostById(
 
 /**
  * Fetch public metrics from xQuick if an analytics endpoint is configured.
+ *
+ * Returns true only when metrics were actually written to `analytics`. The
+ * boolean exists because the caller must be able to tell "synced" from
+ * "silently did nothing" — see refreshXAnalytics / B59.
  */
-export async function syncPostAnalyticsFromX(postId: number, ownerUserId: number): Promise<void> {
+export async function syncPostAnalyticsFromX(postId: number, ownerUserId: number): Promise<boolean> {
   const post = await storage.getPost(ownerUserId, postId);
-  if (!post) return;
+  if (!post) return false;
 
   const tweetIds = (post.externalIds as any)?.x as string[] | undefined;
-  if (!tweetIds || tweetIds.length === 0) return;
+  if (!tweetIds || tweetIds.length === 0) return false;
 
   const config = await getXQuickApiConfig(ownerUserId);
   const endpoint = getXQuickAnalyticsEndpoint();
-  if (!config || !endpoint) return;
+  if (!config || !endpoint) return false;
 
   try {
     const start = Date.now();
@@ -712,14 +717,26 @@ export async function syncPostAnalyticsFromX(postId: number, ownerUserId: number
     );
 
     await storage.upsertAnalytics(postId, "x", totals);
+    return true;
   } catch (e) {
     console.error(`[x analytics] fetch failed post=${postId}:`, e);
+    return false;
   }
 }
 
 /**
  * Refresh analytics for all X-posted posts in the last N days.
  * Called by the daily analytics cron. Adapted from postiz-app analytics() flow.
+ *
+ * B59 — this used to log `refreshed ${targets.length} posts`, where targets is
+ * the set SELECTED. When the analytics endpoint is unset (or the token is
+ * missing) `syncPostAnalyticsFromX` returns before its first fetch and writes
+ * nothing, so the line reported a successful refresh that never happened.
+ * Measured on the live host: "refreshed 64 posts", 0 network calls, 0 rows.
+ *
+ * It now counts what each call actually did and reports that. `synced` is
+ * incremented only inside the branch where a write was attempted, and a
+ * missing endpoint is an explicit skip with a reason rather than a silent return.
  */
 export async function refreshXAnalytics(days: number, ownerUserId: number): Promise<void> {
   const all = await storage.getPosts(ownerUserId);
@@ -733,10 +750,40 @@ export async function refreshXAnalytics(days: number, ownerUserId: number): Prom
       new Date(p.postedAt).getTime() > cutoff,
   );
 
-  for (const p of targets) {
-    await syncPostAnalyticsFromX(p.id, ownerUserId).catch(() => null);
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+  let skipReason: string | undefined;
+
+  if (targets.length > 0 && !getXQuickAnalyticsEndpoint()) {
+    // Every one of them will be skipped for the same reason; say it once.
+    skipped = targets.length;
+    skipReason = "XQUIK_ANALYTICS_ENDPOINT not configured";
+  } else {
+    for (const p of targets) {
+      try {
+        const wrote = await syncPostAnalyticsFromX(p.id, ownerUserId);
+        if (wrote) synced++;
+        else {
+          skipped++;
+          skipReason ??= "provider returned no metrics";
+        }
+      } catch (e) {
+        failed++;
+        console.error(`[x analytics] sync failed post=${p.id}:`, e);
+      }
+    }
   }
-  console.log(`[x analytics] refreshed ${targets.length} posts`);
+
+  console.log(
+    summariseAnalyticsRefresh({
+      eligible: targets.length,
+      synced,
+      skipped,
+      failed,
+      skipReason,
+    }).message,
+  );
 }
 
 /**
