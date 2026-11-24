@@ -80,6 +80,29 @@ export class InvalidArtifactPayloadError extends Error {
   }
 }
 
+/**
+ * The Opportunity this Artifact would belong to is killed.
+ *
+ * `createGenerationJob` already refuses a killed Opportunity, and killing is
+ * documented as terminal ("killed" is the only terminal state, `killReason` is
+ * mandatory). The artifact boundary is the second way into the same chain, and
+ * it had no such check — so a killed Opportunity could still gain a draft, have
+ * it approved, and be scheduled. Killing an idea has to mean the idea produces
+ * nothing, whichever door the work comes through.
+ */
+export class ArtifactOpportunityKilledError extends Error {
+  constructor(
+    readonly opportunityId: number,
+    readonly killReason: string | null,
+  ) {
+    super(
+      `Opportunity ${opportunityId} is killed and cannot receive artifacts` +
+        (killReason ? `: ${killReason}` : ""),
+    );
+    this.name = "ArtifactOpportunityKilledError";
+  }
+}
+
 /** A visual media reference named by the payload does not resolve to a usable asset. */
 export class ArtifactMediaReferenceError extends Error {
   constructor(
@@ -125,6 +148,21 @@ export async function createArtifact(
     throw new InvalidArtifactPayloadError(input.format, [
       `no payload schema registered for format "${input.format}"`,
     ]);
+  }
+
+  // A killed Opportunity is terminal and produces nothing. Checked FIRST, before
+  // the payload is validated and before any row exists, so a refusal leaves no
+  // trace and no partially-created revision. `getOpportunity` is optional on the
+  // port only for older hand-built doubles; when it is absent the check is
+  // skipped rather than silently assumed to pass.
+  if (typeof deps.artifacts.getOpportunity === "function") {
+    const opportunity = await deps.artifacts.getOpportunity(input.opportunityId);
+    if (opportunity !== undefined && opportunity.status === "killed") {
+      throw new ArtifactOpportunityKilledError(
+        input.opportunityId,
+        (opportunity as { killReason?: string | null }).killReason ?? null,
+      );
+    }
   }
 
   let validated: JsonRecord;

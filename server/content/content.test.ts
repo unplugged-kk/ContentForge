@@ -44,6 +44,7 @@ import {
   rejectArtifact,
   submitArtifactForReview,
   ArtifactMediaReferenceError,
+  ArtifactOpportunityKilledError,
   InvalidArtifactPayloadError,
   ArtifactStateError,
 } from "./artifact";
@@ -512,6 +513,56 @@ describe("artifact boundary", () => {
       { artifacts: store },
     );
     assert.equal(second.readiness, "draft", "a new revision starts unapproved");
+  });
+
+  // ── A killed Opportunity is terminal, from every door ───────────────────────
+  it("refuses an Artifact under a killed Opportunity, and writes no row", async () => {
+    const store = memoryStore();
+    const opp = await store.insertOpportunity({
+      ...opportunity({ status: "killed" }),
+      killReason: "off-pillar",
+    } as never);
+
+    await assert.rejects(
+      () =>
+        createArtifact(
+          { ...base, opportunityId: opp.id, payload: { text: "x" } },
+          { artifacts: store },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof ArtifactOpportunityKilledError);
+        assert.equal(error.opportunityId, opp.id);
+        assert.equal(error.killReason, "off-pillar", "the reason travels with the refusal");
+        return true;
+      },
+    );
+    assert.equal(store.arts.length, 0, "no partially-created revision survives a refusal");
+  });
+
+  it("still authors under a proposed or selected Opportunity", async () => {
+    const store = memoryStore();
+    for (const status of ["proposed", "selected"] as const) {
+      const opp = await store.insertOpportunity(opportunity({ status }) as never);
+      const artifact = await createArtifact(
+        { ...base, opportunityId: opp.id, payload: { text: `ok-${status}` } },
+        { artifacts: store },
+      );
+      assert.equal(artifact.readiness, "draft");
+    }
+    assert.equal(store.arts.length, 2, "the guard refuses only the killed status");
+  });
+
+  it("a killed Opportunity cannot reach approval and scheduling", async () => {
+    const store = memoryStore();
+    const opp = await store.insertOpportunity(opportunity({ status: "killed" }) as never);
+
+    // The artifact that would have carried it cannot be created at all, so the
+    // chain stops at its first step rather than at approval.
+    await assert.rejects(
+      () => createArtifact({ ...base, opportunityId: opp.id, payload: { text: "x" } }, { artifacts: store }),
+      ArtifactOpportunityKilledError,
+    );
+    assert.equal(store.arts.length, 0);
   });
 });
 
