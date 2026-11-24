@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Post, Tweet } from "@shared/schema";
-import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
+import { assertEligibleForXPublish, type XPublishInvoker, type XPostPublishGateInput } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
 import { addThreadNumbering } from "../utils/threadUtils";
 import { summariseAnalyticsRefresh } from "./xAnalyticsSummary";
@@ -664,8 +664,15 @@ export async function tryPublishPostById(
   const post = await storage.getPost(ownerUserId, postId);
   if (!post) throw new Error("Post not found");
 
+  // run 52 / B67 — this literal is the whole reason run 51's guard did nothing.
+  // Run 51 added a correct check to `assertEligibleForXPublish`, which reads
+  // `post.externalIds`. This call built a NARROWER object than the predicate reads,
+  // so `externalIds` was `undefined` at the gate and `rowHasLiveUnits` returned
+  // false for every row that had live units. The guard was correct and unreachable:
+  // run 51's tests pass the full row, so they proved the predicate and not the path.
+  // Passing the row itself is the fix — there is no second shape to keep in sync.
   assertEligibleForXPublish(
-    { status: post.status, scheduledAt: post.scheduledAt },
+    post as unknown as XPostPublishGateInput,
     { invokedBy },
   );
 
