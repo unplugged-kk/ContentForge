@@ -21,7 +21,21 @@
  * This module is deliberately pure: no database, no network, no imports from
  * `x.ts`. The record shape is asserted without a live Postgres, which is what
  * makes the behaviour testable rather than merely present.
+ *
+ * run 51 / B66 — it imports `rowHasLiveUnits` from `shared/xDeveloperRisk`,
+ * because the publish GATE lives there and must apply the same rule. One
+ * implementation, two callers: the gate refuses the retry, and this module
+ * explains it. A second copy of the predicate is how the two would drift apart.
  */
+
+import { rowHasLiveUnits } from "@shared/xDeveloperRisk";
+
+/**
+ * run 51 / B66 — re-exported so server-side callers get the rule from the same
+ * place the gate uses it. Deliberately a re-export, not a wrapper: a second
+ * definition is how the gate and the explanation drift apart.
+ */
+export { rowHasLiveUnits };
 
 export type PartialPublishInput = {
   /** Tweet ids the provider ACTUALLY returned, in order. Never inferred. */
@@ -128,8 +142,58 @@ export function partialPublishRecord(
 /**
  * A failed row may only be retried when NOTHING published. This is the predicate
  * the retry paths ask, so "partial" can never be treated as "failed".
+ *
+ * run 51 / B66 — this accepts a ROW as well as an error, because a retry is a
+ * later request. Measured with the real gate (evidence/run51/probe_retry_gate.ts):
+ * a `failed` row carrying 2 live ids was ADMITTED for manual publish, and the
+ * error object that `isSafeToRetry(err)` needs no longer existed to be passed.
+ * An error-shaped predicate cannot answer the question at the moment it is asked.
  */
-export function isSafeToRetry(err: unknown): boolean {
-  if (err instanceof XPartialPublishError) return err.publishedCount === 0;
+export function isSafeToRetry(errOrRow: unknown): boolean {
+  if (errOrRow instanceof XPartialPublishError) return errOrRow.publishedCount === 0;
+  // A row (or row-like object) — the shape a retry actually holds.
+  if (isRowLike(errOrRow)) {
+    if (errOrRow.status === "posted") return false;
+    return !rowHasLiveUnits(errOrRow);
+  }
   return true;
+}
+
+/** A plain `failed` row with no recorded ids: the only retryable failure. */
+function isRowLike(value: unknown): value is { status?: string | null; externalIds?: unknown } {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !(value instanceof Error) &&
+    ("status" in (value as Record<string, unknown>) || "externalIds" in (value as Record<string, unknown>))
+  );
+}
+
+/**
+ * Why a retry must not proceed, or null when it may.
+ *
+ * The message is the operator-facing half of the guard: the gate refuses the
+ * publish, and this explains it in the same terms — what is live, and what a
+ * retry would do. A refusal without a reason trains the operator to work around
+ * the guard.
+ */
+export function retryBlockedReason(errOrRow: unknown): string | null {
+  if (errOrRow instanceof XPartialPublishError) {
+    if (errOrRow.publishedCount === 0) return null;
+    return errOrRow.message;
+  }
+  if (isRowLike(errOrRow)) {
+    if (errOrRow.status === "posted") return "This post was already published to X.";
+    if (rowHasLiveUnits(errOrRow)) {
+      const live = ((errOrRow.externalIds as { x?: unknown[] }).x ?? []) as unknown[];
+      const total = (errOrRow as { totalUnits?: number }).totalUnits;
+      const ofTotal = typeof total === "number" ? ` of ${total}` : "";
+      return (
+        `Thread published PARTIALLY: ${live.length}${ofTotal} unit(s) are LIVE on X and cannot be ` +
+        `un-sent. Do NOT retry this post as-is — a retry republishes them as duplicates.`
+      );
+    }
+    return null;
+  }
+  return null;
 }

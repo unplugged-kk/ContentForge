@@ -98,7 +98,36 @@ export type XPublishInvoker = "user" | "scheduler";
 export type XPostPublishGateInput = {
   status: string | null | undefined;
   scheduledAt: Date | string | null | undefined;
+  /**
+   * run 51 / B66 — the recorded provider ids, when the caller has them.
+   *
+   * This field is why the gate can answer the retry question at all. A retry is
+   * a LATER request: the error from the failed attempt lived in that request's
+   * stack and was never persisted, so an error-shaped predicate cannot be asked
+   * at retry time. The row is the only survivor, and this is the part of the row
+   * that says "something already reached the provider".
+   */
+  externalIds?: unknown;
 };
+
+/**
+ * Does this row record units that actually reached the provider?
+ *
+ * run 51 / B66 — a partially published thread is written as `status="failed"`
+ * with the ids that DID publish (run 50's fix). Treating that row as an ordinary
+ * failure is what lets a retry republish live units as duplicates.
+ *
+ * Deliberately tolerant: a row read back from JSONB is not guaranteed to be
+ * well-formed, and throwing here would turn a guard into a 500 on the retry
+ * path — hiding the very reason the retry must not proceed.
+ */
+export function rowHasLiveUnits(row: { externalIds?: unknown } | null | undefined): boolean {
+  if (!row) return false;
+  const ids = (row as { externalIds?: unknown }).externalIds;
+  if (!ids || typeof ids !== "object") return false;
+  const x = (ids as Record<string, unknown>).x;
+  return Array.isArray(x) && x.length > 0;
+}
 
 /**
  * Enforces X-aligned workflow: no publishing from draft; no duplicate publish;
@@ -116,6 +145,28 @@ export function assertEligibleForXPublish(
     throw new Error(
       "Mark this post as Ready or Scheduled before publishing. X expects user-initiated posting — drafts cannot be sent to the API.",
     );
+  }
+  // run 51 / B66 — a post that already reached the provider in part is not a
+  // failure to retry. It is a live thread with a missing tail, and re-sending it
+  // republishes the live units as duplicates, orphaning the originals with no way
+  // to tell they were the same thread.
+  //
+  // The check is on the ROW, not an error object: a retry arrives in a later
+  // request where the error no longer exists. `posted` is handled above and is
+  // refused for its own reason, so this only speaks for non-posted rows.
+  if (rowHasLiveUnits(post)) {
+    const live = ((post as { externalIds?: { x?: unknown[] } }).externalIds?.x ?? []) as unknown[];
+    // `status: 409` so the shared error handler (server/middleware/errorHandler.ts)
+    // echoes this message to the operator instead of a generic "Internal server
+    // error". A refusal the operator cannot read is a refusal they will work
+    // around — and here, working around it means republishing live units.
+    const blocked = new Error(
+      `This post is ALREADY PARTIALLY PUBLISHED to X: ${live.length} unit(s) are live and cannot be un-sent. ` +
+        `Do not retry it — a retry would republish those units as duplicates. ` +
+        `Review the live posts before doing anything else.`,
+    ) as Error & { status?: number };
+    blocked.status = 409;
+    throw blocked;
   }
   if (ctx.invokedBy === "scheduler") {
     if (status !== "scheduled") {
