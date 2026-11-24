@@ -20,6 +20,8 @@ import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "
 import { addThreadNumbering } from "./utils/threadUtils";
 import { resolvePillarWeight } from "./pillarWeights";
 import { AUTO_GENERATED_POST_STATUS, occupiesSlot } from "./content/postStatus";
+import { fitUnitToBudget } from "./content/unitFit";
+import { xUnitBudgetAt } from "./social/xTextLimits";
 import { getBrandSystemPrompt } from "./brandSystemPrompt";
 import type { DiscoveredIdea, Template } from "@shared/schema";
 
@@ -339,7 +341,16 @@ ${formatPrompt}`,
     const parsed = safeJsonParse(content);
     if (!parsed?.tweets?.length) return null;
 
-    const rawContents = parsed.tweets.map((t: any) => String(t.content || "").slice(0, 280));
+    // Run 58: was `String(t.content || "").slice(0, 280)` — a bare offset cut that
+    // destroyed the final word of any unit running long, silently. Measured on the
+    // live table: 26 of 184 stored units sit at exactly 280 chars ending mid-word,
+    // 22 of them in `posted` rows. D24's validator is downstream of this point, so
+    // it accepted 26/26 of them (evidence/run58/probe_validator_reach.ts). Fit at a
+    // boundary the reader accepts, and reserve the thread suffix's own budget.
+    const generated = parsed.tweets.map((t: any) => String(t.content || ""));
+    const rawContents = generated.map(
+      (text: string, i: number) => fitUnitToBudget(text, xUnitBudgetAt(i, generated.length)).text,
+    );
     const numberedContents = addThreadNumbering(rawContents);
     const tweets = numberedContents.map((content, i) => ({
       content,

@@ -22,6 +22,8 @@ import { getInstagramConfigSummary, verifyInstagramAccessToken, isProfessionalAc
 import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
+import { fitUnitToBudget } from "./content/unitFit";
+import { xUnitBudgetAt } from "./social/xTextLimits";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
@@ -2307,12 +2309,18 @@ Each tweet under ${charLimit} characters.` },
       await logAiUsage(usage, latency, "expand_idea");
 
       const result = safeJsonParse(content) || {};
-      const tweets = (result.tweets || []).map((t: any, i: number) => ({
-        content: String(t.content || "").slice(0, 280),
-        position: i,
-        charCount: String(t.content || "").length,
-        postId: 0,
-      }));
+      // Run 58: was a bare `slice(0, 280)` on the content AND a `charCount` computed
+      // from the PRE-slice string, so the stored record said the unit was longer
+      // than it is. Both now come from the fitted text.
+      const tweets = (result.tweets || []).map((t: any, i: number) => {
+        const fitted = fitUnitToBudget(String(t.content || ""), xUnitBudgetAt(i, (result.tweets || []).length));
+        return {
+          content: fitted.text,
+          position: i,
+          charCount: fitted.text.length,
+          postId: 0,
+        };
+      });
 
       const post = await storage.createPost(
         sessionUserId(req),
