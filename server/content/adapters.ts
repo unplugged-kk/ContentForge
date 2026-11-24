@@ -55,6 +55,7 @@ import {
   validateInstagramCaption,
   validateInstagramPublishMedia,
 } from "../social/instagram";
+import { validateXText } from "../social/xTextLimits";
 import {
   descriptionFromPayload,
   privacyFromPayload,
@@ -348,6 +349,24 @@ export function createXChannelAdapter(): ChannelAdapter {
           publishedAt: null,
           errorClass: "permanent",
           errorMessage: `x payload for ${request.format} is unusable`,
+        };
+      }
+
+      // §40 / D24 — reject BEFORE the provider is called, the way the threads and
+      // instagram transports already do. Without this, `postContentToX` numbers
+      // each unit and then `slice(0, 280)` cuts it silently, mid-word, and the
+      // post still goes out. The check runs the transport's own numbering, so the
+      // budget accounts for the "N/total" suffix rather than assuming a flat 280.
+      const limitError = validateXText(texts);
+      if (!limitError.ok) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: limitError.error ?? "x text exceeds the transport limit",
         };
       }
 

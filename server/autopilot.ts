@@ -18,6 +18,7 @@ import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "./marketPulse";
 import { addThreadNumbering } from "./utils/threadUtils";
+import { AUTO_GENERATED_POST_STATUS, occupiesSlot } from "./content/postStatus";
 import { getBrandSystemPrompt } from "./brandSystemPrompt";
 import type { DiscoveredIdea, Template } from "@shared/schema";
 
@@ -517,7 +518,10 @@ export async function autofillCalendar(ownerUserId: number, days = 1): Promise<A
   const existingPosts = await storage.getPosts(ownerUserId);
   const scheduledTimes = new Set(
     existingPosts
-      .filter((p) => p.status === "scheduled" && p.scheduledAt)
+      // D23: a slot is OCCUPIED by any status a human may still act on, not only
+      // `scheduled`. If drafts were excluded here, every autofill run would see a
+      // free calendar and create a duplicate draft for the same slot each day.
+      .filter((p) => occupiesSlot(p.status) && p.scheduledAt)
       .map((p) => {
         const d = new Date(p.scheduledAt as Date);
         d.setUTCSeconds(0, 0);
@@ -593,7 +597,10 @@ export async function autofillCalendar(ownerUserId: number, days = 1): Promise<A
             postType: draft.postType,
             tone: draft.tone,
             targetPlatform: "x",
-            status: "scheduled",
+            // D23: auto-generated content is a DRAFT, never `scheduled`. The
+            // publishing scheduler only fires on `scheduled`, so this value is
+            // what keeps generation from becoming publishing.
+            status: AUTO_GENERATED_POST_STATUS,
             scheduledAt: draft.scheduledAt,
             autopilot: true,
             imageUrl: draft.imageUrl,
@@ -721,7 +728,10 @@ export async function runDailyAutoPost(ownerUserId: number): Promise<DailyAutoPo
             postType: draft.postType,
             tone: draft.tone,
             targetPlatform: "x",
-            status: "scheduled",
+            // D23: auto-generated content is a DRAFT, never `scheduled`. The
+            // publishing scheduler only fires on `scheduled`, so this value is
+            // what keeps generation from becoming publishing.
+            status: AUTO_GENERATED_POST_STATUS,
             scheduledAt: draft.scheduledAt,
             autopilot: true,
             imageUrl: draft.imageUrl,
@@ -782,7 +792,7 @@ export async function scheduleManualPost(
         postType: draft.postType,
         tone: draft.tone,
         targetPlatform: "x",
-        status: "scheduled",
+        status: AUTO_GENERATED_POST_STATUS,
         scheduledAt: draft.scheduledAt,
         autopilot: true,
         imageUrl: draft.imageUrl,
@@ -855,7 +865,7 @@ export async function generateWeekendContent(
     draft.scheduledAt = scheduledAt;
     const post = await storage.createPost(
       ownerUserId,
-      { pillarId: null, postType: "weekly_recap", tone: "reflective", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
+      { pillarId: null, postType: "weekly_recap", tone: "reflective", targetPlatform: "x", status: AUTO_GENERATED_POST_STATUS, scheduledAt, autopilot: true } as any,
       draft.tweets as any,
     );
     return { postType: type, postId: (post as any)?.id ?? null, ideaTitle: summaryIdea.title, tweetCount: draft.tweets.length, scheduledAt };
@@ -875,7 +885,7 @@ export async function generateWeekendContent(
   draft.scheduledAt = scheduledAt;
   const post = await storage.createPost(
     ownerUserId,
-    { pillarId: best.pillarId, postType: "article_thread", tone: "educational", targetPlatform: "x", status: "scheduled", scheduledAt, autopilot: true } as any,
+    { pillarId: best.pillarId, postType: "article_thread", tone: "educational", targetPlatform: "x", status: AUTO_GENERATED_POST_STATUS, scheduledAt, autopilot: true } as any,
     draft.tweets as any,
   );
   await storage.updateDiscoveredIdeaStatus(ownerUserId, best.id, "used");
