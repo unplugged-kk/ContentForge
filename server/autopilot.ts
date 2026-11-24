@@ -41,7 +41,7 @@ function nowIST(): Date {
 
 // ─── Posting schedule (IST) ───────────────────────────────────────────────────
 
-const DAILY_SLOTS = [
+export const DAILY_SLOTS = [
   { hour: 13, minute: 0,  preferredType: "thread",      tone: "educational",  label: "EU morning" },
   { hour: 19, minute: 30, preferredType: "tweet",       tone: "provocative",  label: "India evening" },
   { hour: 23, minute: 0,  preferredType: "long_thread", tone: "storytelling", label: "US lunch" },
@@ -86,6 +86,12 @@ interface SourceMeta {
   sourceType?: string;
   wordCount?: number;
   contentAngles?: string[];
+  /**
+   * Run 46: the shape the posting schedule declares for this slot
+   * (`DAILY_SLOTS[i].preferredType`). It is consulted only where the choice would
+   * otherwise be made by a WEAK signal — see the `trending_now` branch below.
+   */
+  preferredType?: string;
 }
 
 export function determineContentType(idea: DiscoveredIdea, meta?: SourceMeta): string {
@@ -94,13 +100,24 @@ export function determineContentType(idea: DiscoveredIdea, meta?: SourceMeta): s
   const comments = meta?.commentCount || 0;
   const points = meta?.points || 0;
   const timeliness = idea.timeliness || "evergreen";
+  const preferredType = meta?.preferredType || "";
 
-  // High-signal overrides
+  // High-signal overrides — the discoverer's own label about the *idea*.
+  // These describe the content and outrank the posting calendar.
   if (suggestion === "article") return "article";
-  if (suggestion === "hot_take" || timeliness === "trending_now") return "hot_take";
+  if (suggestion === "hot_take") return "hot_take";
   if (suggestion === "article_thread" || (comments > 200 && angles >= 4)) return "long_thread";
   if (suggestion === "long_thread" || comments > 100 || angles >= 3) return "long_thread";
   if (suggestion === "tweet" || (points > 500 && comments < 20)) return "tweet";
+
+  // Run 46: `timeliness === "trending_now"` used to force `hot_take` here, and it
+  // outranked every other branch. 269 of 452 live ideas carry that timeliness, so
+  // two thirds of the pool became hot_take and the other two declared shapes were
+  // never produced — 75 of 84 published posts were one type while `DAILY_SLOTS`
+  // declared three. Recency is a property of the *source*, not of the shape worth
+  // writing; it should not overrule the schedule's declared slot.
+  if (preferredType) return preferredType;
+  if (timeliness === "trending_now") return "hot_take";
 
   // Default: thread for most content
   return "thread";
@@ -500,6 +517,31 @@ function nextSlots(fromDate: Date, count: number): Date[] {
   return slots;
 }
 
+/**
+ * Run 46: resolve a slot's declared definition by its actual time of day.
+ *
+ * `autofillCalendar` used `DAILY_SLOTS[i % DAILY_SLOTS.length]` where `i` indexes
+ * the FILTERED `freeSlots` array. As soon as any slot is already occupied — which
+ * D23's draft-only mode made the normal case, because a draft now occupies its
+ * slot — `i` no longer equals the slot's position in the day. The 19:30 post then
+ * received the 13:00 label and the 13:00 tone, and the last slot of the day got
+ * whatever definition happened to be left over.
+ *
+ * Matching on the IST wall-clock time instead of on an array position keeps the
+ * declared label and tone attached to the hour they describe. Measured before the
+ * fix: 4 of 6 pairings mismatched once earlier slots were taken.
+ */
+export function resolveSlotDef(at: Date): PostingSlot {
+  const istMinutes = toIST(at).getUTCHours() * 60 + toIST(at).getUTCMinutes();
+  const match = DAILY_SLOTS.find((s) => s.hour * 60 + s.minute === istMinutes);
+  if (match) return match;
+  // Fall back to the nearest slot that has already passed today, so a time that
+  // is not exactly a declared slot (a manual post, a legacy row) still gets a
+  // tone and a label rather than silently borrowing the first entry.
+  const passed = DAILY_SLOTS.filter((s) => s.hour * 60 + s.minute <= istMinutes);
+  return passed.length ? passed[passed.length - 1] : DAILY_SLOTS[0];
+}
+
 // ─── Autofill calendar ────────────────────────────────────────────────────────
 
 export type AutofillResult = {
@@ -557,11 +599,18 @@ export async function autofillCalendar(ownerUserId: number, days = 1): Promise<A
   for (let i = 0; i < freeSlots.length && i < ranked.length; i++) {
     const slot = freeSlots[i];
     const idea = ranked[i % ranked.length];
-    const slotDef = DAILY_SLOTS[i % DAILY_SLOTS.length];
+    // Run 46: was `DAILY_SLOTS[i % DAILY_SLOTS.length]`, which pairs the i-th FREE
+    // slot with the i-th declared slot. Once any earlier slot is occupied — the
+    // normal case under D23, where a draft occupies its slot — the 19:30 post gets
+    // the 13:00 label and tone. Resolve by the slot's own time instead.
+    const slotDef = resolveSlotDef(slot);
 
     const postType = determineContentType(idea, {
       sourceType: idea.sourceType || "rss",
       contentAngles: idea.contentAngles || [],
+      // Run 46: the three declared shapes reach the decision instead of being
+      // overruled by `timeliness === "trending_now"` on two thirds of the pool.
+      preferredType: slotDef.preferredType,
     });
 
     try {
@@ -689,10 +738,15 @@ export async function runDailyAutoPost(ownerUserId: number): Promise<DailyAutoPo
       breakdown,
     });
 
-    const slotDef = DAILY_SLOTS[i % DAILY_SLOTS.length];
+    // Run 46: resolve by the slot's own time, not by loop position — this loop
+    // walks todaySlots directly so `i` happens to align, but resolving by time
+    // means the pairing cannot drift if this loop is ever given a filtered list.
+    const slotDef = resolveSlotDef(todaySlots[i]);
     const postType = determineContentType(idea, {
       sourceType: idea.sourceType || "rss",
       contentAngles: idea.contentAngles || [],
+      // Run 46: the schedule's declared shape now reaches the decision.
+      preferredType: slotDef.preferredType,
     });
 
     try {
