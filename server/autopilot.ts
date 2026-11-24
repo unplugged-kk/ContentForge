@@ -18,6 +18,7 @@ import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runDiscoverRefresh } from "./discoverRefresh";
 import { getMarketPulse, applyBreakingNewsBoost, type MarketPulseResult } from "./marketPulse";
 import { addThreadNumbering } from "./utils/threadUtils";
+import { resolvePillarWeight } from "./pillarWeights";
 import { AUTO_GENERATED_POST_STATUS, occupiesSlot } from "./content/postStatus";
 import { getBrandSystemPrompt } from "./brandSystemPrompt";
 import type { DiscoveredIdea, Template } from "@shared/schema";
@@ -118,25 +119,12 @@ export function getTweetCountForType(postType: string): number {
 }
 
 // ─── Pillar weights ───────────────────────────────────────────────────────────
-
-export const PILLAR_WEIGHTS: Record<string, number> = {
-  "AI Agents & Agentic Workflows":          1.40,
-  "AIOps & AI-Assisted DevOps":             1.35,
-  "Hot Takes & Trends":                     1.20,
-  "Data Infrastructure & MLOps":            1.20,
-  "Kubernetes Deep Dives":                  1.15,
-  "Platform Engineering & DevEx":           1.10,
-  "SRE & Reliability Engineering":          1.05,
-  "Cloud-Native Data Platforms":            1.00,
-  "Infrastructure as Code":                 0.95,
-  "Security & DevSecOps":                   0.90,
-  "FinOps & Cloud Cost Engineering":        0.90,
-  "Open Source & CNCF Ecosystem":           0.85,
-  "Technical Leadership & Eng Management":  0.80,
-  "Career & Leadership":                    0.75,
-  "AI for DevOps / AIOps":                  1.35,
-  "Infrastructure as Code for Data":        0.95,
-};
+//
+// The weighting table and its name resolution moved to `./pillarWeights` in run 45.
+// The old table here was keyed by pillar names that no longer match the pillars D27
+// approved, and the lookup that read it missed for every idea on the live pool.
+// Re-exported below so any existing importer keeps working.
+export { PILLAR_WEIGHTS } from "./pillarWeights";
 
 // ─── Template matching ────────────────────────────────────────────────────────
 
@@ -173,9 +161,20 @@ export function matchTemplate(idea: DiscoveredIdea, templates: Template[]): Temp
 export function computeEngagementScore(idea: DiscoveredIdea, pillarName: string): {
   score: number;
   breakdown: Record<string, number>;
+  /** Where the pillar weight came from, and whether it was explicit (run 45). */
+  pillarWeightSource: "pillar" | "category" | "fallback";
+  pillarWeighted: boolean;
 } {
   const viral = parseFloat(String(idea.viralScore || "5"));
-  const pillarWeight = PILLAR_WEIGHTS[pillarName] ?? 1.0;
+  // Run 45: this used to be `PILLAR_WEIGHTS[pillarName] ?? 1.0`. The table is keyed
+  // by pillar names, but every call site passes `pillar?.name || idea.category`, and
+  // no `discovered_ideas` row has a pillar_id — so the name arriving here is a
+  // category slug and the lookup missed 452 times out of 452. A multiplier that is
+  // always 1.0 cannot reorder anything, and 1.0 also emits as a normal value, which
+  // is what hid it. `resolvePillarWeight` falls back to the idea's category and
+  // reports whether the weight was explicit.
+  const resolution = resolvePillarWeight({ pillarName, category: idea.category });
+  const pillarWeight = resolution.weight;
 
   const timelinessBonus =
     idea.timeliness === "trending_now" ? 0.8 :
@@ -192,6 +191,8 @@ export function computeEngagementScore(idea: DiscoveredIdea, pillarName: string)
 
   return {
     score,
+    pillarWeightSource: resolution.source,
+    pillarWeighted: resolution.weighted,
     breakdown: {
       viral_score: viral,
       pillar_weight: pillarWeight,
