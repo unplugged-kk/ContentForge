@@ -23,6 +23,8 @@ import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { fitUnitToBudget } from "./content/unitFit";
+import { checkScheduleWrite } from "./content/scheduleTime";
+import { normalisePostBody } from "./content/postBody";
 import { xUnitBudgetAt } from "./social/xTextLimits";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 import { authLimiter, publishLimiter } from "./middleware/rateLimit";
@@ -189,7 +191,22 @@ export async function registerRoutes(
 
   app.put("/api/posts/:id", async (req, res) => {
     try {
-      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), req.body);
+      // Run 60 / B82+B83. This route used to hand `req.body` straight to storage:
+      //  - B83: `scheduledAt` arrives as a STRING, drizzle's timestamp column calls
+      //    .toISOString() on it, so ANY request carrying a date returned
+      //    500 "value.toISOString is not a function" and changed nothing.
+      //  - B82: nothing validated that a newly `scheduled` post had a future time,
+      //    and the 60-second scheduler publishes anything scheduled-and-due.
+      const normalised = normalisePostBody(req.body);
+      if (normalised.bad.length > 0) {
+        return res.status(400).json({
+          message: `${normalised.bad.join(", ")} must be a valid ISO date string`,
+        });
+      }
+      const guard = checkScheduleWrite(normalised.value.status as string | undefined,
+                                       normalised.value.scheduledAt as string | undefined);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
+      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), normalised.value);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -198,6 +215,11 @@ export async function registerRoutes(
   app.patch("/api/posts/:id/status", async (req, res) => {
     try {
       const parsed = updateStatusBody.parse(req.body);
+      // Run 60 / B82: the route the approval button calls. Measured before this
+      // guard existed: a past scheduledAt was accepted, stored as 'scheduled',
+      // and was immediately DUE to the 60-second scheduler.
+      const guard = checkScheduleWrite(parsed.status, parsed.scheduledAt);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
       const result = await storage.updatePostStatus(sessionUserId(req), parseInt(req.params.id), parsed.status, parsed.scheduledAt);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);

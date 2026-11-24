@@ -263,12 +263,12 @@ describe("fitUnitToBudget — D. the census", () => {
     },
     {
       file: "server/routes.ts",
-      line: 399,
+      line: 421,
       why: "display preview of an ALREADY-STORED tweet in a list response; never persisted or published",
     },
     {
       file: "server/routes.ts",
-      line: 915,
+      line: 937,
       why: "article TITLE derived from stored tweet content; a title, not a published unit",
     },
   ];
