@@ -4,6 +4,7 @@ import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDevelo
 import { storage } from "../storage";
 import { addThreadNumbering } from "../utils/threadUtils";
 import { summariseAnalyticsRefresh } from "./xAnalyticsSummary";
+import { XPartialPublishError, partialPublishRecord } from "./partialPublish";
 
 /** X API monthly read budget (Basic tier). Warn at 70% (7000 reads). */
 export const X_MONTHLY_READ_LIMIT = 10_000;
@@ -530,6 +531,10 @@ export async function postContentToX(
   const tweetIds: string[] = [];
   let lastId: string | undefined;
 
+  /** Deep links for the units that already reached the provider. */
+  const liveUrls = (ids: readonly string[]) =>
+    ids.map((id) => `https://x.com/${username || "i"}/status/${id}`);
+
   for (let index = 0; index < tweets.length; index++) {
     const payload = buildXQuickPostPayload(
       config.account,
@@ -537,17 +542,48 @@ export async function postContentToX(
       lastId,
       index === 0 ? mediaUrls : [],
     );
-    const sent = await postViaXQuick(config, payload);
+    let sent: XQuickPostResponse;
+    try {
+      sent = await postViaXQuick(config, payload);
+    } catch (e) {
+      // run 50 / B65 — the units BEFORE this one are already public. Throwing
+      // the raw transport error discards that fact: the caller writes a `failed`
+      // row with no ids, and a retry republishes the live units as duplicates.
+      // Measured before this fix: 2 units live at the provider, caller held 0
+      // ids (evidence/run50/probe_partial_thread.ts).
+      if (tweetIds.length > 0) {
+        throw new XPartialPublishError({
+          tweetIds,
+          urls: liveUrls(tweetIds),
+          failedUnit: index + 1,
+          totalUnits: tweets.length,
+          cause: e,
+        });
+      }
+      throw e;
+    }
     const id = extractXQuickPostId(sent);
-    if (!id) throw new Error("XQUICK_POST_ID_MISSING");
+    if (!id) {
+      // Same reasoning: the unit was ACCEPTED (2xx) but carried no id, so its
+      // own outcome is unknown and every prior unit is live.
+      if (tweetIds.length > 0) {
+        throw new XPartialPublishError({
+          tweetIds,
+          urls: liveUrls(tweetIds),
+          failedUnit: index + 1,
+          totalUnits: tweets.length,
+          cause: new Error("XQUICK_POST_ID_MISSING"),
+        });
+      }
+      throw new Error("XQUICK_POST_ID_MISSING");
+    }
     username = username || extractXQuickUsername(sent);
     tweetIds.push(id);
     lastId = id;
   }
 
   const handle = username || "i";
-  const urls = tweetIds.map((id) => `https://x.com/${handle}/status/${id}`);
-  return { tweetIds, urls, username };
+  return { tweetIds, urls: tweetIds.map((id) => `https://x.com/${handle}/status/${id}`), username };
 }
 
 /**
@@ -648,6 +684,18 @@ export async function tryPublishPostById(
     );
     return result;
   } catch (e: any) {
+    // run 50 / B65 — a PARTIAL publish is not a failure. Units are already live
+    // on X and cannot be un-sent, so the row must record them. Writing a bare
+    // `failed` with no ids is what makes the natural operator action — retry —
+    // republish the live units as duplicates.
+    if (e instanceof XPartialPublishError) {
+      await storage.updatePost(
+        ownerUserId,
+        postId,
+        partialPublishRecord(post, e) as any,
+      );
+      throw e;
+    }
     const friendly = translateXError(e?.message || String(e));
     await storage.updatePost(ownerUserId, postId, {
       status: "failed",

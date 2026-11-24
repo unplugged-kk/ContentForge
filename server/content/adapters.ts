@@ -21,6 +21,7 @@ import {
   uploadMediaToX,
   XWriteActionPendingError,
 } from "../social/x";
+import { XPartialPublishError } from "../social/partialPublish";
 import { PERFORMANCE_SCHEMA_VERSION } from "./learning/constants";
 import { hourWindow } from "./learning/identity";
 import {
@@ -395,6 +396,31 @@ export function createXChannelAdapter(): ChannelAdapter {
             publishedAt: null,
             errorMessage: error.message,
             metrics: { writeActionId: error.writeActionId },
+          };
+        }
+        // run 50 / B65 — a THREAD published partially. Units 1..K-1 are live on
+        // X and cannot be un-sent. Without this branch the generic path below
+        // classifies it as a plain failure with `externalId: null`, so the
+        // Publication records nothing about what actually went out and a retry
+        // duplicates it. `providerCalled: true` + ids in metrics is the honest
+        // shape: the outcome is ambiguous, and the live ids are durable facts.
+        if (error instanceof XPartialPublishError) {
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: error.tweetIds[0] ?? null,
+            externalUrl: error.urls[0] ?? null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: {
+              partialPublish: true,
+              publishedUnitCount: error.publishedCount,
+              publishedTweetIds: [...error.tweetIds],
+              publishedUrls: [...error.urls],
+              failedUnit: error.failedUnit,
+              totalUnits: error.totalUnits,
+              failedUnitOutcomeUnknown: error.unitOutcomeUnknown,
+            },
           };
         }
         const raw = error instanceof Error ? error.message : String(error);
