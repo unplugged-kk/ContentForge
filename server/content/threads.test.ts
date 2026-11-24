@@ -32,6 +32,7 @@ import {
   pinTestEncryptionKey,
   purgeStaleConnectedAccounts,
 } from "../testing/testIsolation";
+import { stubConnectedAccountLookup, type CredentialStubHandle } from "../testing/unitCredentialStub";
 
 registerBuiltinChannelAdapters();
 
@@ -266,9 +267,13 @@ describe("threads channel adapter registration", () => {
 describe("threads HTTP contract (local Graph double)", () => {
   const fixture = startThreadsDouble();
   let saved: Record<string, string | undefined> = {};
+  let credentials: CredentialStubHandle;
 
   before(async () => {
     const port = await fixture.start();
+    // `npm run test:unit` points DATABASE_URL at a dead address on purpose; the
+    // Threads transport consults connected_accounts before its env fallback.
+    credentials = stubConnectedAccountLookup();
     saved = {
       THREADS_API_BASE_URL: process.env.THREADS_API_BASE_URL,
       THREADS_API_VERSION: process.env.THREADS_API_VERSION,
@@ -284,6 +289,7 @@ describe("threads HTTP contract (local Graph double)", () => {
   });
 
   after(async () => {
+    credentials.restore();
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;

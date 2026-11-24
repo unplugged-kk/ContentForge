@@ -65,6 +65,17 @@ export interface PurgeScope {
  * platform and/or owner when given, otherwise clears the whole secret store for
  * a clean run. Returns the number of rows removed, or `null` when it declined to
  * touch a non-test database.
+ *
+ * Best-effort by contract: this is hygiene, never an assertion. Callers use it
+ * from `before()` hooks so a leftover row from an earlier run cannot make the
+ * first account lookup throw. `npm run test:unit` deliberately points
+ * DATABASE_URL at an unreachable local address, which `isTestDatabaseUrl()`
+ * accepts (it is a local host) even though nothing is listening there. A
+ * connection failure must therefore make this helper DECLINE, not throw —
+ * otherwise it cancels every test in the suite before any of them run, which
+ * reads as a code failure and is really a socket the unit contract never
+ * promised. Errors that are not connection-level still propagate, because a
+ * failing DELETE against a reachable test database is worth seeing.
  */
 export async function purgeStaleConnectedAccounts(
   scope: PurgeScope = {},
@@ -98,7 +109,30 @@ export async function purgeStaleConnectedAccounts(
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     const result = await pool.query(`DELETE FROM connected_accounts${where}`, values);
     return result.rowCount ?? 0;
+  } catch (error) {
+    if (!isConnectionRefusal(error)) throw error;
+    console.warn(
+      `[testIsolation] skipped connected_accounts purge: test database unreachable (${(error as NodeJS.ErrnoException).code ?? "connection error"})`,
+    );
+    return null;
   } finally {
     if (ownsPool) await pool.end().catch(() => {});
   }
+}
+
+const CONNECTION_REFUSAL_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "57P03", // cannot_connect_now
+]);
+
+/** True when `error` means "no database to talk to", as opposed to "the query failed". */
+function isConnectionRefusal(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && CONNECTION_REFUSAL_CODES.has(code);
 }

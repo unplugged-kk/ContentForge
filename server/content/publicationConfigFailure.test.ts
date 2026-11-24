@@ -3,12 +3,21 @@ import { after, describe, it } from "node:test";
 import { pool } from "../db";
 import { createXChannelAdapter } from "./adapters";
 import { runPublication } from "./publication";
+import { stubConnectedAccountLookup } from "../testing/unitCredentialStub";
 
 after(async () => {
   await pool.end();
 });
 
 describe("runPublication configuration failure classification", () => {
+  // `npm run test:unit` points DATABASE_URL at a dead address on purpose; the X
+  // transport consults connected_accounts before its env fallback.
+  const credentials = stubConnectedAccountLookup();
+
+  after(() => {
+    credentials.restore();
+  });
+
   it("records a deterministic failed result and never an unknown reconciliation result", async () => {
     const updates: any[] = [];
     const results: any[] = [];
