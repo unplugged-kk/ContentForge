@@ -1,169 +1,118 @@
-# Review — ChatGPT
+# ContentForge: independent strategic product review
 
-**Review target:** `collab/ai-pair-review`  
-**Base recorded by brief:** `main @ 0dca955`  
-**Review date:** 2026-11-26  
-**Method:** Read-only review of `docs/COLLAB_BRIEF.md`, `docs/HANDOVER.md`, `CURRENT_ARCHITECTURE.md`, `docs/CAPABILITY_MATRIX.md`, `docs/ROADMAP.md`, `JEV_DECISION_MAP.md`, `docs/spec_contentforge_reimagined.md`, `docs/README.md`, and `docs/X_API_COMPLIANCE_AND_RISK.md` on the review branch. No application code, tests, deployment, provider calls, or live publishing were executed. This is a product/architecture review of the supplied evidence, not an independent code audit.
+**Review date:** 2026-11-26. **Snapshot inspected:** `collab/ai-pair-review` at `3db1b40f90c65828cf4d0af489e5f08dab8589dc`; the two branch commits ahead of fetched `origin/main` (`0dca955`) are documentation only. This review updates the earlier docs-only ChatGPT review in place; that version remains in Git history.
 
-## Executive recommendation
+**Evidence key:** **VERIFIED** means directly inspected in Git or source, not observed in a running service. **DOCUMENTED** means a repository document reports it. **INFERRED** means a judgment, proposal, or hypothesis. **UNKNOWN** means the evidence is insufficient. These describe the evidence here, not new product capability statuses. No application suites, builds, browser sessions, provider calls, or live publishing were run for this review.
 
-**Do not turn the current codebase into a multi-tenant SaaS by default. First prove a repeatable, valuable single-user workflow, then productize the smallest slice for one narrowly defined second customer.**
+## 1. Executive verdict
 
-The strongest initial wedge is a **research-to-publish operating system for technical creators and technical DevRel practitioners**, starting with SRE/DevOps/cloud infrastructure content. That wedge uses the owner's existing expertise and the product's strongest current capabilities (multi-source research, evidence-backed stories, repurposing, approval, and distribution) without pretending the product already has a defensible general-purpose creator platform.
+**INFERRED: Sell one better technical post per week before selling an AI content operating system.** The strongest asset is the path from source evidence and an expert's own notes to a draft they can check, edit and approve. The most serious product risk isn't a missing integration; it's that nobody outside the founder has been shown to repeat and pay for that workflow. The most serious engineering risk is handing someone else a system with operator-wide account and provider fallbacks.
 
-The original X revenue-share target is a useful founder acquisition experiment and personal success metric, but it is a weak product definition: eligibility thresholds and revenue depend on X's changing rules, reach, geography, and platform economics. Do not promise customers monetisation or revenue outcomes. Sell saved time and a more reliable research-to-publish workflow; treat X as one distribution channel.
+Test a paid, export-first pilot with a technical DevRel lead who already publishes. Preserve the domain-agnostic internals and hard execution checks, but narrow the offer and pilot UI. No shared customer deployment or automated publishing by default. Treat X revenue sharing as a founder experiment, not a promise or dependency of the business.
 
-The code appears substantially more ambitious than the evidence of repeated user value. The next step should be a short, instrumented founder-use period and a concierge second-user pilot—not another broad capability build.
+## 2. What ContentForge actually is today
 
-## 1. Customer and positioning
+**VERIFIED in source:** An owner-oriented React/Express application with PostgreSQL/Drizzle persistence and durable job processing. `server/research/engine.ts:318–418` deduplicates provider results, derives evidence, validates and persists it. `server/story/service.ts` converts completed research with evidence into a Story; `server/content/opportunity.ts` validates channel/format compatibility. `server/content/generation.ts` creates copy from a frozen policy; `server/content/artifact.ts` handles revisions and review state. The publication path checks readiness, uses a lease, and treats uncertain provider outcomes separately from ordinary failures (`server/content/publication.ts`).
 
-### Recommended first customer
+**VERIFIED in source:** Jev is a versioned advisory decision layer, not the executor. The policy code reads process-wide feature flags (`server/decision/policies.ts:150–175`), and a ledger exists (`server/decision/ledgerStore.ts`, `migrations/0033_jev_decisions.sql`), despite the older “no decision ledger” text in `CURRENT_ARCHITECTURE.md` §6. The decision map distinguishes decisions previously exercised on an instance from those enabled there when the map was written. **UNKNOWN:** Current production flags and actual fallback rates.
 
-**Primary ICP:** an individual technical creator, SRE/DevOps practitioner, cloud engineer, or technical DevRel professional who already has subject-matter expertise but struggles to consistently turn research and experience into high-quality posts across channels.
+**VERIFIED exception to the brief's human-gate wording:** Publication needs an approved artifact, but an approval state is not always a human action. In `server/content/automation.ts:1155–1172,1188–1252`, a `trusted` policy can approve unattended; `on_approval` can then create a schedule. This is a deliberate mode, not evidence that unapproved content gets published. A private pilot should use `approval_required`, publication mode `none`, and manual export initially. Do not advertise mandatory per-item human approval for every configuration.
 
-**Not the first ICP:** agencies, large marketing teams, or general lifestyle creators. Those customers imply multi-brand workspaces, collaboration, approval roles, client separation, billing, support, and much stronger onboarding. The current handover explicitly describes a single-operator system.
+## 3. Original vision versus current direction
 
-### One-sentence pitch
+**DOCUMENTED:** `docs/spec_contentforge_reimagined.md` describes a five-minutes-per-day SRE growth tool targeting X Ads Revenue Sharing (the spec cites 5M impressions in 90 days and 500 followers, not verified as current eligibility). The engagement hub and comment mining were for finding high-value conversations; War Story Composer, a three-post morning pack, a PWA, and model-cost controls were supposed to translate those signals and first-hand expertise into low-effort publishing.
 
-> ContentForge turns technical research and your own expertise into evidence-backed, channel-ready content you can review and publish in minutes—not hours.
+**DOCUMENTED:** `docs/COLLAB_BRIEF.md` and `docs/HANDOVER.md` broadened this into Discover → Research → Understand → Opportunities → Create → Repurpose → Approve → Distribute → Measure → Learn. X and Threads are channels rather than the product's center. The separation between intelligence, decisions and execution is an asset worth preserving.
 
-Avoid claiming autonomous growth, guaranteed reach, viral prediction, or X monetisation. Those claims are not supported by the current product evidence.
+**INFERRED:** Keep the original founder's time constraint and first-hand SRE stories as the design discipline. Drop reply velocity, eligibility and follower counts as product success criteria. The general engine gives the founder options; a general-purpose positioning makes the first sale harder. In founder trials, record whether total hands-on effort fits the original five-minute daily cap and whether briefing review/approval fits the separate two-minute aspiration.
 
-### The job to be done
+## 4. Evidence-based product maturity assessment
 
-“When I have limited time and a technical point of view worth sharing, help me find a timely angle, verify the supporting material, produce a strong draft in my voice, and publish it safely—without making me repeat research or lose track of what worked.”
+| Lifecycle surface | Evidence and product implication |
+|---|---|
+| Discover → Research → Understand | **VERIFIED:** Providers, evidence excerpts, analysis and validation are present. `server/research/verticalSlice.dbtest.ts` defines a PostgreSQL slice through Story and Opportunity. **INFERRED:** Provenance helps fact-checking but is not proof a claim is correct; put the source beside the draft. Do not label YouTube metadata as transcripts; the latter is a separate video provider. |
+| Opportunities → Create → Repurpose | **VERIFIED:** Format/channel constraints, frozen generation policy and immutable revisions exist. **DOCUMENTED:** Broader campaign, media and voice-learning ambitions are incomplete. **UNKNOWN:** How often a buyer considers a draft usable without a rewrite, and whether a second format saves time. |
+| Approve → Distribute | **VERIFIED:** Code handles approval state, scheduling, leases and reconciliation. `server/content/visualPublication.dbtest.ts:362–390,438–463` defines fixture cases for an ambiguous write and exactly one logical Result on duplicate delivery. **UNKNOWN:** Delivery and reconciliation under current provider credentials and outages. An adapter registration is not a dependable integration. |
+| Measure → Learn | **VERIFIED:** Metrics refresh is wired to best-effort outcome attachment; `server/decision/outcomes.ts:38–72` preserves unavailable metrics and matches rows by `publicationId` reference. It does not by itself join upstream predictions to outcomes or guarantee coverage for every earlier decision. The prompt-facing `server/content/learning/summary.ts:178–201` condenses owner history into counts; `server/content/learning/proposals.ts` uses small deterministic cohorts. **DOCUMENTED:** Per-topic/per-hook learning and the viral predicted-vs-actual join are missing. **INFERRED:** This is the weakest feedback link; a weekly digest from comparable posts is more useful than predictive scoring now. |
 
-This is narrower and more testable than “AI-native content intelligence.”
+**CI and migrations:** **VERIFIED** both tracked workflows were inspected. `.github/workflows/e2e.yml` runs migrations, typecheck, build and Playwright against ephemeral Postgres, and separately invokes `script/e2e-live.mjs` with a fixture environment. That is a durable-state harness, not proof of live integrations. Neither it nor `.github/workflows/migration-guard.yml` invokes `npm run test:unit` or `npm run test:db`; both package scripts run `script/test-db-guard.ts` and preload `server/testing/hermeticEnv.ts` for the suite. Run these only against intended disposable test DBs. The migration guard calls `db:generate`; snapshots `0016`–`0019` have the same ID. Its subsequent `git diff --quiet -- migrations` also does not detect new untracked files. **DOCUMENTED:** Handover records 1,072 unit and 388 DB passes in its prior local run; some older totals differ. It describes an interrupted clean Playwright rerun and broken generation. **UNKNOWN:** Current Actions results, required checks and migration-generator behavior on this SHA; workflows and snapshot files were read, not executed.
 
-## 2. Minimum path from today to a second paying user
+**Marketing visual discrepancy:** **DOCUMENTED:** Root `HANDOVER.md` records `rebuild_check` at **46%** for the branded build with five page scores (38/53/48/47/44, mean 46%), from site commit `d2331a1`. `docs/HANDOVER.md` §2, added later in `d6b3fa2`, reports **~47% at round 15** while the craft process was still modifying site/build files; `docs/COLLAB_BRIEF.md` repeats it. Both cite 90% as the target. **VERIFIED:** The site routes/assets and structural checks exist in `site/render.ts`, `site/agent.ts`, `server/site.ts` and `server/site.test.ts`. The tests check rendering and planned-connector wording, not visual matching. **Conclusion:** ~47% is the newer documented work-in-progress report; 46% is the explicit per-page measurement associated with the site handover. No comparable committed round-15 score artifact establishing a score for this checkout was located, and no reproduction or screenshot measurement was run: **current visual score UNKNOWN (unresolved)**. Don't use either as a launch metric. More important for the pilot: lead the home page with the actual editorial workflow. `site/agent.ts` explicitly calls MCP planned but elsewhere says the named external assistant calls tools and that there is a human gate on everything that publishes. Distinguish in-app model use, planned external connectors, and the trusted automation exception instead of relying on a disclaimer.
 
-Do this as a **concierge pilot**, not a self-serve SaaS launch.
+## 5. Answers to all six reviewer questions
 
-1. **Founder dogfood:** use the current local instance for 10–14 days. Complete at least five end-to-end content cycles. Record time spent, manual corrections, failures, and whether each output was actually published.
-2. **Choose one repeatable workflow:** e.g. discover a technical topic → inspect evidence → create one X post and one LinkedIn version → approve → publish → record result. Do not require every provider, media type, or channel.
-3. **Make the value measurable:** capture baseline/manual time versus ContentForge time, usable-draft rate, edit/rewrite rate, successful publish rate, and weekly publishing consistency. Do not use impressions alone as product-market-fit evidence.
-4. **Recruit one design partner** from the ICP. Manually onboard them, configure one AI provider and one channel, and observe them completing the workflow. Do not build generic onboarding until this has been observed.
-5. **Charge for the pilot** (even a modest fixed monthly fee) once the workflow reliably saves time. A paying second user is stronger evidence than another feature checklist.
-6. **Only then decide** whether to build multi-user account separation, self-serve onboarding, billing, or team features.
+1. **Is X monetisation still the wedge?** No for customers; yes as a bounded founder distribution experiment. Buyer value should survive a price hike, an API outage, or no revenue-share eligibility.
+2. **Who is the customer and what is the pitch?** A hands-on technical DevRel lead at a small infra-tool vendor, who personally writes and can approve a pilot budget. “Turn a changelog, credible sources and your own notes into a source-backed technical post you can review and publish every week.”
+3. **Minimum path to a paying second user?** Benchmark five founder sessions, show the strongest example to qualified leads, take payment for one concierge pilot, then earn renewal with real repeated publishing. Export is sufficient at first. If no one has already paid, this is the first external paying customer, not literally the second payer.
+4. **Which parts are over-built or missing?** Relative to the offer, additional Jev decisions, autonomy, format breadth and agent surfaces outpace proof. Observed editing, a clean approval/export path, safe onboarding, reliable CI and a simple results note are missing product proof or prerequisites. Do not replace the engine to simplify the pilot.
+5. **What breaks the multi-tenant assumption?** Global provider auth/config, residual ownerless legacy entry points, side-effecting workers, attribution and isolation across assets/metrics/ledgers, and spend/revocation semantics. Owner checks and Auth0 are groundwork, not a tenant boundary (see §9).
+6. **What order?** Two weeks: narrow the slice and run time trials while fixing the missing test gate. Two months: collect a paid renewal and a second external sale with the same offer. Six months: invest in repeatability, isolation and metered economics only if the workflow retains paying customers (see §§11–13).
 
-Proposed pilot exit: the second user independently completes the core workflow in their first week, returns in week two, and is willing to pay to continue. This is a proposed validation criterion, not a claim that it has happened.
+## 6. Recommended customer and positioning
 
-## 3. What to keep, pause, and cut
+**INFERRED:** Start with technical DevRel leads at small developer-infrastructure companies (observability, reliability, CI/CD, cloud cost). Qualify for an established cadence, permission to post, access to public technical sources, and ability to approve a small expense. A hands-on lead is the user; a founder or head of developer marketing is the buyer if spend is delegated. An independent technical creator is a useful comparison: easier to recruit, but budget and urgency are unproven. Internal SRE teams have expertise but often no public publishing mandate; agencies demand client separation and multi-brand approvals before the basic value has been proved.
 
-### Keep and prove
+Differentiate from general chat by making source verification, voice/edit history and the exact approved draft part of the workflow; differentiate from schedulers by starting with the evidence instead of an empty calendar. This is a positioning hypothesis, not a verified competitive moat. Benchmark against the customer's existing workflow (including chat plus a doc), not against writing without AI. One reproducible before/after from the customer's own material is stronger than a generic suite comparison.
 
-- Research provider abstraction, evidence/provenance, source deduplication, and reusable research.
-- Story → Opportunity → GenerationJob → immutable Artifact → human approval.
-- Existing channel adapters and publication reconciliation, but certify only the channels the pilot user actually needs.
-- Voice/style context and format-aware repurposing.
-- Jev as a typed, logged decision service **where a real consumer exists**, with deterministic hard validators remaining authoritative.
-- Basic result capture and a small set of useful performance signals.
+## 7. Minimum path to a second paying customer
 
-### Pause expansion
+**INFERRED pilot design:** Start from a public changelog, RSS item or incident write-up plus the expert's notes scrubbed of nonpublic details. Produce one cited technical post (optional second format only if requested), show the source for important claims, let the operator edit and approve the exact revision, export copy to the existing publishing workflow, then capture a URL and a comparable 7-day result manually. Do not require account linking, auto-posting or multi-brand management. With explicit permission, the founder can operate the existing system for the buyer using public inputs; if login is essential, use a dedicated isolated instance only after checking its boundaries. No customer credentials in the founder instance.
 
-- More channels and provider integrations.
-- MCP server, unless the first design partner's actual workflow requires external assistant access.
-- Opportunity Radar, competitor intelligence, broad audience mining.
-- Advanced autonomous editorial planning and further autonomous policy activation.
-- More visual/video workflows and a larger asset library.
-- Multi-brand and agency features.
+1. Run five paired founder trials against the normal workflow using comparable assignments. Record total hands-on minutes and review minutes separately, errors, substantial rewrites and actual publication. Save two examples the founder can share.
+2. Approach 10 qualified leads via the founder's infra network. In calls, ask them to bring their latest release or public write-up and show exactly where the existing flow eats time. Offer the same scope to each; if discussions do not become paid trials, diagnose buyer/pain before expanding features.
+3. Offer a **$99 four-week pilot** for four weekly post packages, billed manually in advance. This is a test price, not market evidence or a permanent tier. Make the buyer approve and publish; measure any editorial work the founder absorbed. At the end ask for a paid renewal, not merely feedback.
+4. Use the same pitch and package to sign a second unrelated external buyer. Avoid bespoke integrations to close either deal. Proposed pass bar: each pilot publishes at least three of four packages; review/edit time is at least 30% less than the buyer baseline at comparable quality; important technical claims are sourced or explicitly attributed to the expert; at least one paid renewal and one additional external payer. Track total founder and customer effort so hidden concierge labor cannot masquerade as product value.
 
-These may be useful later, but none is shown by the brief to be the shortest path to a second paying user.
+Commercial credibility here means predictable delivery, source/claim review, clean export and a usable outcome note, plus a clear retention/deletion practice. Record model, research, channel, hosting, onboarding, manual editing and support costs separately. Illustrative constraint: at $99 and a 60% contribution-margin target, variable costs must fit under roughly $40 per account-month; $10 nonlabor cost leaves about 36 minutes at a $50/hour support cost. If the pilot far exceeds that, simplify service or test a higher price before selling a self-serve subscription. Defer checkout, tiers, overages and tax automation until renewals and costs justify them; use fixed included usage and explicit approval for extra costs, not “unlimited AI.”
 
-### Cut or reframe
+## 8. What to keep, cut and defer
 
-- Treat X revenue-share eligibility as a personal growth experiment, not the product promise.
-- Do not market Agent Reach as available while the capability matrix says its record is inert and never dispatched.
-- Do not advertise an MCP connector as available while the matrix says only an MCP client exists.
-- Avoid “AI decides the best content” language until measured decisions beat a simple baseline on a labelled set.
+- **Keep:** research provenance, the expert's voice and notes, one format that the buyer really publishes, immutable revisions and explicit review, basic cost recording, and adapter reconciliation where a channel is later certified. Keep Jev advisory and let hard validators remain authoritative.
+- **Cut from the pilot and sales story:** X-income guarantees, scraping, unsolicited automated replies, autonomous editorial calendar, live MCP claims, agent-page-first onboarding, and cloning reference-site aesthetics as a KPI. Don't rip out modules in this review.
+- **Defer:** second channel automation, MCP server, broader discovery and competitor mining, video/carousels, experiments UI, general autonomous decisions, teams/agencies and self-serve billing. Only expand an existing capability when a paid workflow demonstrates what is blocked. For Jev, compare one decision at a time to a deterministic/current baseline with human labels and explicit fallback/rollback before enabling wider use.
+- **Pull forward from `docs/ROADMAP.md`:** inexpensive results capture and a weekly learning note, ahead of more radar/providers. Record post URL, publish time, channel, format, topic and hook, measurement window and missingness; compare within channels/formats and avoid causal interpretations from small cohorts. Don't build a prediction system to answer whether last week's posts were useful.
 
-## 4. Measure and Learn: the highest-value product gap
+## 9. Architecture and multi-tenancy risks
 
-The handover and architecture docs agree that the loop currently reaches generation only as bounded counts; per-topic/per-hook learning and predicted-vs-actual comparison are absent. This is a more important gap than adding another discovery source.
+**VERIFIED:** Ownership is carried through several canonical paths, e.g. publication passes `leased.userId` to the adapter (`server/content/publication.ts:266,526`), and Jev ledger reads are owner-scoped in `server/decision/ledgerStore.ts`. Tokens are encrypted on storage writes, but the legacy `getConnectedAccount(platform)` read is not owner-filtered (`server/storage.ts:661–681`); the X, Threads and Instagram modules retain this null-owner path. Even their owner-aware paths retain deployment credential fallbacks (`server/social/x.ts:147–163,234–255`, `server/social/threads.ts:224–235`, `server/social/instagram.ts:346–357`). This is a concrete blocker for shared customer writes; it is not proof of a live cross-account write or that current customer routes generate ownerless publications. AI provider defaults and Jev flags also read the environment (`server/ai/config.ts`, `server/decision/policies.ts`). Password or Auth0 login identifies a user; it does not by itself bind that user to a workspace, a system job or a particular connected account.
 
-Build the smallest useful measurement loop:
+**INFERRED release gate before shared tenancy:** Require explicit workspace scope for data access and background work, no unscoped customer-path fallback, and an owner/workspace-bound channel account that a worker revalidates before delivery. Persist the intended account and approved revision on a schedule; revoke or pause future work when a channel is disconnected. Encrypt provider secrets with managed rotation, keep them out of responses and logs, and make quota and kill-switch enforcement per tenant plus global. Bind assets and download URLs to tenant, keep provider content separate from prompt instructions, redact sensitive logs, and define retention/deletion across source text, prompts, ledgers, job payloads, results, exports and backups. Choose application scoping and database enforcement together; do not count RLS as coverage for object storage or outbound provider actions.
 
-1. Record each publication's channel, format, topic/pillar, hook/angle, publish time, and artifact revision.
-2. Capture available platform metrics with explicit missingness and freshness; absent metrics must remain absent, not zero.
-3. Compare outcomes only within sensible cohorts (same channel and comparable format/time window); avoid causal claims from tiny samples.
-4. Show the operator a concise weekly answer: what performed relatively better, what evidence supports that, and what to try next.
-5. Feed observations into Jev/experiments as proposals, not autonomous truth. Keep human approval for policy changes.
+Before enabling customer credentials, add two-owner tests for both HTTP and queued paths: reads/updates/exports, asset URLs, research-to-generation lineage, ledger reads and outcome updates, spend attribution, revoked tokens, replay and partial publish failures. Test a user with no channel account cannot use deployment or another user's credentials. Add restore and duplicate-delivery drills with fixtures. Keep worker topology simple until leases/scheduler ownership are proved for multiple replicas; `docs/HANDOVER.md` currently describes one process operating web, workers and schedulers. **UNKNOWN:** Whole-app isolation, deployed credentials, queue/restart behavior, backup/restore results, data residency, secret history and tenant-specific operational controls were not independently verified.
 
-Do not start with a complex predictive model. First make the data join reliable and the operator insight actionable.
+## 10. X API cost and compliance risks
 
-## 5. Jev: value, risks, and validation required
+**VERIFIED:** The X adapter delegates to `server/social/x.ts`, which defaults to **xQuick**, not direct OAuth 1.0a requests to X. Even the lookup helper named `fetchTweetTextByIdViaOfficialApi` builds its request from xQuick configuration (`server/social/x.ts:108–143,457–480`). `docs/X_API_COMPLIANCE_AND_RISK.md` describes a direct official-API posture; the checked-in routing does not independently establish what xQuick does upstream or that its commercial use is allowed. Provider status polling/reconciliation and optional analytics introduce additional calls and distinct costs; an accepted write is not final proof of publication.
 
-The separation `INTELLIGENCE ≠ DECISION ≠ EXECUTION` is a sound foundation. The key product risk is that a central decision engine can look sophisticated while most of its decisions are flag-off, shadow-only, or lack a labelled quality baseline.
+**UNKNOWN:** Current pricing, caps, permitted use for this exact data path, provider authorization and upstream terms, billing per thread segment/media upload/poll/read, coverage of analytics, account eligibility and deployment behavior. Verify with [official X terms](https://docs.x.com/developer-terms), [usage and billing](https://docs.x.com/x-api/fundamentals/post-cap), the relevant developer console and a documented provider contract before selling direct publishing. No current rates or eligibility are asserted here.
 
-Before expanding Jev:
+**INFERRED controls:** Start with export (no X billing dependency). For any authorized integration, require explicit account connection and item-level approval, a kill switch, clear revocation/deletion procedures, and a daily budget for research reads/analytics and write-related calls. Prefer non-X research and make metrics optional; honor missingness, freshness and rate-limit resets. Reconcile uncertain writes rather than blindly retrying, track actual spend per approved package, and exclude scraping, unsolicited replies and engagement automation from the offer. Require provider and policy review before ingesting/reusing X content in AI workflows; use minimum necessary data and confirm retention, deletion and model-use terms.
 
-- Publish a runtime decision coverage view: decision type, master flag, per-decision flag, consumer, fallback, last observed invocation, and whether it is advisory/shadow/active.
-- For every active decision, record decision outcome, policy version, safe evidence references, fallback state, and eventual outcome. Do not expose hidden chain-of-thought.
-- Build a small human-labelled golden set for the three shadowed legacy decisions before any cut-over. Define who labels, how disagreements are resolved, and how often it is refreshed.
-- Evaluate Jev against a deterministic/current baseline. Report agreement, precision/recall where labels support it, latency, fallback rate, and downstream outcome—not confidence alone.
-- Test adversarial/untrusted research text, missing context, timeouts, malformed outputs, low confidence, and flag combinations.
-- Keep all hard gates in execution code. The handover already states this principle; retain it as an invariant.
+## 11. Two-week roadmap
 
-**Recommendation:** do not switch on every flag together. Enable one decision at a time, on a narrow cohort, with a rollback path and an explicit success measure. A flag being enabled is not evidence that the decision improves the product.
+1. Define the one-source-plus-notes-to-approved-export slice and make a scorecard. Run five paired founder trials; flag unusable drafts, lost provenance and manual corrections. Hold add-on work unless it blocks completing the slice.
+2. In parallel, implement ROADMAP P0-1 in a separate engineering change: disposable Postgres, ordered migrations, the two npm suites, required checks and one demonstrated red assertion. Record a clean browser/harness baseline on a quiet build. Keep integration doubles and no purchase/publish credentials. Diagnose the migration guard separately, not in the same change.
+3. Write the one-page offer and interview qualified technical DevRel leads using a real before/after. Ask for payment rather than an open-ended free beta. **Exit:** five scored trials, a safe repeatable workflow, and at least one lead willing to book the defined paid pilot; otherwise revise the audience/offer before building onboarding.
 
-## 6. Architecture and operational risks
+## 12. Two-month roadmap
 
-1. **Single-operator vs product boundary:** owner scoping is valuable groundwork, but it is not a multi-tenant product design. Before a second user touches the system, verify isolation for connected-account tokens, AI provider secrets, uploads/assets, research data, Jev ledger rows, usage/costs, audit logs, and scheduled jobs. Do not infer multi-tenancy from the presence of `user_id` columns.
-2. **Secrets and account connections:** the handover records a live cookie jar in local ignored files and warns about environment inheritance. Keep secrets out of review artifacts, tests, browser storage, logs, and Git history. The branch brief says the repo is public (the connected GitHub metadata also reports public); therefore the private-repo warning in the handover should be revisited. A public repository makes secret-history scanning especially important.
-3. **X API dependence:** keep official API use, user-initiated publishing, opt-in, rate/cost caps, and a kill switch. The compliance document is useful but rate limits/pricing must be rechecked against the current developer console before launch. Do not make X the only viable distribution path.
-4. **Migrations:** broken migration generation is a real change-safety risk. Hand-written SQL can be safe if disciplined, but requires a repeatable schema-diff/review workflow, fresh-DB and upgrade tests, and journal/snapshot consistency. Repairing Drizzle generation is worthwhile, but not more urgent than establishing a green CI gate.
-5. **CI and test truthfulness:** the handover/roadmap state that unit and DB suites are not in CI. This should be the first engineering gate before product expansion. Require tests to run on PRs and protect merges with required checks. Also verify that the workflow tests the same commands and DB setup documented for local development.
-6. **Marketing-site readiness:** the site is reported as in progress and not fully verified by a clean Playwright run. It should not be the critical path for a private design-partner pilot. A simple honest landing page and manual onboarding are sufficient.
-7. **Runtime coupling:** the docs describe one process hosting web, workers, and schedulers. Preserve that known topology unless there is measured need to split it; adding a second worker can duplicate cron/consumers. Document backup/restore and restart behavior before any always-on use.
+1. Run the paid pilot and sell the same offer to a second buyer. Review draft quality, publication, missing metrics, manual labor and cost weekly. Ship a small editorial outcome note; no analytics integration is necessary for the initial measurement.
+2. Fix only recurring workflow friction. Separately restore migration-generation confidence or establish and test a disciplined manual-migration path: fresh install plus upgrade from a representative preceding schema, and checks for untracked artifacts. Document backup, deletion and incident ownership before taking customer data beyond approved public material.
+3. Add an isolated channel integration only if multiple buyers need it and terms/cost and credential controls pass §9–10. **Exit:** §7 paid renewal and repeat sale, measured time savings/quality, and a plausible margin after accounting for founder labor. Missing those gates means iterate the offer, not launch self-serve.
 
-## 7. Ordered roadmap
+## 13. Six-month roadmap
 
-### Next 2 weeks — prove the core loop
+1. If the same package produces repeat publishing and renewal across several unrelated accounts, standardize onboarding, claim review/export, usage caps and account support. Pick the next channel from recorded buyer demand, not from adapter availability.
+2. Introduce shared workspaces only if operating isolated pilots is demonstrably the bottleneck and the isolation tests, restore drill, cost controls and provider terms pass. Add self-serve payment and metering only after stable pricing and support costs. Keep export working independently of channel outages.
+3. Use the accumulated editorial decisions and approved outcomes to test whether provenance, revision context and calibrated learning improve time or quality against generic drafting. Consider team approvals or MCP only with paid demand and equivalent auth, scope and review gates. If retention or margin is poor, stay a personal tool or change the customer hypothesis rather than funding a broad SaaS platform.
 
-1. Reconcile the docs with the actual branch/main state and close contradictions (see below).
-2. Make unit + DB suites required CI checks; demonstrate a deliberately failing assertion blocks the workflow.
-3. Complete one clean local Docker Compose acceptance run, with no real external publish by default.
-4. Run five founder workflows with one real research source and one real publish channel, under explicit spend limits.
-5. Add a minimal weekly performance summary using already available results; do not add new predictive intelligence yet.
-6. Write a one-page design-partner offer and recruit one technical creator for a concierge pilot.
+## 14. Critical unknowns and assumptions
 
-### Next 2 months — second-user pilot
+- **UNKNOWN:** Number of actual users/payers, cadence, repeat use, existing marketing conversion, alternative products used by buyers, willingness to pay, procurement and data requirements. The suggested ICP and price are hypotheses, not researched market facts.
+- **UNKNOWN:** Draft quality on real technical content, fact-check burden, daily hands-on time versus the original five-minute goal, and whether manual export suffices. Measure these with the existing buyer workflow as baseline.
+- **UNKNOWN:** Current live flags, provider contracts/terms, metrics coverage, connected-account settings, deployments, CI outcomes/protection, security history, and the current marketing visual score. No deployment, developer console, Actions logs, private pilot data or comparable round-15 artifacts were inspected. Only the review snapshot, not other feature branches, informs code claims.
+- **INFERRED assumption:** An initial pilot can work from public evidence and consented notes with no publishing credentials. If procurement requires private telemetry, proprietary incident data, a shared instance or provider account access, defer that pilot until its boundaries are independently verified.
 
-1. Onboard one design partner manually.
-2. Close only the onboarding, provider setup, publishing, and measurement friction observed in that pilot.
-3. Prove account/token/data isolation with two distinct users before allowing the second user to use a shared production instance.
-4. Add per-topic/per-format outcome aggregation and a useful weekly learning report.
-5. Add billing only after a customer has agreed to pay and the unit economics/provider cost model is understood.
-6. Decide whether MCP, additional channels, and marketing-site investment are justified by observed demand.
+## 15. Final recommendation
 
-### Next 6 months — choose the product shape from evidence
-
-If multiple technical creators repeat the workflow and pay, invest in self-serve onboarding, robust tenant boundaries, subscription/usage metering, support/observability, and a narrow set of high-value integrations. If they do not, keep ContentForge as a personal tool or pivot the ICP before adding infrastructure. Agency/team workflows should be a separate product decision, not an assumed next step.
-
-## 8. Documentation inconsistencies to resolve
-
-These are findings from the documents read, not independently verified code defects:
-
-- `docs/HANDOVER.md` says seven lifecycle-boundary Jev decisions exist, while `CURRENT_ARCHITECTURE.md` still describes only two live boundaries in §3.1 and says in §6 “There is no decision ledger,” contradicting the Jev map and handover. Reconcile to one as-built account.
-- `JEV_DECISION_MAP.md`'s authoritative as-built table says `opportunity_score` is VERIFIED LIVE, while `docs/CAPABILITY_MATRIX.md` calls it PARTIALLY IMPLEMENTED because a flag is default-off. These can both be true only if status distinguishes code capability from this deployment's flag state; document that distinction explicitly.
-- The capability matrix status legend omits `VERIFIED LIVE`, although the brief and handover require it.
-- `docs/HANDOVER.md` and the capability matrix are dated 2026-11-11 and identify `feat/auth0-migration`; the collaboration brief says the review branch is based on `main @ 0dca955` after PR #6 merged. Update the docs' branch/commit provenance before treating them as current.
-- The handover calls the repository's local workspace dirty/noisy and mentions a cookie jar. The collaboration brief says the GitHub repository is private, but GitHub metadata observed for this review reports repository visibility as **public**. Reconcile the warning and run a secret-history scan before inviting external reviewers.
-- The handover says the local tests pass (1072 unit / 388 DB) but the roadmap says CI does not run them. Make the distinction explicit: local pass is not a merge gate.
-- The brief lists YouTube transcripts as a research capability; the architecture distinguishes YouTube metadata from a separate video transcript provider via yt-dlp. Keep those capabilities separate in product copy and status.
-
-## 9. Direct answers to the six review questions
-
-1. **Is X monetisation still the right wedge?** Keep it as the founder's personal outcome, not the product wedge. The stronger wedge is reliable technical research-to-publish for technical creators.
-2. **Who is the customer and pitch?** Individual technical creators / DevRel / SRE practitioners. “Turn technical research and your expertise into evidence-backed, channel-ready content you can review and publish in minutes.”
-3. **Minimum path to a paying second user?** Five founder workflows, one measurable repeatable workflow, one manually onboarded design partner, two-week usage, then a paid continuation decision.
-4. **What is over-built vs missing?** Pause expansion of autonomy, channels, MCP, competitor intelligence, advanced media and agency features. Strengthen CI, operational onboarding, measurement, and proof of decision quality.
-5. **Multi-tenant architecture risks?** User IDs alone are insufficient; verify isolation across secrets, connected accounts, files, jobs, ledgers, logs, provider usage, and publication side effects before shared use.
-6. **Roadmap?** Next 2 weeks: CI + dogfood + one measurable workflow. Next 2 months: concierge second-user pilot + isolation + useful learning. Next 6 months: productize only if repeat usage and willingness to pay are demonstrated.
-
-## 10. Evidence limits
-
-- I read the documents listed in the review method on the collaboration branch.
-- I did not inspect source-code implementation, run tests, start Docker, connect providers, inspect the live application, or publish to any platform.
-- The status labels and implementation claims above are therefore attributed to the documents, not independently certified.
-- No product or code change is recommended solely from this document review. Use the source files and targeted tests to validate any implementation-level concern before changing code.
+Approve a two-week validation sprint and one narrowly scoped paid pilot, not a SaaS build. Keep the lifecycle as architecture, sell only the part that saves the buyer time today, and make the original founder workflow the first benchmark. Use CI and isolation as release gates, but use paid renewal and repeatable editorial value as investment gates. The next bet is **one teachable workflow, one buyer, one price and a measured result**, with the second sale testing whether it was repeatable.
