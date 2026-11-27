@@ -90,6 +90,10 @@ import {
   ScheduleInputError,
 } from "./scheduling";
 import { publishArtifactToChannels, DistributionInputError } from "./distribution";
+import {
+  logManualPublication,
+  ManualPublishInputError,
+} from "./manualPublish";
 import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
 import { requestStyleAnalysis, activateStyleProfile, publicReference, publicStyleProfile, ReferenceNotFoundError, StyleServiceInputError, StyleProfileNotFoundError } from "./styleService";
@@ -1124,6 +1128,47 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
+  /**
+   * Manual publish logging for export-first artifacts (INC-08).
+   * Persists canonical Schedule → Occurrence → Publication (providerCalled=false)
+   * → Result (outcome="published") so operators can immediately log metrics via
+   * POST /api/learning/publications/:id/observations.
+   */
+  router.post("/artifacts/:id/log-manual-publish", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const ownerId = requireOwnerId(req);
+      const outcome = await logManualPublication(id, ownerId, req.body ?? {}, {
+        content: deps.content,
+        learning: deps.learning,
+      });
+      return res.status(outcome.created ? 201 : 200).json({
+        publicationId: outcome.publication.id,
+        scheduleId: outcome.schedule.id,
+        occurrenceId: outcome.occurrence.id,
+        resultId: outcome.result?.id ?? null,
+        artifactId: outcome.artifact.id,
+        channel: outcome.publication.channel,
+        state: outcome.publication.state,
+        providerCalled: outcome.publication.providerCalled,
+        externalUrl: outcome.result?.externalUrl ?? null,
+        publishedAt: outcome.result?.publishedAt ?? outcome.schedule.startAt,
+        created: outcome.created,
+        publication: serializePublication(outcome.publication),
+        result: outcome.result,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      }
+      if (error instanceof ManualPublishInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof ArtifactNotSchedulableError) return res.status(409).json({ message: error.message });
+      return next(error);
+    }
+  });
+
   // ── Schedules ───────────────────────────────────────────────────────────────
   router.post("/schedules", async (req, res, next) => {
     try {
@@ -2127,7 +2172,15 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const userId = requireOwnerId(req);
       if (!deps.generation.contextReader) return res.json({ sources: [], contextHash: "no-context" });
-      const assembly = await assembleContext(userId, deps.generation.contextReader);
+      const channel =
+        typeof req.query.channel === "string" && req.query.channel.trim()
+          ? req.query.channel.trim()
+          : undefined;
+      const format =
+        typeof req.query.format === "string" && req.query.format.trim()
+          ? req.query.format.trim()
+          : undefined;
+      const assembly = await assembleContext(userId, deps.generation.contextReader, { channel, format });
       return res.json({
         sources: assembly.sources.map((s) => ({ id: s.id, type: s.type, content: s.content, provenance: s.provenance })),
         contextHash: assembly.contextHash,

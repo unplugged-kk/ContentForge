@@ -16,11 +16,41 @@ export interface ExportableArtifact {
 
 export interface ArtifactExportEvidence {
   id?: number | string;
+  sourceId?: number | null;
   text?: string | null;
   claim?: string | null;
   excerpt?: string | null;
   canonicalUrl?: string | null;
   title?: string | null;
+}
+
+export interface ArtifactExportSource {
+  id?: number | null;
+  title?: string | null;
+  canonicalUrl?: string | null;
+}
+
+/**
+ * Joins raw research evidence rows (`sourceId` only) with `/sources` metadata
+ * so Markdown exports include real clickable titles and canonical URLs.
+ */
+export function enrichEvidenceWithSources(
+  evidence: readonly ArtifactExportEvidence[],
+  sources: readonly ArtifactExportSource[],
+): ArtifactExportEvidence[] {
+  const sourceById = new Map<number, ArtifactExportSource>();
+  for (const src of sources) {
+    if (typeof src.id === "number") sourceById.set(src.id, src);
+  }
+  return evidence.map((item) => {
+    const matched = typeof item.sourceId === "number" ? sourceById.get(item.sourceId) : undefined;
+    if (!matched) return item;
+    return {
+      ...item,
+      title: item.title?.trim() || matched.title || null,
+      canonicalUrl: item.canonicalUrl?.trim() || matched.canonicalUrl || null,
+    };
+  });
 }
 
 export interface ArtifactExportContext {

@@ -141,7 +141,7 @@ export function renderHome(): string {
   </div>
   <h1 id="hero-title" class="head">Run your content engine on autopilot with
     <span class="rotor" data-rotor="${esc(JSON.stringify(ROTOR))}"><span class="rotor-icon" style="background:${first.bg}">${first.svg}</span><span class="rotor-word">${first.name}</span></span></h1>
-  <p class="hero-sub">ContentForge is the content operating system: AI agents discover topics, research them with sources and draft every format, and you approve everything before it ships.</p>
+  <p class="hero-sub">ContentForge is the content operating system: AI agents discover topics, research them with sources and draft every format, with human approval enforced by default (locked in pilot mode).</p>
   <a class="btn btn-light btn-lg" href="${APP_PATH}">Start your first research for $0 ${I.arrows}</a>
   <div class="channel-strip" aria-label="Channels and research sources">${strip.map((t) => tile(t)).join("")}</div>
 </section>

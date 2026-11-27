@@ -29,7 +29,9 @@ import {
   formatArtifactNumberedThread,
   formatArtifactMarkdownExport,
   buildArtifactExportFilename,
+  enrichEvidenceWithSources,
   type ArtifactExportEvidence,
+  type ArtifactExportSource,
 } from "@/lib/artifact-export";
 import {
   Sparkles,
@@ -230,6 +232,15 @@ export function ArtifactReviewView({
     enabled: Boolean(storyQuery.data?.researchJobId),
   });
 
+  const storySourcesQuery = useQuery<ArtifactExportSource[]>({
+    queryKey: ["/api/research/jobs", storyQuery.data?.researchJobId, "sources"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/research/jobs/${storyQuery.data!.researchJobId}/sources`);
+      return res.json();
+    },
+    enabled: Boolean(storyQuery.data?.researchJobId),
+  });
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId] });
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId, "history"] });
@@ -398,7 +409,10 @@ export function ArtifactReviewView({
   const history = historyQuery.data || [];
   const currentVersion = deriveVersionNumber(artifact.id, history);
 
-  const rawEvidence = storyEvidenceQuery.data ?? [];
+  const rawEvidence = enrichEvidenceWithSources(
+    storyEvidenceQuery.data ?? [],
+    storySourcesQuery.data ?? [],
+  );
   const storyEvidenceRefSet = new Set(storyQuery.data?.evidenceRefs ?? []);
   const exportEvidence =
     storyEvidenceRefSet.size > 0

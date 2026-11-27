@@ -7,6 +7,7 @@ import {
   formatArtifactNumberedThread,
   formatArtifactMarkdownExport,
   buildArtifactExportFilename,
+  enrichEvidenceWithSources,
 } from "./artifact-export";
 
 describe("artifact-export helpers", () => {
@@ -177,6 +178,31 @@ describe("artifact-export helpers", () => {
         { storyTitle: "Scaling Postgres: 100k QPS!", version: 3 },
       );
       assert.equal(name, "scaling-postgres-100k-qps-x-thread-v3.md");
+    });
+  });
+
+  describe("enrichEvidenceWithSources", () => {
+    it("joins sourceId metadata so Markdown exports emit real clickable URLs and titles", () => {
+      const enriched = enrichEvidenceWithSources(
+        [
+          { id: 1, sourceId: 90, excerpt: "Latency dropped 45% under connection pooling." },
+          { id: 2, sourceId: null, excerpt: "Author observation without external URL." },
+        ],
+        [
+          { id: 90, title: "Postgres Pooler Benchmark", canonicalUrl: "https://example.com/pg-bench" },
+        ],
+      );
+
+      const md = formatArtifactMarkdownExport(
+        { id: 7, format: "x_post", channel: "x", readiness: "approved", payload: { text: "Summary" } },
+        { evidence: enriched },
+      );
+
+      assert.match(
+        md,
+        /Latency dropped 45% under connection pooling\. — \[Postgres Pooler Benchmark\]\(https:\/\/example\.com\/pg-bench\)/,
+      );
+      assert.match(md, /Author observation without external URL\./);
     });
   });
 });

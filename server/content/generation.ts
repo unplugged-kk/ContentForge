@@ -246,7 +246,10 @@ export async function createGenerationJob(
     const contextAssembly = input.frozenContext
       ? input.frozenContext
       : deps.contextReader
-        ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
+        ? await assembleContext(opportunity.userId ?? null, deps.contextReader, {
+            channel: opportunity.channel,
+            format: opportunity.format,
+          })
         : EMPTY_CONTEXT_ASSEMBLY;
 
   // Phase 29.3: an explicit caller-supplied value always wins. Only when the

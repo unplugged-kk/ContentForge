@@ -17,6 +17,7 @@ import { ingestExplicitMetrics, refreshPublicationMetrics } from "./refresh";
 import { type NormalizedMetric } from "./metrics";
 import { lineageToExplain, resolveLineage } from "./lineage";
 import { extractObservationsAndProposals } from "./proposals";
+import { computeWeeklyLearningDigest } from "./weeklyDigest";
 import type { ProposalStatus } from "@shared/schema";
 
 const observationBody = z.object({
@@ -169,6 +170,25 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
       const ownerId = requireOwnerId(req);
       const summary = await computeAnalyticsSummary(deps.database, ownerId);
       return res.json(summary);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get("/weekly-digest", async (req, res, next) => {
+    try {
+      const ownerId = requireOwnerId(req);
+      const rawWindowDays = req.query.windowDays;
+      let windowDays = 7;
+      if (rawWindowDays !== undefined) {
+        const parsed = Number(rawWindowDays);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 90) {
+          return res.status(400).json({ message: "windowDays must be an integer between 1 and 90" });
+        }
+        windowDays = parsed;
+      }
+      const digest = await computeWeeklyLearningDigest(deps.database, ownerId, { windowDays });
+      return res.json(digest);
     } catch (error) {
       return next(error);
     }

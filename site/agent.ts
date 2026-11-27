@@ -47,7 +47,7 @@ const CAPS = (n: string): [string, string, string][] => [
   ["layers", "One story, every format", "Threads, LinkedIn posts, carousels, newsletters and scripts adapted to each platform."],
   ["calendar", "Plan and schedule ahead", "Approved revisions go into durable schedules that survive restarts and never double-post."],
   ["image", "Images and video requests", "Generate brand-aware images, and send video scripts to Video Factory through a versioned contract."],
-  ["lock", "Stays in your account", "Owner-scoped tools, audit logs and a human approval gate on everything that publishes."],
+  ["lock", "Stays in your account", "Owner-scoped tools, audit logs and human approval enforced by default (locked in pilot mode)."],
 ];
 
 const AGENTS: AgentCfg[] = [
@@ -111,7 +111,7 @@ const AGENTS: AgentCfg[] = [
       { h: "Read the numbers", q: "Which format performed best last month, and how sure are we?" },
     ],
     chips: [["Check my channels", "X, LinkedIn and Threads are connected. Instagram needs a new token."], ["Read last month's numbers", "Threads posts had the highest engagement rate (n=12). That is a correlation, not a cause."], ["Schedule the approved carousel", "Scheduled for Thursday 10:00 on Instagram and LinkedIn."]],
-    compare: { h: "Which way should you connect ContentForge to Claude Cowork?", rows: [["Setup", "Use the in-app Agent workspace", "Add ContentForge as a Cowork connector (planned)"], ["Best for", "Day-to-day review and approval", "Recurring desktop workflows"], ["Approval", "Human gate on every publish", "Same server-side gate"], ["Data", "Stays on your server", "Stays on your server"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
+    compare: { h: "Which way should you connect ContentForge to Claude Cowork?", rows: [["Setup", "Use the in-app Agent workspace", "Add ContentForge as a Cowork connector (planned)"], ["Best for", "Day-to-day review and approval", "Recurring desktop workflows"], ["Approval", "Enforced by default (locked in pilot mode; trusted opt-in off by default)", "Same server-side gate"], ["Data", "Stays on your server", "Stays on your server"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
     same: { q: "How do social media workflows run in Claude Cowork?", cards: [["Discover", "List opportunities, stories and connected channels."], ["Create", "Request drafts and repurposing through domain tools."], ["Manage and analyze", "Schedule approved revisions and read performance."]] },
     faq: [["What is Claude Cowork?", "Claude Cowork is a desktop agent that can use connectors to run multi-step tasks. With the planned ContentForge MCP server it would call the same domain tools as the in-app agent."], ...COMMON_FAQ("Claude Cowork")],
   },

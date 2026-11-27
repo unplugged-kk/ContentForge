@@ -66,11 +66,11 @@ export function DiscoverTab({ initialJobId = null, onJobChange }: DiscoverTabPro
   const [storyInitialData, setStoryInitialData] = useState<{ title?: string; body?: string }>({});
 
   useEffect(() => {
-    if (initialJobId != null && initialJobId !== activeJobId) {
-      setActiveJobId(initialJobId);
+    if (initialJobId != null) {
+      setActiveJobId((prev) => (prev === initialJobId ? prev : initialJobId));
       setSelectedSource(null);
     }
-  }, [initialJobId, activeJobId]);
+  }, [initialJobId]);
 
   // Capabilities query
   const capabilitiesQuery = useQuery({
@@ -434,9 +434,13 @@ export function DiscoverTab({ initialJobId = null, onJobChange }: DiscoverTabPro
       {/* State C: Error State with Retry */}
       {isFailed && (
         <ErrorState
-          title="Couldn't complete research"
-          description="Some sources or queries could not be executed at this time."
-          onRetry={handleStartResearch}
+          title={jobQuery.isError ? "Couldn't load research session" : "Couldn't complete research"}
+          description={
+            jobQuery.isError
+              ? "Could not fetch the requested research job. Retry to reload it."
+              : "Some sources or queries could not be executed at this time."
+          }
+          onRetry={jobQuery.isError ? () => void jobQuery.refetch() : handleStartResearch}
         />
       )}
 
