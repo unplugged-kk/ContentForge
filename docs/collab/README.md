@@ -1,37 +1,49 @@
 # ContentForge agent collaboration
 
-This is the shared starting point for Cursor, Claude, ChatGPT, Codex, and any other agent with repository access. GitHub is the handoff: instructions live here; work, reviews, verification, and decisions live in commits and pull requests (PRs). A chat is not the record. Agents do not notify each other automatically; start a session on the same repository and point it at this file or the open PR.
+This is the shared starting point for Cursor, Claude, ChatGPT, Codex and any other agent with repository access. GitHub is the handoff: instructions, work, reviews, verification and decisions live in commits and pull requests (PRs). Chats do not notify agents automatically; each agent must fetch and read the shared documents.
 
 ## Where we are going
 
-- **Original vision:** A personal content and X growth engine for an SRE, designed to take at most five minutes a day. See the [original spec](../spec_contentforge_reimagined.md) and [review brief](../COLLAB_BRIEF.md).
-- **Today:** A single-operator, domain-agnostic pipeline from discovery and sourced research through drafting, approval and distribution. Feedback exists, but Measure and Learn are thin. Use the [handover](../HANDOVER.md), [architecture](../../CURRENT_ARCHITECTURE.md), and [capability matrix](../CAPABILITY_MATRIX.md) for evidence; check claims against the commit you're working on. An approved artifact is required to publish, but `trusted` automation can set that state without a person. Don't use it for the pilot.
-- **Recommended next product bet, not a decision to build SaaS:** Test one source-backed technical post per week for a technical DevRel lead. Start with public sources, human review, and manual export; test draft quality, real time saved, paid renewal, and a repeat sale. Defer shared customer publishing, agent connectors, and billing automation until there is evidence for them. See the [independent ChatGPT review](REVIEW_ChatGPT.md).
+- **Original vision:** A personal content and X growth engine for an SRE, designed to take at most five minutes a day. See the original spec at docs/spec_contentforge_reimagined.md and the review brief at docs/COLLAB_BRIEF.md.
+- **Current foundation:** A single-operator pipeline from discovery and sourced research through drafting, approval and distribution. Measure/Learn remain thin. Use docs/HANDOVER.md, CURRENT_ARCHITECTURE.md and docs/CAPABILITY_MATRIX.md for documented evidence; revalidate against the exact commit.
+- **Current product recommendation:** Prove one source-backed technical post per week for a technical DevRel lead/technical creator, using public sources, human review and manual export. This is a hypothesis, not validated demand.
+- **Current autonomous execution contract:** Read docs/collab/PRODUCTIZATION_GOAL.md. It defines the product goal, phase gates, safety boundaries, test requirements and continuous execution loop.
+- **Current handoff state:** Read docs/collab/AGENT_SYNC.md before doing work or responding to a sync request.
+- An approved Artifact is required for publication, but trusted automation can set approval without a person. Do not use that mode for the first pilot.
 
 ## Which branch to use
 
 | Branch | What belongs there | How it gets reviewed |
 |---|---|---|
-| `collab/ai-pair-review` | This playbook, product brief, independent strategy reviews, and agreed next priorities. No application, migration, or CI changes. | For new changes, use `review/<agent>-<topic>` from the latest collaboration branch and open a PR back to it. Each reviewer owns a distinct `docs/collab/REVIEW_<name>.md`; use a topic suffix if needed to avoid overwriting another review. |
-| `work/<task>` | One implementation task per branch, based on the latest `origin/main`. | Open a draft PR to `main`. Review the PR's exact head SHA; put code findings in the PR, not in the collaboration branch. If a reviewer cannot post comments but can push, give it a separate `review/<agent>-<task>` branch from the collaboration branch and have it commit a note with the task PR URL and reviewed SHA. |
-| `main` | Owner-approved product and engineering changes. | No direct agent pushes, force-pushes, or merges. The owner decides when to merge. `origin/HEAD` currently points to `replit`; explicitly select your base branch rather than relying on the clone default. |
+| collab/ai-pair-review | This playbook, product brief, strategy reviews, autonomous goal and shared status. No application, migration or CI changes. | Keep reviewer reports distinct. Do not overwrite another review. |
+| work/productization-mvp | The continuous productization implementation branch based on latest origin/main. | One coherent draft PR to main. Small conventional commits. Do not merge. |
+| work/<task> | A separately scoped implementation task when it is independent of the long-running productization branch. | Draft PR to main, reviewed at exact head SHA. |
+| main | Owner-approved product and engineering changes. | No direct agent pushes, force-pushes or merges. Owner decides when to merge. |
 
-Fetch `origin`, inspect `git status`, confirm the branch and record the SHA before work. Use a separate worktree or clone per agent when you can. If you find unexpected changes or branch divergence, preserve them and stop; don't reset, stash, or overwrite someone else's work. Don't merge the collaboration branch into a code branch just to read its instructions. Read them on GitHub or with `git show origin/collab/ai-pair-review:docs/collab/README.md` after fetching.
+Explicitly select origin/main as the code base. Do not rely on origin/HEAD; older collaboration notes recorded it pointing at replit. Do not merge collab/ai-pair-review into a code branch just to read its instructions.
 
-For each change, the PR description is the handoff: **goal and non-goals, changed paths, review SHA, checks and results, checks not run, unresolved risks, and the next action.** Put durable product decisions here or in a linked, committed review note. Never commit secrets, `.env` files, cookies, private customer material, or generated output. Never contact live publishing providers or billable models in review or routine testing; use the repo's safe test scripts against disposable infrastructure.
+Before work, fetch origin, inspect git status, confirm branch/HEAD/upstream and record the SHA. Use a separate worktree per agent when possible. If unexpected changes or branch divergence exist, preserve them; do not reset, stash, clean or overwrite someone else's work.
+
+For each PR, include goal/non-goals, changed paths, reviewed SHA, checks/results, checks not run, unresolved risks and next action. Never commit secrets, .env files, cookies, private customer material or generated output. Routine tests and reviews must not contact live publishing providers or billable models; use the repository's safe test scripts against disposable infrastructure.
 
 ## Next up
 
-1. **Cursor implementation: P0-1 test gates.** Check whether `origin/main` still lacks the unit and DB suites in CI and whether an existing open PR already covers this. If not, take `work/ci-test-gates` from `origin/main` and open a draft PR to `main`. Follow [handover §9](../HANDOVER.md#9-the-exact-next-task) and [ROADMAP P0-1](../ROADMAP.md): run the migrations and `npm run test:unit` / `npm run test:db` against a disposable Postgres service. Report a green run and evidence a failing assertion makes the check red (remove the failing assertion before review). Only the owner enables branch protection if needed. Keep migration generation (P0-2), site polish, and feature work out of this PR.
-2. **Independent review: ChatGPT, Codex, or Claude reviews that PR at its head SHA.** Check isolation from production, migration setup, whether failed tests block CI, and what was actually verified. The implementing agent responds in the same PR. After owner approval and merge, link the evidence and record the next action there.
-3. **In parallel, founder validation:** Try five source-to-approved-export sessions against the existing workflow. Record hands-on time, unsupported claims, rewrites, and whether the draft actually gets published. Then decide whether to offer the paid pilot described in [the review](REVIEW_ChatGPT.md). Keep customer details out of Git; record only a sanitized summary and the decision.
+1. Read PRODUCTIZATION_GOAL.md and AGENT_SYNC.md.
+2. Revalidate the repository, local checkout and all open PRs. The 2026-11-11 handover is a dated snapshot, not a current truth.
+3. Inventory the actual local skills and subagents. The ChatGPT review could not inspect the local .agent/skills directory.
+4. Audit divergent run56/run57/run58/run60 branches individually; port only justified, tested changes.
+5. Start the highest-priority safe task from PRODUCTIZATION_BACKLOG.md. Initial priorities are CI unit/DB test gates, migration-generation integrity, secret-history hygiene, then the research-to-approved-export vertical slice.
+6. Keep work on work/productization-mvp from latest origin/main. Maintain one draft PR, commit in small increments and do not merge/deploy.
+7. Founder validation, real channel credentials, public publishing, paid provider use and customer private data remain gated owner actions. Record blockers in AGENT_SYNC.md and continue safe work.
 
-## Session instructions
+## Sync protocol
 
-Open `unplugged-kk/ContentForge`, select `collab/ai-pair-review` explicitly, and ask the agent to start with `docs/collab/README.md`. The rest of the prompt lives here:
+When the owner or ChatGPT says **sync**:
 
-- **Implement:** Follow the first unfinished engineering task in **Next up**, checking open PRs first. Read `AGENTS.md` and `docs/HANDOVER.md` on the implementation base. Keep the diff scoped. Push the task branch and open or update a draft PR to `main` with the handoff above. Do not merge.
-- **Review a code PR:** Fetch the named PR head and base. Review the diff at the recorded SHA, starting with blocking findings and file/line references. Separate source inspection from any test you ran. Post on the PR or use the review-branch fallback above. Do not change the code under review.
-- **Review product direction:** Read `docs/COLLAB_BRIEF.md` and follow its read order. Compare the existing reviews without replacing them. Write an independent note on `review/<agent>-<topic>` and open a PR to `collab/ai-pair-review`. Record the snapshot, evidence, and proposed decision.
+1. Fetch origin and inspect working-tree/branch state.
+2. Read the latest docs/collab/AGENT_SYNC.md, PRODUCTIZATION_STATUS.md, PRODUCTIZATION_GOAL.md and all new REVIEW_*.md files.
+3. Reconcile findings against the exact code and tests. Mark each ACCEPTED, REJECTED, PARTIALLY_ACCEPTED or NEEDS_OWNER_ACTION with evidence.
+4. Preserve reviewer reports. Write responses in AGENT_SYNC.md or a separate response document.
+5. Commit and push the reconciliation, then continue with the highest-priority safe task.
 
-If the agent cannot read the private repo, use a GitHub-connected or local coding session with access. If it can read but not write, switch to an authorized session to make a durable contribution. A plain chat without a connected repository cannot fetch or push. Grant only the access needed; no need to make the repo public or paste its contents into chat.
+Agents do not notify one another automatically. Git commits and PRs are the shared record. Do not assume a plain chat can fetch or push unless repository access is connected.
