@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { after, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { pool } from "../db";
 import { storage } from "../storage";
+import { stubConnectedAccountLookup } from "../testing/unitCredentialStub";
 import {
   createInstagramChannelAdapter,
   createLinkedInChannelAdapter,
@@ -27,6 +28,15 @@ const request = (format: string, channel: string, payload: Record<string, unknow
 });
 
 describe("publication adapter pre-flight configuration failures", () => {
+  let credentials: ReturnType<typeof stubConnectedAccountLookup>;
+  before(() => {
+    credentials = stubConnectedAccountLookup();
+  });
+
+  after(() => {
+    credentials.restore();
+  });
+
   it("classifies X configuration failure without claiming a provider call", async () => {
     const originalFetch = globalThis.fetch;
     let networkCalls = 0;

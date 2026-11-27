@@ -14,6 +14,84 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run check
+
+      - name: Run hermetic unit tests
+        run: npm run test:unit
+
+  db:
+    name: DB Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: contentforge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d contentforge_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      CI: true
+      DATABASE_URL: postgresql://test:test@127.0.0.1:5432/contentforge_test
+      TEST_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/contentforge_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify TEST_DATABASE_URL is job-local Postgres only
+        run: |
+          case "$TEST_DATABASE_URL" in
+            *localhost*|*127.0.0.1*) ;;
+            *) echo "::error::TEST_DATABASE_URL must point at the CI Postgres service (localhost)."; exit 1 ;;
+          esac
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Apply ordered Drizzle migrations to CI test database
+        run: npm run db:migrate
+
+      - name: Run hermetic DB integration tests
+        run: npm run test:db
+
   playwright:
     name: E2E Tests
     runs-on: ubuntu-latest

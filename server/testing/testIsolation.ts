@@ -98,7 +98,29 @@ export async function purgeStaleConnectedAccounts(
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     const result = await pool.query(`DELETE FROM connected_accounts${where}`, values);
     return result.rowCount ?? 0;
+  } catch (error) {
+    if (!isConnectionRefusal(error)) throw error;
+    console.warn(
+      `[testIsolation] skipped connected_accounts purge: test database unreachable (${(error as NodeJS.ErrnoException).code ?? "connection error"})`,
+    );
+    return null;
   } finally {
     if (ownsPool) await pool.end().catch(() => {});
   }
+}
+
+const CONNECTION_REFUSAL_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "57P03",
+]);
+
+function isConnectionRefusal(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && CONNECTION_REFUSAL_CODES.has(code);
 }
