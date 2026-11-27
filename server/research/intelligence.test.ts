@@ -151,5 +151,42 @@ describe("research intelligence", () => {
     assert.equal(analysis.quality, "conflicted");
     assert.equal(analysis.version, "research-analysis-v1");
     assert.ok(analysis.ranking[0].score >= analysis.ranking[1].score);
+    assert.ok(analysis.synthesis.facts.length === 2);
+    assert.match(analysis.synthesis.facts[0], /Widget X released/);
+    assert.match(analysis.synthesis.facts[0], /https?:\/\//);
+    assert.match(analysis.synthesis.interpretation, /Freshness: recent/);
+    assert.match(analysis.synthesis.interpretation, /disagree on 1 claim/);
+    assert.equal(analysis.synthesis.conflictsNoted.length, 1);
+  });
+
+  it("produces readable source-attributed synthesis findings instead of bare URLs", () => {
+    const sources = [
+      src({
+        nativeId: "pg1",
+        provider: "web",
+        canonicalUrl: "https://reuters.com/tech/pg-pool",
+        title: "Postgres 18 reduces connection overhead by 35%",
+        excerpt: "Benchmarks on 10k concurrent clients show connection pooling memory dropped by 35%.",
+      }),
+    ];
+    const analysis = analyzeResearch({
+      query: "Postgres 18 connection overhead",
+      sources,
+      diagnostics: [
+        { provider: "web", backend: "b", capability: "search", outcome: "ok", fallbackOccurred: false, backendsAttempted: ["b"], latencyMs: 1, resultCount: 1 },
+      ],
+      summary: summarizeCollection([
+        { provider: "web", backend: "b", capability: "search", outcome: "ok", fallbackOccurred: false, backendsAttempted: ["b"], latencyMs: 1, resultCount: 1 },
+      ]),
+      now: new Date("2026-09-18T00:00:00.000Z"),
+    });
+    assert.equal(analysis.synthesis.facts.length, 1);
+    const finding = analysis.synthesis.facts[0];
+    assert.notEqual(finding, "web: https://reuters.com/tech/pg-pool");
+    assert.match(finding, /\[web\]/);
+    assert.match(finding, /Postgres 18 reduces connection overhead by 35%/);
+    assert.match(finding, /Benchmarks on 10k concurrent clients/);
+    assert.match(finding, /https:\/\/reuters\.com\/tech\/pg-pool/);
+    assert.match(analysis.synthesis.interpretation, /Freshness: recent/);
   });
 });

@@ -69,4 +69,29 @@ describe("D24 · the X adapter refuses over-long units BEFORE the provider", () 
     assert.equal(out.ok, false);
     assert.equal(out.providerCalled, false);
   });
+
+  test("W5 an over-long image caption is refused BEFORE calling uploadMediaToX", async () => {
+    const adapter = createXChannelAdapter();
+    const out = await adapter.publish({
+      format: "image",
+      channel: "x",
+      correlationId: "corr-media-length",
+      payload: { visualAssetId: 1, caption: "x".repeat(320) },
+      ownerUserId: 1,
+      media: [
+        {
+          visualAssetId: 1,
+          mime: "image/png",
+          role: "primary",
+          position: 0,
+          altText: "alt",
+          bytes: Buffer.from("fake-png"),
+        },
+      ],
+    });
+    assert.equal(out.ok, false);
+    assert.equal(out.providerCalled, false, "must fail length check before uploadMediaToX");
+    assert.equal(out.errorClass, "permanent");
+    assert.match(out.errorMessage ?? "", /cut|limit|280/i);
+  });
 });

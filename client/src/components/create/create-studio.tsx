@@ -133,6 +133,7 @@ export function CreateStudio({
 
   const [channel, setChannel] = useState<string>("x");
   const [concept, setConcept] = useState<string>(initialConcept ?? "");
+  const [creatorNotes, setCreatorNotes] = useState<string>("");
   const [objective, setObjective] = useState<string>("Educate and share a concrete insight");
   const [audience, setAudience] = useState<string>("Platform & software engineers");
   const [angle, setAngle] = useState<string>("");
@@ -185,9 +186,14 @@ export function CreateStudio({
       // If no pre-existing story selected, create a Story preserving research provenance when present
       if (!storyId) {
         const hasResearchProvenance = Boolean(initialResearchJobId && startWith === "source");
+        const baseInsight = concept.trim() || "Direct generation concept";
+        const trimmedNotes = creatorNotes.trim();
+        const insightBody = trimmedNotes
+          ? `${baseInsight}\n\nFirst-hand notes & proof points:\n${trimmedNotes}`
+          : baseInsight;
         const storyPayload: Record<string, unknown> = {
           title: concept.trim().slice(0, 100) || "Direct content concept",
-          insightBody: concept.trim() || "Direct generation concept",
+          insightBody,
           provenance: hasResearchProvenance ? "researched" : "human",
           status: "ready",
           angles: angle ? [angle] : [],
@@ -495,6 +501,22 @@ export function CreateStudio({
             rows={3}
             className="text-sm leading-relaxed"
             data-testid="input-create-concept"
+          />
+        </div>
+
+        {/* Optional First-Hand Notes / Proof Points */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground" htmlFor="input-creator-notes">
+            Your first-hand notes / proof points (optional)
+          </label>
+          <Textarea
+            id="input-creator-notes"
+            value={creatorNotes}
+            onChange={(e) => setCreatorNotes(e.target.value)}
+            placeholder="Add first-hand observations, metrics you measured, or proof points to ground the draft without inventing claims"
+            rows={2}
+            className="text-sm leading-relaxed"
+            data-testid="input-creator-notes"
           />
         </div>
 

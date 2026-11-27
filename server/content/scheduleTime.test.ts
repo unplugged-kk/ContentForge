@@ -103,9 +103,16 @@ describe("C. reach — every writer of status='scheduled' is accounted for", () 
     assert.match(routes.slice(i, i + 900), /checkScheduleWrite/);
   });
 
-  test("C2 the PUT /api/posts/:id route calls the guard", () => {
+  test("C2 the PUT /api/posts/:id route calls the guard and resolves existing status when scheduledAt is sent alone", () => {
     const i = routes.indexOf('app.put("/api/posts/:id"');
-    assert.match(routes.slice(i, i + 900), /checkScheduleWrite/);
+    const slice = routes.slice(i, i + 1100);
+    assert.match(slice, /checkScheduleWrite/);
+    assert.match(slice, /storage\.getPost/);
+  });
+
+  test("C2b the POST /api/posts route calls the guard", () => {
+    const i = routes.indexOf('app.post("/api/posts"');
+    assert.match(routes.slice(i, i + 600), /checkScheduleWrite/);
   });
 
   test("C3 the pre-existing /api/posts/schedule route keeps its own future check", () => {

@@ -170,6 +170,8 @@ export async function registerRoutes(
   app.post("/api/posts", async (req, res) => {
     try {
       const parsed = createPostBody.parse(req.body);
+      const guard = checkScheduleWrite(parsed.status, parsed.scheduledAt);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
       const { tweets: tweetData, ...postData } = parsed;
       const result = await storage.createPost(
         sessionUserId(req),
@@ -199,12 +201,20 @@ export async function registerRoutes(
           message: `${normalised.bad.join(", ")} must be a valid ISO date string`,
         });
       }
+      const postId = parseInt(req.params.id);
+      const userId = sessionUserId(req);
+      let effectiveStatus = normalised.value.status as string | undefined;
+      if (effectiveStatus === undefined && normalised.value.scheduledAt !== undefined) {
+        const existing = await storage.getPost(userId, postId);
+        if (!existing) return res.status(404).json({ message: "Post not found" });
+        effectiveStatus = existing.status ?? undefined;
+      }
       const guard = checkScheduleWrite(
-        normalised.value.status as string | undefined,
+        effectiveStatus,
         normalised.value.scheduledAt as string | Date | undefined,
       );
       if (!guard.ok) return res.status(400).json({ message: guard.reason });
-      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), normalised.value);
+      const result = await storage.updatePost(userId, postId, normalised.value);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }

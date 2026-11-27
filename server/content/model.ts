@@ -13,11 +13,57 @@ import type {
   GenerationModelPort,
   GenerationOutput,
   GenerationRequest,
+  ModelClaim,
 } from "./generation";
 import type { ChatIntent, ChatIntentPort } from "./chat";
 
 /** Marker the deterministic E2E transport responds to (see e2e/fixture). */
 export const CHAT_INTENT_MARKER = "CONTENT_REQUEST_INTENT";
+
+function normalizeModelClaims(raw: unknown): ModelClaim[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ModelClaim[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const claimText = typeof obj.claimText === "string" ? obj.claimText.trim() : "";
+    if (!claimText) continue;
+    const unitIndex =
+      typeof obj.unitIndex === "number" && Number.isInteger(obj.unitIndex) && obj.unitIndex >= 0
+        ? obj.unitIndex
+        : 0;
+    const evidenceIds = Array.isArray(obj.evidenceIds)
+      ? obj.evidenceIds.filter(
+          (id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0,
+        )
+      : [];
+    const status = typeof obj.status === "string" ? obj.status : undefined;
+    out.push({ unitIndex, claimText, evidenceIds, ...(status ? { status } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Accepts both `{ payload, claims }` envelopes and legacy bare `{ text }` / `{ units }`
+ * objects so existing fixtures and model responses remain 100% compatible.
+ */
+export function unwrapModelOutput(parsed: Record<string, unknown>): {
+  payload: Record<string, unknown>;
+  claims?: ModelClaim[];
+} {
+  const claims = normalizeModelClaims(parsed.claims);
+  if (parsed.payload && typeof parsed.payload === "object" && !Array.isArray(parsed.payload)) {
+    return {
+      payload: parsed.payload as Record<string, unknown>,
+      ...(claims ? { claims } : {}),
+    };
+  }
+  if (claims) {
+    const { claims: _ignored, ...rest } = parsed;
+    return { payload: rest, claims };
+  }
+  return { payload: parsed };
+}
 
 /** Advisory payload shapes, so the model returns something the registry accepts. */
 function payloadShapeHint(format: string): string {
@@ -65,8 +111,10 @@ export function createGatewayGenerationModel(
         if (logUsage) {
           await logAiUsage(response.usage, response.latency, feature, model).catch(() => {});
         }
+        const unwrapped = unwrapModelOutput(parsed as Record<string, unknown>);
         return {
-          payload: parsed as Record<string, unknown>,
+          payload: unwrapped.payload,
+          ...(unwrapped.claims ? { claims: unwrapped.claims } : {}),
           model,
           provider: "gateway",
           cost: null,

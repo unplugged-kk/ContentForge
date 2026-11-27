@@ -114,11 +114,34 @@ export class ArtifactMediaReferenceError extends Error {
 }
 
 /** Provenance pointer for the research this content rests on (IDs, not copies). */
-export const attributionSchema = z.object({
+export const researchEvidenceAttributionSchema = z.object({
   kind: z.literal("research_evidence"),
   researchJobId: z.number().int().positive().nullable(),
   evidenceIds: z.array(z.number().int().positive()),
 });
+
+export const auditedClaimSchema = z.object({
+  unitIndex: z.number().int().min(0),
+  claimText: z.string().trim().min(1),
+  evidenceIds: z.array(z.number().int().positive()),
+  status: z.enum(["supported", "unsupported", "opinion"]),
+  reason: z.string().optional(),
+});
+
+export const claimEvidenceAttributionSchema = z.object({
+  kind: z.literal("claim_evidence_v1"),
+  researchJobId: z.number().int().positive().nullable(),
+  evidenceIds: z.array(z.number().int().positive()),
+  claims: z.array(auditedClaimSchema),
+  unsupportedCount: z.number().int().min(0),
+  paraphraseOverlap: z.number().min(0).max(1),
+  qualityFlags: z.array(z.string()),
+});
+
+export const attributionSchema = z.discriminatedUnion("kind", [
+  researchEvidenceAttributionSchema,
+  claimEvidenceAttributionSchema,
+]);
 
 export interface CreateArtifactInput {
   userId?: number | null;

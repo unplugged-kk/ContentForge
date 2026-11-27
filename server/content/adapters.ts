@@ -255,6 +255,22 @@ export function createXChannelAdapter(): ChannelAdapter {
       };
     }
 
+    const mediaText = mediaTextFor(request.format, request.payload);
+    if (mediaText.length > 0) {
+      const limitError = validateXText([mediaText]);
+      if (!limitError.ok) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: limitError.error ?? "x text exceeds the transport limit",
+        };
+      }
+    }
+
     const attachment = media[0];
     let uploaded: { mediaId: string | null; mediaUrl: string };
     try {
@@ -278,7 +294,7 @@ export function createXChannelAdapter(): ChannelAdapter {
     }
 
     try {
-      const result = await postContentToX([mediaTextFor(request.format, request.payload)], {
+      const result = await postContentToX([mediaText], {
         mediaUrls: [uploaded.mediaUrl],
         ownerUserId: request.ownerUserId,
       });
