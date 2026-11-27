@@ -98,7 +98,21 @@ export type XPublishInvoker = "user" | "scheduler";
 export type XPostPublishGateInput = {
   status: string | null | undefined;
   scheduledAt: Date | string | null | undefined;
+  /** Recorded provider ids so retry requests can detect already-live units. */
+  externalIds?: unknown;
 };
+
+/**
+ * Reports whether a post row already records live X tweet ids.
+ * Tolerates malformed JSONB without throwing so the retry gate returns 409 instead of 500.
+ */
+export function rowHasLiveUnits(row: { externalIds?: unknown } | null | undefined): boolean {
+  if (!row) return false;
+  const ids = (row as { externalIds?: unknown }).externalIds;
+  if (!ids || typeof ids !== "object") return false;
+  const x = (ids as Record<string, unknown>).x;
+  return Array.isArray(x) && x.length > 0;
+}
 
 /**
  * Enforces X-aligned workflow: no publishing from draft; no duplicate publish;
@@ -116,6 +130,18 @@ export function assertEligibleForXPublish(
     throw new Error(
       "Mark this post as Ready or Scheduled before publishing. X expects user-initiated posting — drafts cannot be sent to the API.",
     );
+  }
+  if (rowHasLiveUnits(post)) {
+    const live = ((post as { externalIds?: { x?: unknown[] } }).externalIds?.x ?? []) as unknown[];
+    // status 409 so the shared error handler echoes the message to the operator
+    // rather than masking it behind a generic 500.
+    const blocked = new Error(
+      `This post is ALREADY PARTIALLY PUBLISHED to X: ${live.length} unit(s) are live and cannot be un-sent. ` +
+        `Do not retry it — a retry would republish those units as duplicates. ` +
+        `Review the live posts before doing anything else.`,
+    ) as Error & { status?: number };
+    blocked.status = 409;
+    throw blocked;
   }
   if (ctx.invokedBy === "scheduler") {
     if (status !== "scheduled") {

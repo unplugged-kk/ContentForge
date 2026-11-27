@@ -81,6 +81,26 @@ export class InvalidArtifactPayloadError extends Error {
   }
 }
 
+/**
+ * The Opportunity this Artifact would belong to is killed.
+ *
+ * `createGenerationJob` already refuses a killed Opportunity, and killing is
+ * terminal (`killReason` is mandatory). Refusing at the artifact boundary too
+ * ensures a killed Opportunity cannot produce drafts, approvals, or schedules.
+ */
+export class ArtifactOpportunityKilledError extends Error {
+  constructor(
+    readonly opportunityId: number,
+    readonly killReason: string | null,
+  ) {
+    super(
+      `Opportunity ${opportunityId} is killed and cannot receive artifacts` +
+        (killReason ? `: ${killReason}` : ""),
+    );
+    this.name = "ArtifactOpportunityKilledError";
+  }
+}
+
 /** A visual media reference named by the payload does not resolve to a usable asset. */
 export class ArtifactMediaReferenceError extends Error {
   constructor(
@@ -126,6 +146,19 @@ export async function createArtifact(
     throw new InvalidArtifactPayloadError(input.format, [
       `no payload schema registered for format "${input.format}"`,
     ]);
+  }
+
+  // A killed Opportunity is terminal and produces nothing. Checked first,
+  // before payload validation and before any row exists. `getOpportunity` is
+  // checked dynamically so hand-built test doubles that omit it keep working.
+  if (typeof deps.artifacts.getOpportunity === "function") {
+    const opportunity = await deps.artifacts.getOpportunity(input.opportunityId);
+    if (opportunity !== undefined && opportunity.status === "killed") {
+      throw new ArtifactOpportunityKilledError(
+        input.opportunityId,
+        (opportunity as { killReason?: string | null }).killReason ?? null,
+      );
+    }
   }
 
   let validated: JsonRecord;

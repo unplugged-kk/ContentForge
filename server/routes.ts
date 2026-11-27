@@ -22,6 +22,10 @@ import { getInstagramConfigSummary, verifyInstagramAccessToken, isProfessionalAc
 import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
+import { fitUnitToBudget } from "./content/unitFit";
+import { checkScheduleWrite } from "./content/scheduleTime";
+import { normalisePostBody } from "./content/postBody";
+import { xUnitBudgetAt } from "./social/xTextLimits";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
@@ -189,7 +193,18 @@ export async function registerRoutes(
 
   app.put("/api/posts/:id", async (req, res) => {
     try {
-      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), req.body);
+      const normalised = normalisePostBody(req.body);
+      if (normalised.bad.length > 0) {
+        return res.status(400).json({
+          message: `${normalised.bad.join(", ")} must be a valid ISO date string`,
+        });
+      }
+      const guard = checkScheduleWrite(
+        normalised.value.status as string | undefined,
+        normalised.value.scheduledAt as string | Date | undefined,
+      );
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
+      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), normalised.value);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -198,6 +213,8 @@ export async function registerRoutes(
   app.patch("/api/posts/:id/status", async (req, res) => {
     try {
       const parsed = updateStatusBody.parse(req.body);
+      const guard = checkScheduleWrite(parsed.status, parsed.scheduledAt);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
       const result = await storage.updatePostStatus(sessionUserId(req), parseInt(req.params.id), parsed.status, parsed.scheduledAt);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
@@ -2309,12 +2326,16 @@ Each tweet under ${charLimit} characters.` },
       await logAiUsage(usage, latency, "expand_idea");
 
       const result = safeJsonParse(content) || {};
-      const tweets = (result.tweets || []).map((t: any, i: number) => ({
-        content: String(t.content || "").slice(0, 280),
-        position: i,
-        charCount: String(t.content || "").length,
-        postId: 0,
-      }));
+      const rawTweets = result.tweets || [];
+      const tweets = rawTweets.map((t: any, i: number) => {
+        const fitted = fitUnitToBudget(String(t.content || ""), xUnitBudgetAt(i, rawTweets.length));
+        return {
+          content: fitted.text,
+          position: i,
+          charCount: fitted.text.length,
+          postId: 0,
+        };
+      });
 
       const post = await storage.createPost(
         sessionUserId(req),

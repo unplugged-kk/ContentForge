@@ -66,6 +66,7 @@ import {
   submitArtifactForReview,
   ArtifactMediaReferenceError,
   ArtifactNotFoundError,
+  ArtifactOpportunityKilledError,
   ArtifactStateError,
   InvalidArtifactPayloadError,
   QualityGateBlockedError,
@@ -878,6 +879,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       if (error instanceof InvalidArtifactPayloadError) return res.status(422).json({ message: error.message });
+      if (error instanceof ArtifactOpportunityKilledError) return res.status(409).json({ message: error.message });
       if (error instanceof ArtifactMediaReferenceError) {
         const notFound = /not found/.test(error.message);
         return res.status(notFound ? 404 : 409).json({ message: error.message });
