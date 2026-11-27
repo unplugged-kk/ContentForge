@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui-shared/empty-state";
 import { Button } from "@/components/ui/button";
 import type { ContentType } from "@/lib/create-workflow";
 import { getCreateModeHref } from "@/lib/legacy-route-mapping";
+import { parseCreateSourceHandoff } from "@/lib/sources-research-state";
 import {
   Sparkles,
   Zap,
@@ -126,13 +127,15 @@ export default function CreatePage() {
 
   const currentSearch = search || window.location.search;
 
-  // Handoff context from Sources (`getCreateFromSourceUrl` emits ?topic=&sourceUrl=).
+  // Handoff context from Sources (`getCreateFromSourceUrl` emits ?topic=&sourceUrl=&researchJobId=&evidenceIds=).
   // Parsed during render, not in the effect above: CreateStudio seeds its state on
   // mount and an effect runs after the first paint, so a state-seeded value would
   // arrive one render too late and be dropped.
-  const handoffParams = new URLSearchParams(currentSearch);
-  const handoffConcept = handoffParams.get("topic") ?? undefined;
-  const handoffSourceUrl = handoffParams.get("sourceUrl") ?? undefined;
+  const sourceHandoff = parseCreateSourceHandoff(currentSearch);
+  const handoffConcept = sourceHandoff.topic;
+  const handoffSourceUrl = sourceHandoff.sourceUrl;
+  const handoffResearchJobId = sourceHandoff.researchJobId;
+  const handoffEvidenceIds = sourceHandoff.evidenceIds;
 
   const ActiveModeComponent = activeMode ? CREATE_MODE_COMPONENTS[activeMode] : null;
 
@@ -239,6 +242,8 @@ export default function CreatePage() {
             initialIdeaId={initialIdeaId}
             initialConcept={handoffConcept}
             initialSourceUrl={handoffSourceUrl}
+            initialResearchJobId={handoffResearchJobId}
+            initialEvidenceIds={handoffEvidenceIds}
           />
         )}
       </div>

@@ -87,6 +87,66 @@ type YouTubeStatus = {
   channelDiscovered?: boolean;
 };
 
+type ConnectPlatformKey = "x" | "threads" | "linkedin" | "instagram" | "youtube";
+
+interface PlatformConnectConfig {
+  usernameLabel: string;
+  usernamePlaceholder: string;
+  tokenLabel: string;
+  tokenPlaceholder: string;
+  helpText: string;
+}
+
+const PLATFORM_CONNECT_CONFIG: Record<ConnectPlatformKey, PlatformConnectConfig> = {
+  x: {
+    usernameLabel: "Username",
+    usernamePlaceholder: "@yourusername",
+    tokenLabel: "xQuick API Key",
+    tokenPlaceholder: "Paste your xQuick API key",
+    helpText:
+      "ContentForge's X adapter publishes through the xQuick proxy (xquik.com), not an official X Developer Portal Bearer Token. Enter your xQuick API key and the X username connected in your xQuick dashboard.",
+  },
+  threads: {
+    usernameLabel: "Username",
+    usernamePlaceholder: "Your Threads username",
+    tokenLabel: "Access Token",
+    tokenPlaceholder: "Paste your Threads access token",
+    helpText:
+      "Get a long-lived access token from the Meta Developer Portal: developers.facebook.com > Your App > Threads > Access Token.",
+  },
+  linkedin: {
+    usernameLabel: "Username",
+    usernamePlaceholder: "Your LinkedIn handle or profile name",
+    tokenLabel: "OAuth Access Token",
+    tokenPlaceholder: "Paste your LinkedIn OAuth access token",
+    helpText:
+      "Generate an OAuth 2.0 access token with the w_member_social scope in the LinkedIn Developer Portal: linkedin.com/developers/apps > Your App > Auth.",
+  },
+  instagram: {
+    usernameLabel: "Username",
+    usernamePlaceholder: "@yourusername",
+    tokenLabel: "Instagram Access Token",
+    tokenPlaceholder: "Paste your Instagram Graph API access token",
+    helpText:
+      "Generate a long-lived Instagram Graph API access token for your Business or Creator account in the Meta Developer Portal (developers.facebook.com).",
+  },
+  youtube: {
+    usernameLabel: "Username",
+    usernamePlaceholder: "Your YouTube channel handle",
+    tokenLabel: "OAuth Access Token",
+    tokenPlaceholder: "Paste your Google OAuth access token",
+    helpText:
+      "YouTube uses Google OAuth with youtube.upload and youtube.readonly scopes. Use Connect YouTube on the Connected Accounts card to authorize directly.",
+  },
+};
+
+function getPlatformConnectConfig(platform?: string): PlatformConnectConfig {
+  if (platform && platform in PLATFORM_CONNECT_CONFIG) {
+    return PLATFORM_CONNECT_CONFIG[platform as ConnectPlatformKey];
+  }
+  return PLATFORM_CONNECT_CONFIG.threads;
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [connectDialog, setConnectDialog] = useState<{ platform: string; label: string } | null>(null);
@@ -673,57 +733,62 @@ export default function SettingsPage() {
       </Dialog>
 
       <Dialog open={!!connectDialog} onOpenChange={(open) => { if (!open) { setConnectDialog(null); setAccessToken(""); setUsername(""); } }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Connect {connectDialog?.label}</DialogTitle>
-            <DialogDescription>
-              Enter your API credentials to connect your {connectDialog?.label} account.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="input-connect-username" className="text-sm font-medium">Username</label>
-              <Input
-                id="input-connect-username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder={connectDialog?.platform === "x" ? "@yourusername" : "Your username"}
-                data-testid="input-connect-username"
-              />
-            </div>
-            <div className="space-y-2">
-              <label htmlFor="input-connect-token" className="text-sm font-medium">
-                {connectDialog?.platform === "x" ? "Bearer Token" : "Access Token"}
-              </label>
-              <Input
-                id="input-connect-token"
-                value={accessToken}
-                onChange={(e) => setAccessToken(e.target.value)}
-                placeholder="Paste your token here"
-                type="password"
-                data-testid="input-connect-token"
-              />
-              <p className="text-xs text-muted-foreground">
-                {connectDialog?.platform === "x"
-                  ? "Get this from the X Developer Portal: developer.x.com > Your App > Keys and Tokens > Bearer Token"
-                  : "Get this from Meta Developer Portal: developers.facebook.com > Your App > Threads > Access Token"}
-              </p>
-            </div>
-            <Button
-              onClick={() => {
-                if (connectDialog) {
-                  connectMutation.mutate({ platform: connectDialog.platform, username: username.replace(/^@/, ""), accessToken });
-                }
-              }}
-              disabled={!accessToken || connectMutation.isPending}
-              className="w-full"
-              data-testid="button-confirm-connect"
-            >
-              {connectMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle2 className="h-4 w-4 mr-1" />}
-              Connect Account
-            </Button>
-          </div>
-        </DialogContent>
+        {(() => {
+          const connectConfig = getPlatformConnectConfig(connectDialog?.platform);
+          return (
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Connect {connectDialog?.label}</DialogTitle>
+                <DialogDescription>
+                  Enter your API credentials to connect your {connectDialog?.label} account.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label htmlFor="input-connect-username" className="text-sm font-medium">
+                    {connectConfig.usernameLabel}
+                  </label>
+                  <Input
+                    id="input-connect-username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={connectConfig.usernamePlaceholder}
+                    data-testid="input-connect-username"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="input-connect-token" className="text-sm font-medium">
+                    {connectConfig.tokenLabel}
+                  </label>
+                  <Input
+                    id="input-connect-token"
+                    value={accessToken}
+                    onChange={(e) => setAccessToken(e.target.value)}
+                    placeholder={connectConfig.tokenPlaceholder}
+                    type="password"
+                    data-testid="input-connect-token"
+                  />
+                  <p className="text-xs text-muted-foreground" data-testid="text-connect-help">
+                    {connectConfig.helpText}
+                  </p>
+                </div>
+                <Button
+                  onClick={() => {
+                    if (connectDialog) {
+                      connectMutation.mutate({ platform: connectDialog.platform, username: username.replace(/^@/, ""), accessToken });
+                    }
+                  }}
+                  disabled={!accessToken || connectMutation.isPending}
+                  className="w-full"
+                  data-testid="button-confirm-connect"
+                >
+                  {connectMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle2 className="h-4 w-4 mr-1" />}
+                  Connect Account
+                </Button>
+              </div>
+            </DialogContent>
+          );
+        })()}
       </Dialog>
 
       <ConfirmDialog

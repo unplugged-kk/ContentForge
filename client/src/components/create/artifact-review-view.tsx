@@ -22,6 +22,16 @@ import {
   type CapabilityFormat,
 } from "@/lib/create-workflow";
 import {
+  X_POST_CHAR_BUDGET,
+  extractThreadUnits,
+  buildEditedArtifactPayload,
+  formatArtifactPlainText,
+  formatArtifactNumberedThread,
+  formatArtifactMarkdownExport,
+  buildArtifactExportFilename,
+  type ArtifactExportEvidence,
+} from "@/lib/artifact-export";
+import {
   Sparkles,
   Edit3,
   RefreshCw,
@@ -32,10 +42,11 @@ import {
   AlertTriangle,
   XCircle,
   History,
-  FileText,
-  Image as ImageIcon,
-  Film,
-  Music,
+  Copy,
+  Download,
+  ListOrdered,
+  Plus,
+  Trash2,
 } from "lucide-react";
 
 export interface ArtifactReviewViewProps {
@@ -75,6 +86,8 @@ interface StoryRecord {
   title: string;
   insightBody: string;
   provenance: string;
+  researchJobId?: number | null;
+  evidenceRefs?: number[];
 }
 
 export function ArtifactReviewView({
@@ -85,6 +98,7 @@ export function ArtifactReviewView({
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [draftText, setDraftText] = useState("");
+  const [draftUnits, setDraftUnits] = useState<string[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleIso, setScheduleIso] = useState<string | null>(null);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
@@ -138,6 +152,15 @@ export function ArtifactReviewView({
     enabled: !!opportunityQuery.data?.storyId,
   });
 
+  const storyEvidenceQuery = useQuery<ArtifactExportEvidence[]>({
+    queryKey: ["/api/research/jobs", storyQuery.data?.researchJobId, "evidence"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/research/jobs/${storyQuery.data!.researchJobId}/evidence`);
+      return res.json();
+    },
+    enabled: Boolean(storyQuery.data?.researchJobId),
+  });
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId] });
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId, "history"] });
@@ -147,9 +170,15 @@ export function ArtifactReviewView({
   const reviseMutation = useMutation({
     mutationFn: async () => {
       if (!artifact) throw new Error("Missing artifact");
+      const nextPayload = buildEditedArtifactPayload(
+        artifact.format,
+        artifact.payload,
+        draftText,
+        artifact.format === "x_thread" ? draftUnits : undefined,
+      );
       const res = await apiRequest("POST", `/api/artifacts/${artifact.id}/revise`, {
         baseArtifactId: artifact.id,
-        payload: { ...(artifact.payload ?? {}), text: draftText },
+        payload: nextPayload,
         attributionReason: "Human review edit",
       });
       return res.json();
@@ -292,11 +321,82 @@ export function ArtifactReviewView({
   }
 
   const text = extractArtifactPreviewText(artifact.payload);
+  const isThread = artifact.format === "x_thread";
+  const threadUnits = isThread ? extractThreadUnits(artifact.payload) : [];
   const isApproved = artifact.readiness === "approved";
   const isInReview = artifact.readiness === "in_review";
   const isRejected = artifact.readiness === "rejected";
   const history = historyQuery.data || [];
   const currentVersion = deriveVersionNumber(artifact.id, history);
+
+  const rawEvidence = storyEvidenceQuery.data ?? [];
+  const storyEvidenceRefSet = new Set(storyQuery.data?.evidenceRefs ?? []);
+  const exportEvidence =
+    storyEvidenceRefSet.size > 0
+      ? rawEvidence.filter((item) => typeof item.id === "number" && storyEvidenceRefSet.has(item.id))
+      : rawEvidence;
+
+  const openEditor = () => {
+    if (isThread) {
+      setDraftUnits(threadUnits.length > 0 ? [...threadUnits] : [""]);
+    } else {
+      setDraftText(text);
+    }
+    setEditing(true);
+  };
+
+  const canSaveEdit = isThread
+    ? draftUnits.some((u) => u.trim().length > 0)
+    : draftText.trim().length > 0;
+
+  const handleCopyPlainText = async () => {
+    const plain = formatArtifactPlainText(artifact);
+    if (!plain) {
+      toast({ title: "Nothing to copy", description: "This artifact has no text content yet." });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(plain);
+      toast({ title: "Copied text", description: "Content copied to clipboard." });
+    } catch {
+      toast({ title: "Copy failed", description: "Clipboard access was blocked by the browser.", variant: "destructive" });
+    }
+  };
+
+  const handleCopyThread = async () => {
+    const numbered = formatArtifactNumberedThread(artifact);
+    if (!numbered) {
+      toast({ title: "Nothing to copy", description: "This thread has no posts yet." });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(numbered);
+      toast({ title: "Copied numbered thread", description: "Numbered thread copied to clipboard." });
+    } catch {
+      toast({ title: "Copy failed", description: "Clipboard access was blocked by the browser.", variant: "destructive" });
+    }
+  };
+
+  const handleExportMarkdown = () => {
+    const exportContext = {
+      version: currentVersion,
+      storyTitle: storyQuery.data?.title,
+      opportunityConcept: opportunityQuery.data?.concept,
+      evidence: exportEvidence,
+    };
+    const markdown = formatArtifactMarkdownExport(artifact, exportContext);
+    const filename = buildArtifactExportFilename(artifact, exportContext);
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+    toast({ title: "Exported Markdown", description: `Downloaded ${filename}` });
+  };
 
   // Target Account resolution
   const matchedAccount = accountsQuery.data?.find((a) => a.platform === artifact.channel);
@@ -378,7 +478,9 @@ export function ArtifactReviewView({
                 <span className="capitalize">{artifact.format.replace(/_/g, " ")}</span>
               </div>
               <span className="text-xs text-muted-foreground">
-                {text.length} characters
+                {isThread
+                  ? `${(editing ? draftUnits : threadUnits).length} posts · ${text.length} characters`
+                  : `${text.length} characters`}
               </span>
             </CardHeader>
 
@@ -389,13 +491,77 @@ export function ArtifactReviewView({
                     <Edit3 className="h-3.5 w-3.5" />
                     Editing will create Version {history.length + 1} in draft status.
                   </div>
-                  <Textarea
-                    value={draftText}
-                    onChange={(e) => setDraftText(e.target.value)}
-                    rows={8}
-                    className="font-sans text-sm leading-relaxed"
-                    data-testid="textarea-review-edit"
-                  />
+                  {isThread ? (
+                    <div className="space-y-3" data-testid="editor-thread-units">
+                      {draftUnits.map((unit, idx) => {
+                        const overBudget = unit.length > X_POST_CHAR_BUDGET;
+                        const fieldId = `textarea-thread-unit-${idx}`;
+                        return (
+                          <div key={idx} className="space-y-1.5 rounded-md border p-3 bg-muted/10">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <label htmlFor={fieldId} className="font-medium text-foreground">
+                                Post {idx + 1} of {draftUnits.length}
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={overBudget ? "text-destructive font-medium" : "text-muted-foreground"}
+                                  data-testid={`text-thread-unit-count-${idx}`}
+                                >
+                                  {unit.length} / {X_POST_CHAR_BUDGET}
+                                </span>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                                  disabled={draftUnits.length <= 1}
+                                  onClick={() =>
+                                    setDraftUnits((prev) => prev.filter((_, unitIdx) => unitIdx !== idx))
+                                  }
+                                  aria-label={`Remove post ${idx + 1}`}
+                                  data-testid={`button-thread-remove-unit-${idx}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                            <Textarea
+                              id={fieldId}
+                              value={unit}
+                              onChange={(e) => {
+                                const next = [...draftUnits];
+                                next[idx] = e.target.value;
+                                setDraftUnits(next);
+                              }}
+                              rows={3}
+                              className="font-sans text-sm leading-relaxed"
+                              data-testid={`textarea-thread-unit-${idx}`}
+                            />
+                          </div>
+                        );
+                      })}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 text-xs"
+                        onClick={() => setDraftUnits((prev) => [...prev, ""])}
+                        data-testid="button-thread-add-unit"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Post to Thread
+                      </Button>
+                    </div>
+                  ) : (
+                    <Textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      rows={8}
+                      aria-label="Edit content"
+                      className="font-sans text-sm leading-relaxed"
+                      data-testid="textarea-review-edit"
+                    />
+                  )}
                   <div className="flex gap-2 justify-end">
                     <Button
                       size="sm"
@@ -408,12 +574,28 @@ export function ArtifactReviewView({
                     <Button
                       size="sm"
                       onClick={() => reviseMutation.mutate()}
-                      disabled={reviseMutation.isPending || !draftText.trim()}
+                      disabled={reviseMutation.isPending || !canSaveEdit}
                       data-testid="button-review-save-edit"
                     >
                       Save Version {history.length + 1}
                     </Button>
                   </div>
+                </div>
+              ) : isThread && threadUnits.length > 0 ? (
+                <div className="space-y-3" data-testid="text-review-rendered-content">
+                  {threadUnits.map((unit, idx) => (
+                    <div key={idx} className="rounded-md border bg-muted/10 p-3 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span className="font-mono font-medium">
+                          {idx + 1}/{threadUnits.length}
+                        </span>
+                        <span className={unit.length > X_POST_CHAR_BUDGET ? "text-destructive font-medium" : ""}>
+                          {unit.length} / {X_POST_CHAR_BUDGET}
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed font-sans">{unit}</p>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div
@@ -527,10 +709,7 @@ export function ArtifactReviewView({
                         variant="outline"
                         size="sm"
                         className="gap-1.5"
-                        onClick={() => {
-                          setDraftText(text);
-                          setEditing(true);
-                        }}
+                        onClick={openEditor}
                         data-testid="button-review-edit"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
@@ -582,10 +761,7 @@ export function ArtifactReviewView({
                         variant="outline"
                         size="sm"
                         className="gap-1.5"
-                        onClick={() => {
-                          setDraftText(text);
-                          setEditing(true);
-                        }}
+                        onClick={openEditor}
                         data-testid="button-review-edit"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
@@ -635,10 +811,7 @@ export function ArtifactReviewView({
                       variant="ghost"
                       size="sm"
                       className="w-full text-xs text-muted-foreground mt-2"
-                      onClick={() => {
-                        setDraftText(text);
-                        setEditing(true);
-                      }}
+                      onClick={openEditor}
                       data-testid="button-review-new-version"
                     >
                       Create another version
@@ -646,6 +819,50 @@ export function ArtifactReviewView({
                   </div>
                 </>
               )}
+
+              {/* Export-First Copy & Markdown Actions (available on all states) */}
+              <div className="pt-3 mt-2 border-t space-y-2" data-testid="section-artifact-export">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
+                  Copy &amp; Export
+                </span>
+                <div className="grid grid-cols-1 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-center gap-1.5 text-xs"
+                    onClick={() => void handleCopyPlainText()}
+                    data-testid="button-copy-artifact"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Text
+                  </Button>
+                  {isThread && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-center gap-1.5 text-xs"
+                      onClick={() => void handleCopyThread()}
+                      data-testid="button-copy-thread"
+                    >
+                      <ListOrdered className="h-3.5 w-3.5" />
+                      Copy Thread
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-center gap-1.5 text-xs"
+                    onClick={handleExportMarkdown}
+                    data-testid="button-export-markdown"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export Markdown
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>

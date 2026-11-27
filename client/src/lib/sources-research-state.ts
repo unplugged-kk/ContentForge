@@ -342,6 +342,109 @@ function capitalizeProvider(id: string): string {
   }
 }
 
+export interface ConflictClaim {
+  canonicalUrl?: string;
+  text: string;
+  provider?: string;
+}
+
+export interface ResearchConflictLike {
+  topic?: string;
+  claims?: Array<{
+    canonicalUrl?: string;
+    text?: string;
+    provider?: string;
+  }>;
+  claimA?: string;
+  claimB?: string;
+  sourceUrlA?: string;
+  sourceUrlB?: string;
+}
+
+function normalizeComparableUrl(url?: string | null): string {
+  return (url ?? "").trim();
+}
+
+/**
+ * Extracts normalized claims from either the canonical backend ResearchConflict
+ * (`{ topic, claims: [{ canonicalUrl, text, provider }] }`) or legacy A/B mock shape.
+ */
+export function formatConflictClaims(conflict: ResearchConflictLike): ConflictClaim[] {
+  if (Array.isArray(conflict.claims) && conflict.claims.length > 0) {
+    return conflict.claims
+      .map((claim) => ({
+        canonicalUrl: normalizeComparableUrl(claim.canonicalUrl) || undefined,
+        text: sanitizeUntrustedText(claim.text),
+        provider: claim.provider?.trim() || undefined,
+      }))
+      .filter((claim) => claim.text.length > 0);
+  }
+
+  const legacy: ConflictClaim[] = [];
+  const claimA = sanitizeUntrustedText(conflict.claimA);
+  if (claimA) {
+    legacy.push({
+      canonicalUrl: normalizeComparableUrl(conflict.sourceUrlA) || undefined,
+      text: claimA,
+    });
+  }
+  const claimB = sanitizeUntrustedText(conflict.claimB);
+  if (claimB) {
+    legacy.push({
+      canonicalUrl: normalizeComparableUrl(conflict.sourceUrlB) || undefined,
+      text: claimB,
+    });
+  }
+  return legacy;
+}
+
+/**
+ * Finds all conflicts referencing a source's canonical URL across both the real
+ * backend `claims[]` schema and legacy `sourceUrlA`/`sourceUrlB` fixtures.
+ */
+export function findConflictsForSourceUrl(
+  conflicts: readonly ResearchConflictLike[] | null | undefined,
+  canonicalUrl?: string | null,
+): ResearchConflictLike[] {
+  const target = normalizeComparableUrl(canonicalUrl);
+  if (!target || !conflicts || conflicts.length === 0) return [];
+
+  return conflicts.filter((conflict) => {
+    if (Array.isArray(conflict.claims) && conflict.claims.length > 0) {
+      return conflict.claims.some((c) => normalizeComparableUrl(c.canonicalUrl) === target);
+    }
+    return (
+      normalizeComparableUrl(conflict.sourceUrlA) === target ||
+      normalizeComparableUrl(conflict.sourceUrlB) === target
+    );
+  });
+}
+
+/**
+ * Selects provider IDs for a research job. When the input or direct URL is an
+ * HTTP(S) URL, guarantees the `web` provider is included instead of dropping it
+ * behind an arbitrary slice.
+ */
+export function selectResearchProviders(
+  availableProviders: readonly string[],
+  targetInput: string,
+  directUrl?: string,
+  maxProviders = 4,
+): string[] {
+  const isUrlRequest =
+    Boolean(directUrl?.trim()) || /^https?:\/\//i.test(targetInput.trim());
+  const base = availableProviders.length > 0
+    ? Array.from(new Set(availableProviders))
+    : ["rss", "hn", "web"];
+
+  if (!isUrlRequest) {
+    return base.slice(0, maxProviders);
+  }
+
+  const withoutWeb = base.filter((id) => id !== "web");
+  return ["web", ...withoutWeb].slice(0, maxProviders);
+}
+
 /**
  * Canonical handoff URLs
  */
@@ -353,11 +456,58 @@ export function getCreateFromIdeaUrl(ideaId: number): string {
   return `/create?ideaId=${ideaId}`;
 }
 
-export function getCreateFromSourceUrl(params: { title?: string; url?: string }): string {
+export function getCreateFromSourceUrl(params: {
+  title?: string;
+  url?: string;
+  researchJobId?: number | null;
+  evidenceIds?: readonly number[];
+}): string {
   const p = new URLSearchParams();
   if (params.title) p.set("topic", params.title);
   if (params.url) p.set("sourceUrl", params.url);
+  if (params.researchJobId != null && Number.isInteger(params.researchJobId) && params.researchJobId > 0) {
+    p.set("researchJobId", String(params.researchJobId));
+  }
+  const cleanEvidenceIds = (params.evidenceIds ?? []).filter(
+    (id) => Number.isInteger(id) && id > 0,
+  );
+  if (cleanEvidenceIds.length > 0) {
+    p.set("evidenceIds", Array.from(new Set(cleanEvidenceIds)).join(","));
+  }
   return `/create?${p.toString()}`;
+}
+
+export interface CreateSourceHandoff {
+  topic?: string;
+  sourceUrl?: string;
+  researchJobId?: number;
+  evidenceIds: number[];
+}
+
+/**
+ * Parses source handoff query params (`topic`, `sourceUrl`, `researchJobId`, `evidenceIds`)
+ * emitted by `getCreateFromSourceUrl`.
+ */
+export function parseCreateSourceHandoff(search: string): CreateSourceHandoff {
+  const params = new URLSearchParams(search);
+  const topic = params.get("topic") ?? undefined;
+  const sourceUrl = params.get("sourceUrl") ?? undefined;
+  const rawJobId = params.get("researchJobId");
+  const parsedJobId = rawJobId ? Number(rawJobId) : NaN;
+  const researchJobId =
+    Number.isInteger(parsedJobId) && parsedJobId > 0 ? parsedJobId : undefined;
+
+  const rawEvidenceIds = params.get("evidenceIds") ?? "";
+  const evidenceIds = Array.from(
+    new Set(
+      rawEvidenceIds
+        .split(",")
+        .map((part) => Number(part.trim()))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  );
+
+  return { topic, sourceUrl, researchJobId, evidenceIds };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { PageHeader } from "@/components/ui-shared/page-header";
 import { Button } from "@/components/ui/button";
 import { DiscoverTab } from "@/components/sources/discover-tab";
@@ -20,14 +20,31 @@ import { cn } from "@/lib/utils";
 
 export type SourcesPrimaryView = "discover" | "saved" | "research" | "ideas" | "vault" | "references" | "ingest";
 
+function parseJobIdParam(search: string): number | null {
+  const raw = new URLSearchParams(search).get("jobId");
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export default function SourcesPage() {
   const [location] = useLocation();
+  const search = useSearch();
   const [activeView, setActiveView] = useState<SourcesPrimaryView>("discover");
   const [savedFilter, setSavedFilter] = useState<SavedItemFilter>("all");
+  const [selectedJobId, setSelectedJobId] = useState<number | null>(() =>
+    parseJobIdParam(window.location.search),
+  );
 
   // Sync with location or query parameters
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const searchString = search || window.location.search;
+    const params = new URLSearchParams(searchString);
+    const jobIdParam = parseJobIdParam(searchString);
+    if (jobIdParam !== null) {
+      setSelectedJobId(jobIdParam);
+    }
+
     const viewParam = params.get("view");
     if (viewParam) {
       if (viewParam === "ideas") {
@@ -51,6 +68,11 @@ export default function SourcesPage() {
       }
     }
 
+    if (jobIdParam !== null) {
+      setActiveView("discover");
+      return;
+    }
+
     if (location.includes("ideas")) {
       setActiveView("saved");
       setSavedFilter("ideas");
@@ -67,7 +89,31 @@ export default function SourcesPage() {
     } else if (location.includes("saved")) {
       setActiveView("saved");
     }
-  }, [location]);
+  }, [location, search]);
+
+  function syncJobIdInUrl(jobId: number | null) {
+    const url = new URL(window.location.href);
+    if (jobId !== null) {
+      url.searchParams.set("jobId", String(jobId));
+      if (url.searchParams.get("view") === "research") {
+        url.searchParams.delete("view");
+      }
+    } else {
+      url.searchParams.delete("jobId");
+    }
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function handleSelectResearchJob(jobId: number) {
+    setSelectedJobId(jobId);
+    setActiveView("discover");
+    syncJobIdInUrl(jobId);
+  }
+
+  function handleActiveJobChange(jobId: number | null) {
+    setSelectedJobId(jobId);
+    syncJobIdInUrl(jobId);
+  }
 
   function handleTriggerQuickCapture() {
     const qcBtn = document.querySelector('[data-testid="button-quick-capture"]') as HTMLButtonElement | null;
@@ -237,9 +283,14 @@ export default function SourcesPage() {
 
       {/* Main View Body */}
       <div className="flex-1 overflow-auto">
-        {activeView === "discover" && <DiscoverTab />}
+        {activeView === "discover" && (
+          <DiscoverTab
+            initialJobId={selectedJobId}
+            onJobChange={handleActiveJobChange}
+          />
+        )}
         {activeView === "saved" && <SavedTab initialFilter={savedFilter} key={savedFilter} />}
-        {activeView === "research" && <ResearchTab onSelectJob={() => setActiveView("discover")} />}
+        {activeView === "research" && <ResearchTab onSelectJob={handleSelectResearchJob} />}
         {activeView === "ingest" && <IngestPage />}
       </div>
     </div>

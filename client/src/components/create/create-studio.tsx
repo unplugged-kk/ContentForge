@@ -40,6 +40,10 @@ export interface CreateStudioProps {
   initialConcept?: string;
   /** Handed off from Sources: the source carried in `?sourceUrl=`. */
   initialSourceUrl?: string;
+  /** Handed off from Sources: the research job carried in `?researchJobId=`. */
+  initialResearchJobId?: number;
+  /** Handed off from Sources: evidence IDs carried in `?evidenceIds=`. */
+  initialEvidenceIds?: number[];
 }
 
 type StartWithSource = "story" | "idea" | "source" | "blank";
@@ -80,6 +84,8 @@ export function CreateStudio({
   initialIdeaId,
   initialConcept,
   initialSourceUrl,
+  initialResearchJobId,
+  initialEvidenceIds = [],
 }: CreateStudioProps) {
   const { toast } = useToast();
 
@@ -111,7 +117,13 @@ export function CreateStudio({
   // State
   const [contentType, setContentType] = useState<ContentType>(initialType);
   const [startWith, setStartWith] = useState<StartWithSource>(
-    initialStoryId ? "story" : initialIdeaId ? "idea" : initialSourceUrl ? "source" : "blank",
+    initialStoryId
+      ? "story"
+      : initialIdeaId
+        ? "idea"
+        : initialSourceUrl || initialResearchJobId
+          ? "source"
+          : "blank",
   );
 
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(initialStoryId ?? null);
@@ -170,15 +182,23 @@ export function CreateStudio({
 
       let storyId = selectedStoryId;
 
-      // If no pre-existing story selected, create a human story row
+      // If no pre-existing story selected, create a Story preserving research provenance when present
       if (!storyId) {
-        const storyRes = await apiRequest("POST", "/api/stories", {
+        const hasResearchProvenance = Boolean(initialResearchJobId && startWith === "source");
+        const storyPayload: Record<string, unknown> = {
           title: concept.trim().slice(0, 100) || "Direct content concept",
           insightBody: concept.trim() || "Direct generation concept",
-          provenance: "human",
+          provenance: hasResearchProvenance ? "researched" : "human",
           status: "ready",
           angles: angle ? [angle] : [],
-        });
+        };
+        if (hasResearchProvenance && initialResearchJobId) {
+          storyPayload.researchJobId = initialResearchJobId;
+          if (initialEvidenceIds.length > 0) {
+            storyPayload.evidenceRefs = initialEvidenceIds;
+          }
+        }
+        const storyRes = await apiRequest("POST", "/api/stories", storyPayload);
         const createdStory = await storyRes.json();
         storyId = createdStory.id;
       }
@@ -393,13 +413,20 @@ export function CreateStudio({
 
         {startWith === "source" && (
           <Card className="p-3 bg-muted/20 border-dashed space-y-2" data-testid="card-picker-source">
-            <span className="text-xs font-medium text-muted-foreground">Creating from a source:</span>
-            {initialSourceUrl ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Creating from a source:</span>
+              {initialResearchJobId && (
+                <Badge variant="outline" className="text-xs" data-testid="badge-create-research-provenance">
+                  Researched (Job #{initialResearchJobId})
+                </Badge>
+              )}
+            </div>
+            {initialSourceUrl || initialResearchJobId ? (
               <>
                 {initialConcept && (
                   <p className="text-xs font-semibold text-foreground break-words">{initialConcept}</p>
                 )}
-                {/^https?:\/\//i.test(initialSourceUrl) ? (
+                {initialSourceUrl && (/^https?:\/\//i.test(initialSourceUrl) ? (
                   <a
                     href={initialSourceUrl}
                     target="_blank"
@@ -411,9 +438,11 @@ export function CreateStudio({
                   </a>
                 ) : (
                   <span className="text-xs text-muted-foreground break-all">{initialSourceUrl}</span>
-                )}
+                ))}
                 <p className="text-xs text-muted-foreground italic">
-                  The topic above was carried over from this source. Edit it before generating.
+                  {initialResearchJobId
+                    ? "Research provenance and citations will stay attached when this content is generated."
+                    : "The topic above was carried over from this source. Edit it before generating."}
                 </p>
               </>
             ) : (
@@ -644,7 +673,13 @@ export function CreateStudio({
           <p>
             <span className="text-muted-foreground">Source: </span>
             <span className="font-medium">
-              {selectedStoryId ? `Story #${selectedStoryId}` : selectedIdeaId ? `Idea #${selectedIdeaId}` : "Direct draft"}
+              {selectedStoryId
+                ? `Story #${selectedStoryId}`
+                : selectedIdeaId
+                  ? `Idea #${selectedIdeaId}`
+                  : initialResearchJobId && startWith === "source"
+                    ? `Research Job #${initialResearchJobId}`
+                    : "Direct draft"}
             </span>
           </p>
           {selectedVoice && (

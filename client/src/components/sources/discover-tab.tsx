@@ -1,18 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
   Compass,
   Search,
-  SlidersHorizontal,
   Loader2,
   AlertTriangle,
   Info,
   CheckCircle2,
-  Sparkles,
   Link2,
   FileText,
-  Bookmark,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -36,12 +33,23 @@ import {
   resolveResearchStatus,
   translateProviderLimitations,
   getCreateFromSourceUrl,
+  findConflictsForSourceUrl,
+  formatConflictClaims,
+  selectResearchProviders,
+  humanizeQuality,
+  humanizeNovelty,
+  type ResearchConflictLike,
 } from "@/lib/sources-research-state";
 import { SourceCard } from "./source-card";
 import { SourceDetailModal } from "./source-detail-modal";
 import { CreateStoryDialog } from "./create-story-dialog";
 
-export function DiscoverTab() {
+export interface DiscoverTabProps {
+  initialJobId?: number | null;
+  onJobChange?: (jobId: number | null) => void;
+}
+
+export function DiscoverTab({ initialJobId = null, onJobChange }: DiscoverTabProps = {}) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -52,10 +60,17 @@ export function DiscoverTab() {
   const [directUrl, setDirectUrl] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
 
-  const [activeJobId, setActiveJobId] = useState<number | null>(null);
+  const [activeJobId, setActiveJobId] = useState<number | null>(initialJobId ?? null);
   const [selectedSource, setSelectedSource] = useState<any | null>(null);
   const [storyDialogOpen, setStoryDialogOpen] = useState(false);
   const [storyInitialData, setStoryInitialData] = useState<{ title?: string; body?: string }>({});
+
+  useEffect(() => {
+    if (initialJobId != null && initialJobId !== activeJobId) {
+      setActiveJobId(initialJobId);
+      setSelectedSource(null);
+    }
+  }, [initialJobId, activeJobId]);
 
   // Capabilities query
   const capabilitiesQuery = useQuery({
@@ -157,14 +172,14 @@ export function DiscoverTab() {
       // Dynamic provider list from capabilities or default to open providers
       const availableProviders = (capabilitiesQuery.data?.providers ?? [])
         .filter((p: any) => p.available)
-        .map((p: any) => p.providerId);
+        .map((p: any) => p.providerId as string);
 
-      const providerIds = availableProviders.length > 0
-        ? availableProviders.slice(0, 4)
-        : ["rss", "hn", "web"];
+      const providerIds = selectResearchProviders(availableProviders, targetQuery, directUrl);
+
+      const resolvedDirectUrl = directUrl.trim() || (/^https?:\/\//i.test(targetQuery) ? targetQuery : "");
 
       const body: Record<string, unknown> = {
-        kind: directUrl.trim() ? "directed" : "directed",
+        kind: "directed",
         query: targetQuery,
         providerIds,
         windowPreset,
@@ -173,8 +188,8 @@ export function DiscoverTab() {
         idempotencyKey: `sources:${targetQuery.slice(0, 40)}:${Date.now()}`,
       };
 
-      if (directUrl.trim()) {
-        body.providerConfig = { web: { urls: [directUrl.trim()] } };
+      if (resolvedDirectUrl) {
+        body.providerConfig = { web: { urls: [resolvedDirectUrl] } };
       }
 
       const res = await apiRequest("POST", "/api/research/jobs", body);
@@ -182,6 +197,7 @@ export function DiscoverTab() {
     },
     onSuccess: (data) => {
       setActiveJobId(data.id);
+      onJobChange?.(data.id);
       void queryClient.invalidateQueries({ queryKey: ["/api/research/jobs"] });
     },
     onError: (err: Error) => {
@@ -197,13 +213,20 @@ export function DiscoverTab() {
   };
 
   const isSavedUrl = (url?: string) => {
-    if (!url || !savedVaultQuery.data) return false;
+    if (!url) return false;
+    if (savedUrls.has(url)) return true;
+    if (!savedVaultQuery.data) return false;
     return savedVaultQuery.data.some((item) => item.sourceUrl === url);
   };
 
   const job = jobQuery.data;
   const rawStatus = job?.status;
-  const isPending = rawStatus === "queued" || rawStatus === "running" || rawStatus === "in_progress" || researchMutation.isPending;
+  const isPending =
+    rawStatus === "queued" ||
+    rawStatus === "running" ||
+    rawStatus === "in_progress" ||
+    researchMutation.isPending ||
+    (activeJobId != null && jobQuery.isLoading);
   const isFailed = jobQuery.isError || researchMutation.isError || rawStatus === "failed";
   const isComplete = (rawStatus === "complete" || rawStatus === "completed") && !isPending;
 
@@ -220,7 +243,25 @@ export function DiscoverTab() {
   const sources = sourcesQuery.data ?? [];
   const evidence = evidenceQuery.data ?? [];
   const analysisSnapshot = analysisQuery.data?.snapshot;
-  const conflicts = analysisSnapshot?.conflicts ?? [];
+  const conflicts: ResearchConflictLike[] = Array.isArray(analysisSnapshot?.conflicts)
+    ? analysisSnapshot.conflicts
+    : [];
+  const clusters: Array<{ clusterId?: string; title?: string; memberUrls?: string[]; providers?: string[] }> =
+    Array.isArray(analysisSnapshot?.clusters) ? analysisSnapshot.clusters : [];
+  const resolvedWindowPreset = job?.window?.preset ?? windowPreset;
+  const briefQuality = humanizeQuality(analysisSnapshot?.quality ?? analysisSnapshot?.summary?.quality);
+  const briefNovelty =
+    analysisSnapshot?.novelty != null ? humanizeNovelty(analysisSnapshot.novelty) : null;
+  const briefFreshness: string | null =
+    typeof analysisSnapshot?.summary?.freshness === "string" && analysisSnapshot.summary.freshness !== "unknown"
+      ? analysisSnapshot.summary.freshness
+      : null;
+
+  const selectedSourceEvidence = selectedSource
+    ? evidence.filter(
+        (e) => e.sourceId === selectedSource.id || e.canonicalUrl === selectedSource.canonicalUrl,
+      )
+    : [];
 
   const limitations = translateProviderLimitations(capabilitiesQuery.data);
 
@@ -419,10 +460,17 @@ export function DiscoverTab() {
                   </Badge>
                 )}
                 <Badge variant="outline" className="text-xs">
-                  {formatTimeWindow(windowPreset)}
+                  {formatTimeWindow(resolvedWindowPreset)}
                 </Badge>
               </div>
             </div>
+
+            {job?.query && (
+              <p className="text-xs text-muted-foreground break-words" data-testid="text-research-job-topic">
+                Topic: <strong className="text-foreground">{job.query}</strong>
+                {activeJobId ? <span className="ml-2 font-mono">Session #{activeJobId}</span> : null}
+              </p>
+            )}
 
             {/* Real Metrics Row. A failed read must never render as a zero count. */}
             <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted-foreground border-t">
@@ -453,6 +501,86 @@ export function DiscoverTab() {
             )}
           </div>
 
+          {/* Concise Research Brief Summary */}
+          {analysisSnapshot && !analysisQuery.isError && (
+            <Card className="border-border shadow-xs" data-testid="card-research-brief">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2 flex-wrap">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-primary" />
+                  <span>Research Brief</span>
+                </CardTitle>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="secondary" className="text-xs" data-testid="badge-brief-quality">
+                    {briefQuality.label}
+                  </Badge>
+                  {briefFreshness && (
+                    <Badge variant="outline" className="text-xs capitalize" data-testid="badge-brief-freshness">
+                      Freshness: {briefFreshness}
+                    </Badge>
+                  )}
+                  {briefNovelty && (
+                    <Badge variant="outline" className="text-xs" data-testid="badge-brief-novelty">
+                      {briefNovelty.label}
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                {clusters.length > 0 && (
+                  <div className="space-y-1.5" data-testid="section-brief-clusters">
+                    <span className="font-medium text-muted-foreground block">Key Themes</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {clusters.slice(0, 6).map((cluster, idx) => (
+                        <Badge
+                          key={cluster.clusterId || idx}
+                          variant="outline"
+                          className="text-xs font-normal max-w-full"
+                        >
+                          <span className="truncate">{cluster.title || `Theme ${idx + 1}`}</span>
+                          {cluster.memberUrls && cluster.memberUrls.length > 0 && (
+                            <span className="ml-1 text-muted-foreground">({cluster.memberUrls.length})</span>
+                          )}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {conflicts.length > 0 && (
+                  <div
+                    className="rounded-md border border-warning/30 bg-warning/10 p-3 space-y-2"
+                    data-testid="section-brief-conflicts"
+                  >
+                    <div className="flex items-center gap-1.5 font-semibold text-warning">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>Surfaced Disagreements ({conflicts.length})</span>
+                    </div>
+                    <div className="space-y-2">
+                      {conflicts.slice(0, 4).map((conflict, idx) => {
+                        const claims = formatConflictClaims(conflict);
+                        return (
+                          <div key={idx} className="pl-2.5 border-l-2 border-warning/40 space-y-1">
+                            {conflict.topic && (
+                              <p className="font-semibold text-foreground capitalize">{conflict.topic}</p>
+                            )}
+                            {claims.map((claim, cIdx) => (
+                              <p key={cIdx} className="text-muted-foreground break-words">
+                                <span className="font-medium text-foreground uppercase mr-1">
+                                  {claim.provider || `Source ${cIdx + 1}`}:
+                                </span>
+                                {claim.text}
+                              </p>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Source Result Cards */}
           {sourcesQuery.isError ? (
             <ErrorState
@@ -470,9 +598,10 @@ export function DiscoverTab() {
 
               {sources.map((src) => {
                 const srcEvidence = evidence.filter((e) => e.sourceId === src.id || e.canonicalUrl === src.canonicalUrl);
-                const hasSrcConflicts = conflicts.some(
-                  (c: any) => c.sourceUrlA === src.canonicalUrl || c.sourceUrlB === src.canonicalUrl,
-                );
+                const srcEvidenceIds = srcEvidence
+                  .map((e) => e.id)
+                  .filter((id: unknown): id is number => typeof id === "number" && Number.isInteger(id) && id > 0);
+                const hasSrcConflicts = findConflictsForSourceUrl(conflicts, src.canonicalUrl).length > 0;
 
                 return (
                   <SourceCard
@@ -491,7 +620,14 @@ export function DiscoverTab() {
                       setStoryDialogOpen(true);
                     }}
                     onCreateContent={() => {
-                      navigate(getCreateFromSourceUrl({ title: src.title, url: src.canonicalUrl }));
+                      navigate(
+                        getCreateFromSourceUrl({
+                          title: src.title,
+                          url: src.canonicalUrl,
+                          researchJobId: activeJobId,
+                          evidenceIds: srcEvidenceIds,
+                        }),
+                      );
                     }}
                   />
                 );
@@ -515,15 +651,11 @@ export function DiscoverTab() {
           }}
           source={selectedSource}
           evidenceError={evidenceQuery.isError}
-          evidenceList={evidence.filter(
-            (e) => e.sourceId === selectedSource.id || e.canonicalUrl === selectedSource.canonicalUrl,
-          )}
-          conflicts={conflicts.filter(
-            (c: any) => c.sourceUrlA === selectedSource.canonicalUrl || c.sourceUrlB === selectedSource.canonicalUrl,
-          )}
+          evidenceList={selectedSourceEvidence}
+          conflicts={findConflictsForSourceUrl(conflicts, selectedSource.canonicalUrl)}
           researchContext={{
             query: job?.query || query,
-            window: formatTimeWindow(windowPreset),
+            window: formatTimeWindow(resolvedWindowPreset),
             depth: formatResearchDepth(depth),
           }}
           isSaved={isSavedUrl(selectedSource.canonicalUrl)}
@@ -536,7 +668,17 @@ export function DiscoverTab() {
             setStoryDialogOpen(true);
           }}
           onCreateContent={() => {
-            navigate(getCreateFromSourceUrl({ title: selectedSource.title, url: selectedSource.canonicalUrl }));
+            const modalEvidenceIds = selectedSourceEvidence
+              .map((e) => e.id)
+              .filter((id: unknown): id is number => typeof id === "number" && Number.isInteger(id) && id > 0);
+            navigate(
+              getCreateFromSourceUrl({
+                title: selectedSource.title,
+                url: selectedSource.canonicalUrl,
+                researchJobId: activeJobId,
+                evidenceIds: modalEvidenceIds,
+              }),
+            );
           }}
         />
       )}
