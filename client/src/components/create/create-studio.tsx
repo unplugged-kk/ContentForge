@@ -56,6 +56,20 @@ interface StoryItem {
   angles?: string[];
 }
 
+const CREATOR_NOTES_HEADER = "First-hand notes & proof points:";
+
+function extractStoryCreatorNotes(story: StoryItem | null): string | null {
+  if (!story) return null;
+  const body = story.insightBody?.trim() ?? "";
+  if (!body) return null;
+  const idx = body.indexOf(CREATOR_NOTES_HEADER);
+  if (idx >= 0) {
+    const after = body.slice(idx + CREATOR_NOTES_HEADER.length).trim();
+    return after.length > 0 ? after : null;
+  }
+  return story.provenance === "human" ? body : null;
+}
+
 interface IdeaItem {
   id: number;
   title: string;
@@ -270,6 +284,11 @@ export function CreateStudio({
   });
 
   const selectedVoice = voicesQuery.data?.find((v) => v.id === selectedVoiceId);
+  const selectedStory =
+    selectedStoryId !== null
+      ? storiesQuery.data?.find((s) => s.id === selectedStoryId) ?? null
+      : null;
+  const selectedStoryNotes = extractStoryCreatorNotes(selectedStory);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 md:p-6 max-w-5xl mx-auto gap-6" data-testid="create-studio-container">
@@ -336,7 +355,13 @@ export function CreateStudio({
                 className={`h-8 text-xs font-medium gap-1.5 ${
                   isSelected ? "border-foreground/30 shadow-2xs font-semibold" : "text-muted-foreground"
                 }`}
-                onClick={() => setStartWith(entry.id as StartWithSource)}
+                onClick={() => {
+                  const next = entry.id as StartWithSource;
+                  setStartWith(next);
+                  if (next !== "story") {
+                    setSelectedStoryId(null);
+                  }
+                }}
                 data-testid={`button-start-with-${entry.id}`}
               >
                 <entry.icon className="h-3.5 w-3.5" />
@@ -505,20 +530,43 @@ export function CreateStudio({
         </div>
 
         {/* Optional First-Hand Notes / Proof Points */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="input-creator-notes">
-            Your first-hand notes / proof points (optional)
-          </label>
-          <Textarea
-            id="input-creator-notes"
-            value={creatorNotes}
-            onChange={(e) => setCreatorNotes(e.target.value)}
-            placeholder="Add first-hand observations, metrics you measured, or proof points to ground the draft without inventing claims"
-            rows={2}
-            className="text-sm leading-relaxed"
-            data-testid="input-creator-notes"
-          />
-        </div>
+        {selectedStoryId !== null ? (
+          <div
+            className="rounded-md border border-dashed bg-muted/20 p-3 space-y-1 text-xs text-muted-foreground"
+            data-testid="note-story-creator-notes"
+          >
+            <p className="font-medium text-foreground">
+              First-hand notes come from Story #{selectedStoryId}
+            </p>
+            {selectedStoryNotes ? (
+              <p
+                className="whitespace-pre-wrap break-words text-muted-foreground"
+                data-testid="text-story-creator-notes"
+              >
+                {selectedStoryNotes}
+              </p>
+            ) : (
+              <p>
+                This existing Story has no attached first-hand notes. Switch to Blank canvas, Idea, or Source to author a new Story with your own notes.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="input-creator-notes">
+              Your first-hand notes / proof points (optional)
+            </label>
+            <Textarea
+              id="input-creator-notes"
+              value={creatorNotes}
+              onChange={(e) => setCreatorNotes(e.target.value)}
+              placeholder="Add first-hand observations, metrics you measured, or proof points to ground the draft without inventing claims"
+              rows={2}
+              className="text-sm leading-relaxed"
+              data-testid="input-creator-notes"
+            />
+          </div>
+        )}
 
         {/* Objective & Audience (2-col on desktop) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

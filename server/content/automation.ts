@@ -60,6 +60,7 @@ import type { ClaimJobInput, ClaimJobResult } from "../research/storage";
 import { hasProvider } from "../research/registry";
 import { createResearchJobBodySchema } from "../research/routes";
 import { createStoryFromResearch } from "../story/service";
+import { synthesizeStructuredBrief } from "../story/synthesis";
 import type { StoryStoragePort } from "../story/storage";
 import { approveArtifact, submitArtifactForReview, ArtifactStateError } from "./artifact";
 import { createSchedule, parseRecurrenceIntervalMs } from "./scheduling";
@@ -949,9 +950,24 @@ async function runStoryStep(run: AutomationRun, deps: AutomationDeps): Promise<S
   }
 
   const snapshot = run.policySnapshot as unknown as AutomationPolicySnapshot;
+  const baseSynthesis = synthesizeStory(snapshot, job, evidence);
+  const topic = job.query ?? (snapshot.researchConfig.query as string | undefined) ?? snapshot.name;
+  const briefResult = await synthesizeStructuredBrief({
+    topic,
+    evidence: evidence.slice(0, 5).map((e) => ({
+      id: e.id,
+      text: e.excerpt,
+      provider: e.kind,
+    })),
+    userId: run.userId,
+  });
   await createStoryFromResearch(
     job.id,
-    synthesizeStory(snapshot, job, evidence),
+    {
+      ...baseSynthesis,
+      insightBody: briefResult.markdown,
+      angles: briefResult.brief.angles,
+    },
     {
       stories: deps.stories,
       research: {

@@ -219,13 +219,23 @@ export function auditArtifactClaims(
     const hadFabricated = rawIds.some((id) => !validEvidenceIds.has(id));
     const unitIndex = Number.isInteger(mc.unitIndex) && mc.unitIndex >= 0 ? mc.unitIndex : 0;
 
-    if (mc.status === "opinion" && !hadFabricated) {
-      claims.push({
-        unitIndex,
-        claimText,
-        evidenceIds: validIds,
-        status: "opinion",
-      });
+    if (mc.status === "opinion") {
+      if (hadFabricated) {
+        claims.push({
+          unitIndex,
+          claimText,
+          evidenceIds: validIds,
+          status: "unsupported",
+          reason: "fabricated evidence reference",
+        });
+      } else {
+        claims.push({
+          unitIndex,
+          claimText,
+          evidenceIds: validIds,
+          status: "opinion",
+        });
+      }
       continue;
     }
 
@@ -325,7 +335,7 @@ export function auditArtifactClaims(
             status: "unsupported",
             reason: "ungrounded first-person claim without creator notes",
           });
-        } else if (existing.status === "supported") {
+        } else if (existing.status !== "unsupported") {
           existing.status = "unsupported";
           existing.reason = "ungrounded first-person claim without creator notes";
         }

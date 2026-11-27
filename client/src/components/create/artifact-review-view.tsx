@@ -111,6 +111,7 @@ const QUALITY_FLAG_LABELS: Record<string, string> = {
 function parseClaimAuditSummary(entries: ArtifactAttributionEntry[] | undefined) {
   const list = Array.isArray(entries) ? entries : [];
   const claimEntry = list.find((e) => e && e.kind === "claim_evidence_v1");
+  const hasClaimAudit = Boolean(claimEntry);
   const evidenceIds = Array.from(
     new Set(
       list.flatMap((e) => (Array.isArray(e?.evidenceIds) ? e.evidenceIds : [])),
@@ -126,9 +127,10 @@ function parseClaimAuditSummary(entries: ArtifactAttributionEntry[] | undefined)
       ? claimEntry.unsupportedCount
       : claims.filter((c) => c.status === "unsupported").length;
   const opinionCount = claims.filter((c) => c.status === "opinion").length;
-  const hasAuditData = claims.length > 0 || qualityFlags.length > 0 || evidenceIds.length > 0;
+  const hasAuditData = hasClaimAudit || evidenceIds.length > 0;
 
   return {
+    hasClaimAudit,
     hasAuditData,
     evidenceIds,
     claims,
@@ -746,7 +748,9 @@ export function ArtifactReviewView({
               <CardHeader className="pb-3 border-b bg-muted/20">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    {claimAudit.unsupportedCount > 0 || claimAudit.qualityFlags.length > 0 ? (
+                    {!claimAudit.hasClaimAudit ? (
+                      <FileSearch className="h-3.5 w-3.5 text-muted-foreground" />
+                    ) : claimAudit.unsupportedCount > 0 || claimAudit.qualityFlags.length > 0 ? (
                       <ShieldAlert className="h-3.5 w-3.5 text-warning" />
                     ) : (
                       <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
@@ -769,27 +773,39 @@ export function ArtifactReviewView({
               </CardHeader>
               <CardContent className="p-4 space-y-3 text-xs">
                 <div className="flex flex-wrap gap-1.5">
-                  <Badge
-                    variant="secondary"
-                    className="text-[11px]"
-                    data-testid="badge-claims-supported"
-                  >
-                    {claimAudit.supportedCount} supported
-                  </Badge>
-                  <Badge
-                    variant={claimAudit.unsupportedCount > 0 ? "destructive" : "outline"}
-                    className="text-[11px]"
-                    data-testid="badge-claims-unsupported"
-                  >
-                    {claimAudit.unsupportedCount} unsupported
-                  </Badge>
-                  {claimAudit.opinionCount > 0 && (
+                  {claimAudit.hasClaimAudit ? (
+                    <>
+                      <Badge
+                        variant="secondary"
+                        className="text-[11px]"
+                        data-testid="badge-claims-supported"
+                      >
+                        {claimAudit.supportedCount} supported
+                      </Badge>
+                      <Badge
+                        variant={claimAudit.unsupportedCount > 0 ? "destructive" : "outline"}
+                        className="text-[11px]"
+                        data-testid="badge-claims-unsupported"
+                      >
+                        {claimAudit.unsupportedCount} unsupported
+                      </Badge>
+                      {claimAudit.opinionCount > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="text-[11px]"
+                          data-testid="badge-claims-opinion"
+                        >
+                          {claimAudit.opinionCount} opinion
+                        </Badge>
+                      )}
+                    </>
+                  ) : (
                     <Badge
                       variant="outline"
-                      className="text-[11px]"
-                      data-testid="badge-claims-opinion"
+                      className="text-[11px] text-muted-foreground"
+                      data-testid="badge-legacy-provenance"
                     >
-                      {claimAudit.opinionCount} opinion
+                      Legacy provenance (no claim audit)
                     </Badge>
                   )}
                   {claimAudit.evidenceIds.length > 0 && (

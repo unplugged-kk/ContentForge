@@ -954,6 +954,8 @@ describe("step machine", () => {
     assert.ok(story, "the run derived a Story");
     assert.equal(story!.researchJobId, afterResearch!.researchJobId);
     assert.match(story!.insightBody, /first excerpt/);
+    assert.match(story!.insightBody, /## Grounded Facts/);
+    assert.ok(story!.angles.length >= 1, "structured brief populates candidate angles");
     assert.equal(story!.automationRunId, run.id);
 
     // fanout

@@ -71,6 +71,53 @@ describe("claim & paraphrase checker (INC-07)", () => {
     assert.match(result.claims[0].reason ?? "", /fabricated/i);
   });
 
+  it("never promotes an opinion claim with mixed valid and fabricated evidenceIds to supported", () => {
+    const result = auditArtifactClaims({
+      format: "x_post",
+      channel: "x",
+      payload: { text: "Deletion vectors will likely make compaction simpler for most teams." },
+      evidence: [{ id: 5, text: "Deletion vectors avoid rewriting data files." }],
+      modelClaims: [
+        {
+          unitIndex: 0,
+          claimText: "Deletion vectors will likely make compaction simpler for most teams.",
+          evidenceIds: [5, 99999],
+          status: "opinion",
+        },
+      ],
+    });
+
+    assert.equal(result.unsupportedCount, 1);
+    assert.equal(result.claims.length, 1);
+    assert.equal(result.claims[0].status, "unsupported");
+    assert.deepEqual(result.claims[0].evidenceIds, [5]);
+    assert.match(result.claims[0].reason ?? "", /fabricated/i);
+  });
+
+  it("downgrades an existing opinion claim to unsupported when ungrounded_first_person fires", () => {
+    const sentence = "In our production outage, we switched connection poolers to stay online.";
+    const result = auditArtifactClaims({
+      format: "x_post",
+      channel: "x",
+      payload: { text: sentence },
+      evidence: [{ id: 1, text: "PgBouncer pools database connections efficiently." }],
+      modelClaims: [
+        {
+          unitIndex: 0,
+          claimText: sentence,
+          evidenceIds: [],
+          status: "opinion",
+        },
+      ],
+    });
+
+    assert.ok(result.qualityFlags.includes("ungrounded_first_person"));
+    assert.equal(result.unsupportedCount, 1);
+    assert.equal(result.claims.length, 1);
+    assert.equal(result.claims[0].status, "unsupported");
+    assert.match(result.claims[0].reason ?? "", /first-person/i);
+  });
+
   it("flags ungrounded first-person war stories when creatorNotes is absent, and allows them when grounded", () => {
     const ungrounded = auditArtifactClaims({
       format: "x_post",

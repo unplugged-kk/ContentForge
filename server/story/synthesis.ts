@@ -91,6 +91,14 @@ function cleanText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
 }
 
+function escapeXml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function capText(raw: string, max: number): string {
   const cleaned = cleanText(raw);
   if (cleaned.length <= max) return cleaned;
@@ -261,13 +269,13 @@ function buildSynthesisMessages(
     .map((item) => {
       const attrs = [
         `id="${item.id}"`,
-        item.provider ? `provider="${cleanText(item.provider)}"` : "",
-        item.canonicalUrl ? `url="${cleanText(item.canonicalUrl)}"` : "",
+        item.provider ? `provider="${escapeXml(cleanText(item.provider))}"` : "",
+        item.canonicalUrl ? `url="${escapeXml(cleanText(item.canonicalUrl))}"` : "",
       ]
         .filter(Boolean)
         .join(" ");
-      const titleLine = item.title ? `Title: ${cleanText(item.title)}\n` : "";
-      return `<item ${attrs}>\n${titleLine}Excerpt: ${cleanText(item.text)}\n</item>`;
+      const titleLine = item.title ? `Title: ${escapeXml(cleanText(item.title))}\n` : "";
+      return `<item ${attrs}>\n${titleLine}Excerpt: ${escapeXml(cleanText(item.text))}\n</item>`;
     })
     .join("\n");
 
@@ -276,7 +284,7 @@ function buildSynthesisMessages(
       ? `<conflicts_data>\n${input.conflicts
           .map(
             (c) =>
-              `- Topic: ${cleanText(c.topic)} | Claims: ${c.claims.map((cl) => `${cl.provider ?? "source"}: ${cleanText(cl.text)}`).join(" vs ")}`,
+              `- Topic: ${escapeXml(cleanText(c.topic))} | Claims: ${c.claims.map((cl) => `${escapeXml(cleanText(cl.provider ?? "source"))}: ${escapeXml(cleanText(cl.text))}`).join(" vs ")}`,
           )
           .join("\n")}\n</conflicts_data>`
       : "";
