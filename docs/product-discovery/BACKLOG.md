@@ -1,26 +1,38 @@
 # ContentForge — Execution Backlog
 
 **Updated:** 2026-11-27  
+**Branch:** `work/productization-mvp`  
 **Source:** `docs/product-discovery/EXECUTION_ROADMAP.md`
 
-| ID | Wave | Title | Priority | Status | Depends On | Verification Target |
+| ID | Wave | Title | Priority | Status | Commit(s) | Verification |
 |---|---|---|---|---|---|---|
-| **INC-01** | Wave 1 | Hermetic unit suite (no live DB) + CI `test:unit` & `test:db` jobs + `migration-guard.yml` untracked-file check | P0 | **NEXT** | — | `npm run test:unit` passes with unset `DATABASE_URL`; `npx tsc --noEmit`; CI workflow lint/validation |
-| **INC-02** | Wave 1 | Owner-strict fail-closed social credentials + `ALLOW_TRUSTED_AUTOMATION` gate + approval actor recording | P0 | TODO | INC-01 | Unit tests for all 5 social transports + `automation.test.ts` + `artifact.test.ts` |
-| **INC-03** | Wave 1 | Selective Tier-A safety ports from `run60` (`7e4a6f8`, `e8c01f4`, `75f4e99`, `5627fd9`–`5cf7af6`, `897b935`) | P0 | TODO | INC-01, INC-02 | All ported unit suites + `npm run test:unit` + `npx tsc --noEmit` |
-| **INC-04** | Wave 2 | Fix 5 broken vertical-slice UI seams + Copy Text / Copy Thread / Export Markdown with Citations | P0 | TODO | INC-01 | Client lib unit tests + `npx tsc --noEmit` + `npm run build` |
-| **INC-05** | Wave 2 | Fix Settings X/xQuick/LinkedIn onboarding copy + align `site/home.ts` & `site/agent.ts` with shipped reality | P1 | TODO | INC-02 | `server/site.test.ts` + `npm run test:unit` + `npm run build` |
-| **INC-06** | Wave 3 | Upgrade deterministic `draftSynthesis` + hybrid `server/story/synthesis.ts` + co-primary `StoryInput` (`first_hand`/`researched`/`hybrid`) | P1 | TODO | INC-04 | `server/story/synthesis.test.ts` + `inputSchema.test.ts` + `policy.test.ts` |
-| **INC-07** | Wave 3 | `claim_evidence_v1` in `artifacts.attribution` + deterministic claim/number/paraphrase check + Review Audit drawer + Golden Eval suite + Multi-format reuse test | P1 | TODO | INC-06 | `claimCheck.test.ts` + `goldenEval.test.ts` + `artifactAttribution.test.ts` + `npm run build` |
-| **INC-08** | Wave 3 | Manual publish logging (`POST /api/artifacts/:id/log-manual-publish`) + Weekly cohort digest (`weeklyDigest.ts`) + real approved human-edit exemplars in `assembleContext` | P1 | TODO | INC-04, INC-07 | `weeklyDigest.test.ts` + `context.test.ts` + `npm run test:unit` |
-| **INC-09** | Wave 4 | Repair Drizzle D8 snapshot chain (`migrations/meta/`) & verify `db:generate` + fresh/upgrade `db:migrate` | P0/P1 | TODO | INC-01 | `npm run db:generate` empty diff + trivial column test + fresh DB migrate |
-| **INC-10** | Wave 4 | Pilot onboarding, backup/restore, security/privacy runbook & 5-session founder validation scorecard (`PILOT_RUNBOOK.md`) | P1 | TODO | INC-01..08 | Doc reconciliation + full final verification pass |
+| **INC-01** | Wave 1 | Hermetic unit suite (no live DB) + CI `test:unit` & `test:db` jobs + `migration-guard.yml` untracked-file check | P0 | **DONE** | `bc2c1e4` | `npm run test:unit` DB-free PASS; `tsc` PASS; CI workflow jobs added (remote CI run pending push) |
+| **INC-02** | Wave 1 | Owner-strict fail-closed social credentials + `ALLOW_TRUSTED_AUTOMATION` gate + approval actor recording | P0 | **DONE** | `c0d0eaf` | `envFallback.test.ts` + all 5 social transports + `automation.test.ts` + `artifact.test.ts` PASS |
+| **INC-03** | Wave 1 | Selective Tier-A safety ports from `run60` (`7e4a6f8`, `e8c01f4`, `75f4e99`, `5627fd9`–`5cf7af6`, `897b935`) | P0 | **DONE** | `22618b5`, `5269b5c` | `unitFit.test.ts`, `adapters.xLength.test.ts`, `scheduleTime.test.ts`, `partialPublish.test.ts`, `draftOnly.census.test.ts` PASS |
+| **INC-04** | Wave 2 | Fix 5 broken vertical-slice UI seams + Copy Text / Copy Thread / Export Markdown with `/sources` Citations | P0 | **DONE** | `0bfa154`, `9ad2e8c`, `5aa5bf8` | `artifact-export.test.ts` PASS; `tsc` PASS; `npm run build` PASS |
+| **INC-05** | Wave 2 | Fix Settings X/xQuick/LinkedIn onboarding copy + align `site/home.ts` & `site/agent.ts` with shipped reality | P1 | **DONE** | `0bfa154`, `9ad2e8c` | `server/site.test.ts` PASS; `npm run build` PASS |
+| **INC-06** | Wave 3 | Upgrade deterministic `draftSynthesis` + hybrid `server/story/synthesis.ts` + co-primary `StoryInput` (`first_hand`/`researched`/`hybrid`) wired to `POST /api/stories`, `POST /api/stories/synthesize-brief`, and automation | P1 | **DONE** | `5269b5c`, `5aa5bf8` | `synthesis.test.ts`, `inputSchema.test.ts`, `story/routes.test.ts`, `automation.test.ts` PASS |
+| **INC-07** | Wave 3 | `claim_evidence_v1` in `artifacts.attribution` + deterministic claim/number/first-person/paraphrase check + Review Audit drawer + Golden Eval suite + Multi-format reuse test | P1 | **DONE** | `5269b5c`, `5aa5bf8` | `claimCheck.test.ts`, `goldenEval.test.ts`, `verticalSliceMultiFormat.test.ts` PASS |
+| **INC-08** | Wave 3 | Manual publish logging (`POST /api/artifacts/:id/log-manual-publish`) + scheduler `manual:` guard + Weekly cohort digest (`weeklyDigest.ts`) + real approved human-edit exemplars in `assembleContext` | P1 | **DONE** | `9ad2e8c`, `1e0c5c2` | `manualPublish.test.ts`, `weeklyDigest.test.ts`, `context.test.ts` PASS |
+| **INC-09** | Wave 4 | Repair Drizzle D8 snapshot chain (`migrations/meta/0017..0020` + `0035_snapshot.json`) without altering applied SQL | P0/P1 | **DONE** | `ab81f35` | `drizzle-kit check` PASS; `drizzle-kit generate` 0-diff + temp-column probe PASS; 0 SQL files touched (disposable DB `db:migrate` verified in CI upon push) |
+| **INC-10** | Wave 4 | Pilot onboarding, backup/restore, security/privacy runbook & 5-session founder validation scorecard (`PILOT_RUNBOOK.md`) + doc reconciliation | P1 | **DONE** | *(final doc commit)* | Reconciled with `LOCAL_VPS_DEPLOYMENT.md`, `DOGFOODING.md`, `STATUS.md`, `DECISIONS.md` |
+
+---
+
+## Remaining Follow-Ups (Post-M2 / Non-Blocking Polish)
+
+1. **CI & Disposable DB Verification (Owner Push Required):** Trigger GitHub Actions on `work/productization-mvp` to verify `DB Integration Tests` (`npm run test:db`), `E2E Tests`, and `Schema/Migration Consistency` on clean Postgres 16.
+2. **Legacy `userId: null` schedule binding (`server/routes.ts`):** Noted in Wayfinder Wave-1 review (Medium #3) for legacy unowned post rows; low priority while canonical `server/content/*` enforces strict `userId`.
+3. **Human-edit revision re-audit (`server/content/artifact.ts:451-474`):** Currently `createHumanEditRevision` carries forward `prior.attribution`; optionally re-run `auditArtifactClaims` on human edits in a future increment.
+4. **Live gateway `{ payload, claims }` prompt hint (`server/content/model.ts`):** Extend `payloadShapeHint` when live LLM claim emission is benchmarked against founder drafts (currently Step-2 deterministic auditing runs on every generation).
+5. **Per-user offboarding deletion script:** Author and test a disposable-DB cascade delete script before inviting external pilot users (`PILOT_RUNBOOK.md` §5).
+6. **Benign `style_profiles_user_active_idx` schema declaration:** `migrations/0023_style_corpus.sql` creates index `style_profiles_user_active_idx` on `style_profiles (user_id, is_active)` which is omitted from `shared/schema.ts` (harmless today; declare only alongside a DB-verified migration).
 
 ---
 
 ## Explicitly Deferred (Do Not Pull Into M2)
 
-- `P1-1`: Enabling Jev flags (`JEV_RESEARCH_GATE`, `JEV_OPPORTUNITY_SCORE`, `JEV_CONTENT_STRATEGY`, `JEV_CONTENT_GATE`) — awaits M2 golden dataset.
+- `P1-1`: Enabling Jev flags (`JEV_RESEARCH_GATE`, `JEV_OPPORTUNITY_SCORE`, `JEV_CONTENT_STRATEGY`, `JEV_CONTENT_GATE`) — awaits M2/M3 golden dataset.
 - `P1-2`: Legacy shadow cut-over (JC-01/02/03) — awaits human-labelled dataset.
 - `P1-3`: MCP Server over 29 tools — deferred until external assistant demand is validated.
 - `P2-1`..`P3-4`: Opportunity Radar, Competitor Intel, Quote Cards/Infographics, Facebook/Newsletter/Blog adapters, Autonomous Calendar, Multi-tenant SaaS/Billing.
