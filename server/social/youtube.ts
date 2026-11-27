@@ -17,6 +17,7 @@
  */
 
 import { storage } from "../storage";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
 import type { PublishMedia } from "../content/adapters";
 import { looksLikeMp4 } from "../content/visual";
 import {
@@ -292,11 +293,11 @@ export async function getYouTubeConfig(
         uploadBase,
       };
     }
+    if (!isEnvCredentialFallbackAllowed(ownerUserId, { env })) {
+      return null;
+    }
   }
 
-  // Ops / certification fallback: process env tokens. These are deployment-level
-  // operator credentials, not another tenant's row, so they stay a valid fallback
-  // behind the owner's own connected account.
   const envAccess = env.YOUTUBE_ACCESS_TOKEN?.trim() || null;
   const envRefresh = env.YOUTUBE_REFRESH_TOKEN?.trim() || null;
   if (envAccess || envRefresh) {

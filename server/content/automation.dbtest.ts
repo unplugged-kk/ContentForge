@@ -616,58 +616,65 @@ describeDb("automation (db)", () => {
 
   // ── 17. the publication path, through the existing pipeline only ───────────
   it("trusted + on_approval approves through the Artifact model and schedules via the existing pipeline", async () => {
-    const { deps, content } = makeDeps(okModel());
-    const policy = await createAutomationPolicy(
-      OWNER_A,
-      basePolicy({
-        name: `${RUN} trusted`,
-        approvalMode: "trusted",
-        publicationConfig: { mode: "on_approval" },
-      }),
-      deps,
-    );
-    const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: `${RUN}-trusted`, deps });
-    const settled = await advanceToTerminal(run.id, deps);
-    assert.equal(settled.status, "completed");
-
-    const summary = await summarizeAutomationRun(settled, deps);
-    assert.equal(summary.artifacts.length, 1);
-    assert.equal(summary.artifacts[0].readiness, "approved", "approved through draft → in_review → approved");
-    assert.ok(summary.artifacts[0].scheduleId, "a Schedule was created by the existing createSchedule");
-
-    // The rest of the chain is the UNCHANGED existing pipeline.
-    const dispatched = await dispatchDueOccurrences(new Date(Date.now() + 1000), {
-      content,
-      enqueuePublication: async () => true,
-    });
-    const publication = dispatched.publications.find((p) => p.scheduleId === summary.artifacts[0].scheduleId);
-    assert.ok(publication, "the Schedule materialized an Occurrence + Publication through the real dispatcher");
-    assert.equal(publication!.artifactId, summary.artifacts[0].artifactId, "the exact approved revision is pinned");
-
-    const outcome = await runPublication(publication!.id, {
-      content,
-      adapterFor: () => ({
-        channel: "x",
-        supports: () => true,
-        publish: async () => ({
-          ok: true,
-          providerCalled: true,
-          externalId: `${RUN}-tweet`,
-          externalUrl: `https://x.com/i/status/${RUN}-tweet`,
-          publishedAt: new Date(),
-          metrics: { unitCount: 1 },
+    const previousTrusted = process.env.ALLOW_TRUSTED_AUTOMATION;
+    process.env.ALLOW_TRUSTED_AUTOMATION = "1";
+    try {
+      const { deps, content } = makeDeps(okModel());
+      const policy = await createAutomationPolicy(
+        OWNER_A,
+        basePolicy({
+          name: `${RUN} trusted`,
+          approvalMode: "trusted",
+          publicationConfig: { mode: "on_approval" },
         }),
-        reconcile: async () => null,
-      }),
-    });
-    assert.equal(outcome.status, "published");
+        deps,
+      );
+      const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: `${RUN}-trusted`, deps });
+      const settled = await advanceToTerminal(run.id, deps);
+      assert.equal(settled.status, "completed");
 
-    const afterPublish = await summarizeAutomationRun(
-      (await deps.automation.getAutomationRun(run.id))!,
-      deps,
-    );
-    assert.equal(afterPublish.published, 1, "the run's downstream picture reflects the real Result");
-    assert.equal(afterPublish.unknown, 0);
+      const summary = await summarizeAutomationRun(settled, deps);
+      assert.equal(summary.artifacts.length, 1);
+      assert.equal(summary.artifacts[0].readiness, "approved", "approved through draft → in_review → approved");
+      assert.ok(summary.artifacts[0].scheduleId, "a Schedule was created by the existing createSchedule");
+
+      // The rest of the chain is the UNCHANGED existing pipeline.
+      const dispatched = await dispatchDueOccurrences(new Date(Date.now() + 1000), {
+        content,
+        enqueuePublication: async () => true,
+      });
+      const publication = dispatched.publications.find((p) => p.scheduleId === summary.artifacts[0].scheduleId);
+      assert.ok(publication, "the Schedule materialized an Occurrence + Publication through the real dispatcher");
+      assert.equal(publication!.artifactId, summary.artifacts[0].artifactId, "the exact approved revision is pinned");
+
+      const outcome = await runPublication(publication!.id, {
+        content,
+        adapterFor: () => ({
+          channel: "x",
+          supports: () => true,
+          publish: async () => ({
+            ok: true,
+            providerCalled: true,
+            externalId: `${RUN}-tweet`,
+            externalUrl: `https://x.com/i/status/${RUN}-tweet`,
+            publishedAt: new Date(),
+            metrics: { unitCount: 1 },
+          }),
+          reconcile: async () => null,
+        }),
+      });
+      assert.equal(outcome.status, "published");
+
+      const afterPublish = await summarizeAutomationRun(
+        (await deps.automation.getAutomationRun(run.id))!,
+        deps,
+      );
+      assert.equal(afterPublish.published, 1, "the run's downstream picture reflects the real Result");
+      assert.equal(afterPublish.unknown, 0);
+    } finally {
+      if (previousTrusted === undefined) delete process.env.ALLOW_TRUSTED_AUTOMATION;
+      else process.env.ALLOW_TRUSTED_AUTOMATION = previousTrusted;
+    }
   });
 
   // ── 18. restart equivalence ───────────────────────────────────────────────

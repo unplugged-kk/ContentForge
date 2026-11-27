@@ -28,6 +28,7 @@ import {
   AutomationPolicyInactiveError,
   AutomationPolicyInputError,
   AutomationPolicyNotFoundError,
+  AutomationTrustedModeDisabledError,
   type AutomationDeps,
 } from "./automation";
 
@@ -121,6 +122,10 @@ function writeError(error: unknown, res: import("express").Response): boolean {
   }
   if (error instanceof AutomationPolicyInactiveError) {
     res.status(409).json({ message: error.message });
+    return true;
+  }
+  if (error instanceof AutomationTrustedModeDisabledError) {
+    res.status(403).json({ message: error.message });
     return true;
   }
   if (error instanceof AutomationLimitError) {

@@ -21,6 +21,7 @@ import {
   payloadSchemaRegistry,
 } from "../artifacts/payloadSchemas";
 import type { ContentStoragePort, JsonRecord } from "./storage";
+import type { ApprovalActor } from "./learning/approval";
 import type { LearningRecorder } from "./learning/record";
 import { ALLOWED_AUDIO_MIMES, ALLOWED_VIDEO_MIMES, ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
 
@@ -303,10 +304,15 @@ export async function submitArtifactForReview(
   return updated;
 }
 
+export interface ApproveArtifactOptions {
+  actor?: ApprovalActor;
+}
+
 /** in_review → approved. Approval is pinned to this exact revision. */
 export async function approveArtifact(
   artifactId: number,
   deps: ArtifactDeps,
+  options: ApproveArtifactOptions = {},
 ): Promise<Artifact> {
   const artifact = await deps.artifacts.getArtifact(artifactId);
   if (!artifact) throw new ArtifactNotFoundError(artifactId);
@@ -317,7 +323,7 @@ export async function approveArtifact(
   if (!updated) throw new ArtifactNotFoundError(artifactId);
   if (deps.learning) {
     const chain = await getArtifactHistory(artifactId, deps);
-    await deps.learning.recordApproval(updated, chain);
+    await deps.learning.recordApproval(updated, chain, { actor: options.actor ?? "human" });
   }
   return updated;
 }

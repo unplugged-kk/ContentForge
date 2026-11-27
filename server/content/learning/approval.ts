@@ -1,5 +1,7 @@
 import type { Artifact } from "@shared/schema";
 
+export type ApprovalActor = "human" | "automation_trusted";
+
 export type ApprovalDecision =
   | "rejected"
   | "approved_without_edit"

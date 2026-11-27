@@ -140,6 +140,19 @@ export class AutomationPolicyInactiveError extends Error {
   }
 }
 
+export function isTrustedAutomationAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ALLOW_TRUSTED_AUTOMATION === "1";
+}
+
+export class AutomationTrustedModeDisabledError extends Error {
+  constructor(
+    message = 'Trusted automation mode is disabled; set ALLOW_TRUSTED_AUTOMATION=1 to allow approvalMode "trusted" or publicationConfig.mode "on_approval".',
+  ) {
+    super(message);
+    this.name = "AutomationTrustedModeDisabledError";
+  }
+}
+
 /** A durable operational boundary was reached — not a failure of the work. */
 export class AutomationLimitError extends Error {
   constructor(
@@ -456,6 +469,17 @@ export interface AutomationDeps {
   publishGate?: import("./publishGate").PublishGatePort;
 }
 
+function assertTrustedAutomationPolicyAllowed(
+  normalized: NormalizedAutomationPolicy,
+  options: { allowDeactivatingPreexisting?: boolean } = {},
+): void {
+  const requestsTrusted =
+    normalized.approvalMode === "trusted" || normalized.publicationConfig.mode === "on_approval";
+  if (!requestsTrusted || isTrustedAutomationAllowed()) return;
+  if (options.allowDeactivatingPreexisting && normalized.status !== "active") return;
+  throw new AutomationTrustedModeDisabledError();
+}
+
 // ── policy service ────────────────────────────────────────────────────────────
 export async function createAutomationPolicy(
   ownerId: number,
@@ -466,6 +490,7 @@ export async function createAutomationPolicy(
     throw new AutomationPolicyInputError(["ownerId must be a positive integer"]);
   }
   const normalized = normalizeAutomationPolicyInput(input);
+  assertTrustedAutomationPolicyAllowed(normalized);
   return deps.automation.insertAutomationPolicy({
     userId: ownerId,
     name: normalized.name,
@@ -513,6 +538,15 @@ export async function updateAutomationPolicy(
     limits: patch.limits ?? existing.limits,
   };
   const normalized = normalizeAutomationPolicyInput(merged);
+  const existingPubMode = (existing.publicationConfig as { mode?: string } | null)?.mode;
+  const existingWasTrusted =
+    existing.approvalMode === "trusted" || existingPubMode === "on_approval";
+  const patchRequestsTrusted =
+    patch.approvalMode === "trusted" ||
+    (patch.publicationConfig as { mode?: string } | undefined)?.mode === "on_approval";
+  assertTrustedAutomationPolicyAllowed(normalized, {
+    allowDeactivatingPreexisting: existingWasTrusted && !patchRequestsTrusted,
+  });
 
   const updated = await deps.automation.updateAutomationPolicy(existing.id, {
     name: normalized.name,
@@ -1152,7 +1186,7 @@ async function runSettleStep(run: AutomationRun, deps: AutomationDeps): Promise<
   }
 
   const wantsArtifacts = outcomes.some((o) => o.generationJobId !== null);
-  const trusted = snapshot.approvalMode === "trusted";
+  const trusted = snapshot.approvalMode === "trusted" && isTrustedAutomationAllowed();
 
   if (trusted) {
     for (const outcome of outcomes) {
@@ -1190,6 +1224,8 @@ async function settleTrustedArtifact(
   snapshot: AutomationPolicySnapshot,
   deps: AutomationDeps,
 ): Promise<number | null> {
+  if (!isTrustedAutomationAllowed()) return null;
+
   let artifact: Artifact | undefined = await deps.content.getArtifact(artifactId);
   if (!artifact) return null;
 
@@ -1224,10 +1260,14 @@ async function settleTrustedArtifact(
   }
   if (artifact.readiness === "in_review") {
     try {
-      artifact = await approveArtifact(artifactId, {
-        artifacts: deps.content,
-        learning: deps.learning,
-      });
+      artifact = await approveArtifact(
+        artifactId,
+        {
+          artifacts: deps.content,
+          learning: deps.learning,
+        },
+        { actor: "automation_trusted" },
+      );
     } catch (error) {
       if (!(error instanceof ArtifactStateError)) throw error;
       artifact = await deps.content.getArtifact(artifactId);

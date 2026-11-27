@@ -29,6 +29,7 @@
  */
 
 import { storage } from "../storage";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
 import type { PublishMedia } from "../content/adapters";
 import { looksLikeMp4 } from "../content/visual";
 
@@ -344,13 +345,15 @@ export async function getInstagramConfigSummary(ownerUserId?: number | null): Pr
 }
 
 async function getInstagramConfig(ownerUserId?: number | null): Promise<InstagramConfig | null> {
-  const envToken = process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null;
-  const envUser = process.env.INSTAGRAM_USER_ID?.trim() || "me";
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId);
+  const envToken = allowEnvFallback ? process.env.INSTAGRAM_ACCESS_TOKEN?.trim() || null : null;
+  const envUser = allowEnvFallback ? process.env.INSTAGRAM_USER_ID?.trim() || "me" : "me";
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("instagram", ownerUserId);
-    const token = owned?.accessToken?.trim() || envToken;
-    const userId = owned?.username?.trim() || envUser;
+    const ownedToken = owned?.accessToken?.trim() || null;
+    const token = ownedToken || envToken;
     if (!token) return null;
+    const userId = owned?.username?.trim() || (ownedToken ? "me" : envUser);
     return { graphBase: getInstagramGraphBaseUrl(), token, userId };
   }
   const account = await storage.getConnectedAccount("instagram");

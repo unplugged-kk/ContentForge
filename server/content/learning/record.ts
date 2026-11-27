@@ -9,15 +9,19 @@ import {
   LEARNING_SCHEMA_VERSION,
   PUBLICATION_SCHEMA_VERSION,
 } from "./constants";
-import { deriveApprovalDecision, derivedKindForApproval } from "./approval";
+import { deriveApprovalDecision, derivedKindForApproval, type ApprovalActor } from "./approval";
 import { deriveEditMetrics } from "./edit";
 import { learningIdentityKey } from "./identity";
 import { lineageToExplain, resolveLineage } from "./lineage";
 import { derivedIdentity, type LearningStoragePort } from "./store";
 
+export interface RecordApprovalOptions {
+  actor?: ApprovalActor;
+}
+
 export interface LearningRecorder {
   recordEdit(prior: Artifact, next: Artifact): Promise<void>;
-  recordApproval(artifact: Artifact, chain: Artifact[]): Promise<void>;
+  recordApproval(artifact: Artifact, chain: Artifact[], options?: RecordApprovalOptions): Promise<void>;
   recordPublication(publication: Publication, result: Result | null): Promise<void>;
 }
 
@@ -95,13 +99,15 @@ export function createLearningRecorder(
       }
     },
 
-    async recordApproval(artifact, chain) {
+    async recordApproval(artifact, chain, options) {
       const decision = deriveApprovalDecision(artifact, chain);
+      const approvedBy: ApprovalActor = options?.actor ?? "human";
       const lineage = await resolveLineage(database, { artifactId: artifact.id });
       const observedAt = artifact.approvedAt ?? new Date();
       const payload = {
         kind: decision,
         rejected: artifact.readiness === "rejected",
+        approvedBy,
         revisionCount: chain.length,
         humanEditCount: chain.filter((a) => a.provenance === "human_edit").length,
         lineage: lineageToExplain(lineage),
@@ -150,7 +156,7 @@ export function createLearningRecorder(
           format: artifact.format,
           observedAt,
           schemaVersion: LEARNING_SCHEMA_VERSION,
-          payload: { kind: derived, approvalSignalId: row.id, decision, lineage: lineageToExplain(lineage) },
+          payload: { kind: derived, approvalSignalId: row.id, decision, approvedBy, lineage: lineageToExplain(lineage) },
           confidence: "observed",
           identityKey: derivedIdentity(derived, artifact.id, observedAt),
         });

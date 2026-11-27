@@ -3,6 +3,7 @@ import type { Post, Tweet } from "@shared/schema";
 import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
 import { addThreadNumbering } from "../utils/threadUtils";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
 
 /** X API monthly read budget (Basic tier). Warn at 70% (7000 reads). */
 export const X_MONTHLY_READ_LIMIT = 10_000;
@@ -236,10 +237,8 @@ async function getXQuickApiConfig(ownerUserId?: number | null): Promise<{ baseUr
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const baseUrl = getXQuickBaseUrl();
-  // Owner scoping forbids borrowing *another owner's* connected account; the
-  // deployment-level xQuick key/account pair is operator-wide configuration,
-  // not a tenant row, so it remains a valid fallback behind the owner's own.
-  const token = account?.accessToken?.trim() || getXQuickToken(null);
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId, { allowLegacyXQuickAlias: true });
+  const token = account?.accessToken?.trim() || (allowEnvFallback ? getXQuickToken(null) : null);
   if (!baseUrl || !token) return null;
   return { baseUrl, token };
 }
@@ -249,7 +248,9 @@ async function getXQuickClientConfig(ownerUserId?: number | null): Promise<{ bas
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const apiConfig = await getXQuickApiConfig(ownerUserId);
-  const xAccount = getXQuickAccount(account?.username ?? null);
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId, { allowLegacyXQuickAlias: true });
+  const ownedUsername = account?.username?.trim().replace(/^@/, "") || null;
+  const xAccount = ownedUsername || (allowEnvFallback ? getXQuickAccount(null) : null);
   if (!apiConfig || !xAccount) return null;
   return { ...apiConfig, account: xAccount };
 }

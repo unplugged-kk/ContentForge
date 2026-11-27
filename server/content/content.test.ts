@@ -47,6 +47,7 @@ import {
   InvalidArtifactPayloadError,
   ArtifactStateError,
 } from "./artifact";
+import { createLearningRecorder } from "./learning/record";
 import { publicationIdempotencyKey } from "./scheduling";
 import {
   channelSupportsFormat,
@@ -152,6 +153,9 @@ function memoryStore() {
     },
     async getArtifact(id: number) {
       return arts.find((a) => a.id === id);
+    },
+    async listArtifactsByOpportunity(opportunityId: number) {
+      return arts.filter((a) => a.opportunityId === opportunityId);
     },
     async getArtifactByGenerationJob(generationJobId: number) {
       return arts.find((a) => a.generationJobId === generationJobId);
@@ -512,6 +516,47 @@ describe("artifact boundary", () => {
       { artifacts: store },
     );
     assert.equal(second.readiness, "draft", "a new revision starts unapproved");
+  });
+
+  it("records approvedBy actor (human default vs automation_trusted) in approval learning signal payloads", async () => {
+    const store = memoryStore();
+    const signals: Array<{ signalType: string; payload: Record<string, unknown> }> = [];
+    let signalId = 0;
+    const emptyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [],
+          }),
+        }),
+      }),
+    } as never;
+    const learning = createLearningRecorder(
+      {
+        insertLearningSignal: async (row) => {
+          signalId += 1;
+          signals.push({ signalType: row.signalType, payload: row.payload as Record<string, unknown> });
+          return { row: { id: signalId, ...row } as never, created: true };
+        },
+      } as never,
+      emptyDb,
+    );
+
+    const humanArtifact = await createArtifact({ ...base, payload: { text: "human approved" } }, { artifacts: store });
+    await submitArtifactForReview(humanArtifact.id, { artifacts: store });
+    await approveArtifact(humanArtifact.id, { artifacts: store, learning });
+
+    const trustedArtifact = await createArtifact(
+      { ...base, payload: { text: "trusted approved" } },
+      { artifacts: store },
+    );
+    await submitArtifactForReview(trustedArtifact.id, { artifacts: store });
+    await approveArtifact(trustedArtifact.id, { artifacts: store, learning }, { actor: "automation_trusted" });
+
+    const approvals = signals.filter((s) => s.signalType === "approval");
+    assert.equal(approvals.length, 2);
+    assert.equal(approvals[0].payload.approvedBy, "human");
+    assert.equal(approvals[1].payload.approvedBy, "automation_trusted");
   });
 });
 

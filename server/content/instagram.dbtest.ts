@@ -186,6 +186,7 @@ describeDb("instagram channel adapter (db)", () => {
     registerBuiltinChannelAdapters();
     const port = await fixture.start();
     savedEnv = {
+      ALLOW_ENV_CHANNEL_FALLBACK: process.env.ALLOW_ENV_CHANNEL_FALLBACK,
       INSTAGRAM_API_BASE_URL: process.env.INSTAGRAM_API_BASE_URL,
       INSTAGRAM_API_VERSION: process.env.INSTAGRAM_API_VERSION,
       INSTAGRAM_ACCESS_TOKEN: process.env.INSTAGRAM_ACCESS_TOKEN,
@@ -193,6 +194,7 @@ describeDb("instagram channel adapter (db)", () => {
       INSTAGRAM_TIMEOUT_MS: process.env.INSTAGRAM_TIMEOUT_MS,
       INSTAGRAM_MEDIA_STAGE_URL: process.env.INSTAGRAM_MEDIA_STAGE_URL,
     };
+    process.env.ALLOW_ENV_CHANNEL_FALLBACK = "1";
     process.env.INSTAGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
     process.env.INSTAGRAM_API_VERSION = "v25.0";
     process.env.INSTAGRAM_ACCESS_TOKEN = "fixture-token";
