@@ -293,7 +293,8 @@ function buildNextExperiment(
     const top = cohorts[0];
     const remaining = Math.max(1, 3 - Math.min(top.sampleSize, top.observedCount));
     if (missingMetricsPublications > 0) {
-      return `Sample size is insufficient across all cohorts (< 3 observed). Log metrics for the ${missingMetricsPublications} published post(s) missing observations (starting with ${top.channel}/${top.format} · ${top.topicTag}) before selecting an experiment.`;
+      const target = cohorts.find((c) => c.missingMetricsCount > 0) ?? top;
+      return `Sample size is insufficient across all cohorts (< 3 observed). Log metrics for the ${missingMetricsPublications} published post(s) missing observations (starting with ${target.channel}/${target.format} · ${target.topicTag}) before selecting an experiment.`;
     }
     return `Sample size is insufficient across all cohorts (< 3 observed). Publish and log metrics for at least ${remaining} more post(s) in ${top.channel}/${top.format} (topic: ${top.topicTag}, hook: ${top.hookType}) to reach a directional baseline.`;
   }

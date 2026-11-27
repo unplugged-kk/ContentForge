@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Artifact, Publication, Result, Schedule, ScheduleOccurrence } from "@shared/schema";
 import { ArtifactNotFoundError } from "./artifact";
-import { ArtifactNotSchedulableError } from "./scheduling";
+import { ArtifactNotSchedulableError, dispatchDueOccurrences } from "./scheduling";
 import {
   logManualPublication,
   ManualPublishInputError,
@@ -60,13 +60,37 @@ function makeMemoryContentStore(seedArtifacts: Artifact[]) {
         timezone: row.timezone,
         count: row.count,
         startAt: row.startAt,
-        status: "active",
+        status: row.status ?? "active",
         createdAt: now,
         updatedAt: now,
       };
       scheduleById.set(schedule.id, schedule);
       if (schedule.intentKey) scheduleByIntent.set(schedule.intentKey, schedule);
       return { schedule, created: true };
+    },
+    async getSchedule(id: number) {
+      return scheduleById.get(id);
+    },
+    async listActiveSchedules(now: Date) {
+      return Array.from(scheduleById.values()).filter(
+        (s) => s.status === "active" && s.startAt.getTime() <= now.getTime(),
+      );
+    },
+    async countOccurrences(scheduleId: number) {
+      return Array.from(occurrenceById.values()).filter((o) => o.scheduleId === scheduleId).length;
+    },
+    async listDueOccurrences(now: Date) {
+      return Array.from(occurrenceById.values()).filter(
+        (o) =>
+          (o.status === "pending" || o.status === "enqueued") &&
+          o.occurrenceTime.getTime() <= now.getTime(),
+      );
+    },
+    async markOccurrenceStatusIf(id: number, from: string, to: string) {
+      const existing = occurrenceById.get(id);
+      if (!existing || existing.status !== from) return false;
+      existing.status = to;
+      return true;
     },
     async setScheduleStatus(id: number, status: string) {
       const existing = scheduleById.get(id);
@@ -167,6 +191,9 @@ function makeMemoryContentStore(seedArtifacts: Artifact[]) {
 
   return {
     store,
+    scheduleById,
+    occurrenceById,
+    publicationById,
     counts: () => ({
       schedules: scheduleById.size,
       occurrences: occurrenceById.size,
@@ -254,22 +281,30 @@ describe("manual publish logging (INC-08)", () => {
     assert.deepEqual(counts(), { schedules: 0, occurrences: 0, publications: 0, results: 0 });
   });
 
-  it("replays idempotently for the same (artifactId, externalUrl) without duplicating records", async () => {
+  it("replays idempotently for the same (artifactId, externalUrl) without duplicating records or re-recording learning", async () => {
     const { store, counts } = makeMemoryContentStore([makeArtifact()]);
     let tick = 0;
     const clock = () => new Date(Date.parse("2026-11-25T10:00:00Z") + tick++ * 60_000);
+    const recorded: number[] = [];
+    const learning = {
+      recordEdit: async () => {},
+      recordApproval: async () => {},
+      recordPublication: async (pub: Publication) => {
+        recorded.push(pub.id);
+      },
+    };
 
     const first = await logManualPublication(
       42,
       7,
       { externalUrl: "https://x.com/operator/status/999", topicTag: "mlops", hookType: "contrarian" },
-      { content: store, now: clock },
+      { content: store, learning, now: clock },
     );
     const second = await logManualPublication(
       42,
       7,
       { externalUrl: "https://x.com/operator/status/999", topicTag: "mlops", hookType: "contrarian" },
-      { content: store, now: clock },
+      { content: store, learning, now: clock },
     );
 
     assert.equal(first.created, true);
@@ -279,6 +314,7 @@ describe("manual publish logging (INC-08)", () => {
     assert.equal(second.occurrence.id, first.occurrence.id);
     assert.equal(second.result?.id, first.result?.id);
     assert.deepEqual(counts(), { schedules: 1, occurrences: 1, publications: 1, results: 1 });
+    assert.deepEqual(recorded, [first.publication.id]);
   });
 
   it("replays idempotently by explicit idempotencyKey and creates distinct rows for distinct keys", async () => {
@@ -308,5 +344,77 @@ describe("manual publish logging (INC-08)", () => {
     assert.equal(distinct.created, true);
     assert.notEqual(distinct.publication.id, first.publication.id);
     assert.deepEqual(counts(), { schedules: 2, occurrences: 2, publications: 2, results: 2 });
+  });
+
+  it("never dispatches manual: schedules during a concurrent scheduler tick while still dispatching normal schedules", async () => {
+    const now = new Date("2026-11-25T12:00:00Z");
+    const past = new Date("2026-11-25T11:55:00Z");
+    const { store, scheduleById, occurrenceById, publicationById } = makeMemoryContentStore([
+      makeArtifact({ id: 42 }),
+      makeArtifact({ id: 43 }),
+    ]);
+
+    const { schedule: activeManual } = await store.claimSchedule({
+      userId: 7,
+      artifactId: 42,
+      channel: "x",
+      intentKey: "manual:42:url:window1",
+      recurrence: null,
+      timezone: "UTC",
+      count: 1,
+      startAt: past,
+      status: "active",
+    });
+
+    const { schedule: exhaustedManual } = await store.claimSchedule({
+      userId: 7,
+      artifactId: 42,
+      channel: "x",
+      intentKey: "manual:42:url:window2",
+      recurrence: null,
+      timezone: "UTC",
+      count: 1,
+      startAt: past,
+      status: "exhausted",
+    });
+    const pendingManualOcc = await store.materializeOccurrence(exhaustedManual.id, past);
+    assert.ok(pendingManualOcc);
+    assert.equal(pendingManualOcc.status, "pending");
+
+    const { schedule: normalSchedule } = await store.claimSchedule({
+      userId: 7,
+      artifactId: 43,
+      channel: "x",
+      intentKey: "fanout:43:x",
+      recurrence: null,
+      timezone: "UTC",
+      count: 1,
+      startAt: past,
+      status: "active",
+    });
+
+    const enqueuedScheduleIds: number[] = [];
+    const dispatch = await dispatchDueOccurrences(now, {
+      content: store,
+      enqueuePublication: async (pub) => {
+        enqueuedScheduleIds.push(pub.scheduleId);
+        return true;
+      },
+    });
+
+    assert.equal(dispatch.materialized, 1);
+    assert.equal(dispatch.enqueued, 1);
+    assert.deepEqual(enqueuedScheduleIds, [normalSchedule.id]);
+    assert.equal(scheduleById.get(activeManual.id)?.status, "active");
+    assert.equal(occurrenceById.get(pendingManualOcc.id)?.status, "pending");
+    assert.equal(scheduleById.get(normalSchedule.id)?.status, "exhausted");
+
+    const manualPubs = Array.from(publicationById.values()).filter(
+      (p) => p.scheduleId === activeManual.id || p.scheduleId === exhaustedManual.id,
+    );
+    assert.equal(manualPubs.length, 0);
+    for (const pub of publicationById.values()) {
+      assert.equal(pub.providerCalled, false);
+    }
   });
 });

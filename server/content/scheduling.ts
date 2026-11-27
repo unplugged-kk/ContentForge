@@ -198,6 +198,15 @@ export async function createSchedule(
   return deps.content.insertSchedule(row);
 }
 
+export const MANUAL_SCHEDULE_INTENT_PREFIX = "manual:";
+
+export function isManualSchedule(schedule: Pick<Schedule, "intentKey">): boolean {
+  return (
+    typeof schedule.intentKey === "string" &&
+    schedule.intentKey.startsWith(MANUAL_SCHEDULE_INTENT_PREFIX)
+  );
+}
+
 /**
  * Durable publication identity: schedule × occurrence × artifact revision
  * (Ticket 03 §1 / 07). The same occurrence can never publish the same revision
@@ -241,6 +250,8 @@ export async function dispatchDueOccurrences(
   // makes this idempotent under overlapping ticks.
   const active = await deps.content.listActiveSchedules(now, limit);
   for (const schedule of active) {
+    if (schedule.status !== "active" || isManualSchedule(schedule)) continue;
+
     const existingCount = await deps.content.countOccurrences(schedule.id);
     if (existingCount >= schedule.count) continue; // series fully materialized
 
@@ -258,6 +269,12 @@ export async function dispatchDueOccurrences(
 
   const due = await deps.content.listDueOccurrences(now, limit);
   for (const occurrence of due) {
+    if (occurrence.status === "published" || occurrence.status === "cancelled") continue;
+
+    const schedule = await deps.content.getSchedule(occurrence.scheduleId);
+    if (!schedule || isManualSchedule(schedule)) continue;
+    if (schedule.status === "cancelled" || schedule.status === "paused") continue;
+
     // Claim the occurrence first (compare-and-set), so of two overlapping
     // scheduler ticks exactly one proceeds. `enqueued` rows are re-processed
     // (not re-claimed) so a crash before enqueue self-heals.
@@ -270,7 +287,7 @@ export async function dispatchDueOccurrences(
       if (!claimed) continue;
     }
 
-    const publication = await ensurePublicationForOccurrence(occurrence, deps);
+    const publication = await ensurePublicationForOccurrence(occurrence, deps, schedule);
     // Only the caller that actually created the Publication enqueues it; the
     // UNIQUE (schedule × occurrence × artifact revision) key is the arbiter.
     if (!publication) continue;
@@ -287,11 +304,12 @@ export async function dispatchDueOccurrences(
 async function ensurePublicationForOccurrence(
   occurrence: ScheduleOccurrence,
   deps: DispatchDeps,
+  loadedSchedule?: Schedule,
 ): Promise<Publication | undefined> {
   if (occurrence.status === "published" || occurrence.status === "cancelled") return undefined;
 
-  const schedule = await deps.content.getSchedule(occurrence.scheduleId);
-  if (!schedule) return undefined;
+  const schedule = loadedSchedule ?? (await deps.content.getSchedule(occurrence.scheduleId));
+  if (!schedule || isManualSchedule(schedule)) return undefined;
   if (schedule.status === "cancelled" || schedule.status === "paused") return undefined;
 
   const artifact = await deps.content.getArtifact(schedule.artifactId);

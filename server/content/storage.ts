@@ -9,7 +9,7 @@
  * Behind an interface so services are testable without a database.
  */
 
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, notLike, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -121,6 +121,7 @@ export interface InsertScheduleRow {
   timezone: string;
   count: number;
   startAt: Date;
+  status?: string;
 }
 
 // ── Publication ───────────────────────────────────────────────────────────────
@@ -1379,6 +1380,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         timezone: row.timezone,
         count: row.count,
         startAt: row.startAt,
+        ...(row.status ? { status: row.status } : {}),
       })
       .returning();
     return inserted;
@@ -1399,6 +1401,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         timezone: row.timezone,
         count: row.count,
         startAt: row.startAt,
+        ...(row.status ? { status: row.status } : {}),
       })
       .onConflictDoNothing({ target: schedules.intentKey })
       .returning();
@@ -1437,7 +1440,13 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return this.database
       .select()
       .from(schedules)
-      .where(and(eq(schedules.status, "active"), lte(schedules.startAt, now)))
+      .where(
+        and(
+          eq(schedules.status, "active"),
+          lte(schedules.startAt, now),
+          or(isNull(schedules.intentKey), notLike(schedules.intentKey, "manual:%")),
+        ),
+      )
       .orderBy(asc(schedules.startAt))
       .limit(limit);
   }

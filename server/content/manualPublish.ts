@@ -20,7 +20,11 @@ import { z } from "zod";
 import type { Artifact, Publication, Result, Schedule, ScheduleOccurrence } from "@shared/schema";
 import { sha256 } from "../utils/hash";
 import { ArtifactNotFoundError } from "./artifact";
-import { ArtifactNotSchedulableError, publicationIdempotencyKey } from "./scheduling";
+import {
+  ArtifactNotSchedulableError,
+  MANUAL_SCHEDULE_INTENT_PREFIX,
+  publicationIdempotencyKey,
+} from "./scheduling";
 import type { ContentStoragePort, JsonRecord } from "./storage";
 
 export const MANUAL_PUBLISH_HOOK_TYPES = [
@@ -90,12 +94,12 @@ export function manualPublishIntentKey(input: {
   idempotencyKey?: string | null;
 }): string {
   if (input.idempotencyKey) {
-    return `manual:${input.artifactId}:key:${sha256(input.idempotencyKey).slice(0, 40)}`;
+    return `${MANUAL_SCHEDULE_INTENT_PREFIX}${input.artifactId}:key:${sha256(input.idempotencyKey).slice(0, 40)}`;
   }
   if (input.externalUrl) {
-    return `manual:${input.artifactId}:url:${sha256(input.externalUrl).slice(0, 40)}`;
+    return `${MANUAL_SCHEDULE_INTENT_PREFIX}${input.artifactId}:url:${sha256(input.externalUrl).slice(0, 40)}`;
   }
-  return `manual:${input.artifactId}:default`;
+  return `${MANUAL_SCHEDULE_INTENT_PREFIX}${input.artifactId}:default`;
 }
 
 /**
@@ -150,6 +154,7 @@ export async function logManualPublication(
     timezone: "UTC",
     count: 1,
     startAt: publishedAt,
+    status: "exhausted",
   });
   if (schedule.status !== "exhausted") {
     await deps.content.setScheduleStatus(schedule.id, "exhausted");
@@ -231,7 +236,7 @@ export async function logManualPublication(
       externalId: normalizedUrl,
     };
 
-  if (deps.learning) {
+  if (created && deps.learning) {
     await deps.learning.recordPublication(publication, result);
   }
 

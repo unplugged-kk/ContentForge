@@ -288,4 +288,46 @@ describe("weekly learning cohort digest (INC-08)", () => {
     assert.match(multiTier.nextExperiment, /moderate-cohort/);
     assert.match(multiTier.nextExperiment, /directional-cohort/);
   });
+
+  it("cites a cohort that is actually missing metrics when all cohorts are insufficient", () => {
+    const observations: WeeklyDigestEntry[] = [
+      {
+        publicationId: 401,
+        channel: "x",
+        format: "x_thread",
+        topicTag: "observed-cohort",
+        hookType: "metric",
+        publishedAt: "2026-11-25T10:00:00Z",
+        impressions: 5000,
+        engagementRate: 0.12,
+      },
+      {
+        publicationId: 402,
+        channel: "x",
+        format: "x_thread",
+        topicTag: "observed-cohort",
+        hookType: "metric",
+        publishedAt: "2026-11-26T10:00:00Z",
+        impressions: 6000,
+        engagementRate: 0.14,
+      },
+      {
+        publicationId: 403,
+        channel: "linkedin",
+        format: "linkedin_post",
+        topicTag: "missing-cohort",
+        hookType: "story",
+        publishedAt: "2026-11-26T12:00:00Z",
+        metrics: [],
+      },
+    ];
+
+    const digest = buildWeeklyLearningDigest({ observations, windowDays: 7, now: NOW });
+    assert.equal(digest.cohorts[0].topicTag, "observed-cohort");
+    assert.equal(digest.cohorts[0].missingMetricsCount, 0);
+    assert.equal(digest.cohorts[1].topicTag, "missing-cohort");
+    assert.equal(digest.cohorts[1].missingMetricsCount, 1);
+    assert.match(digest.nextExperiment, /linkedin\/linkedin_post · missing-cohort/);
+    assert.doesNotMatch(digest.nextExperiment, /observed-cohort/);
+  });
 });
