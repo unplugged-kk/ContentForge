@@ -15,6 +15,10 @@ every session, so every line here costs tokens.
 - **`docs/archive/`** — frozen history (pre-June plans, phase reports). Open
   only to answer "what did we do in phase N".
 
+## Agent collaboration
+
+Start with `docs/collab/README.md` on `origin/collab/ai-pair-review` for current priorities, branch rules, and Git-only handoffs. Keep implementation on task branches from `origin/main`.
+
 ## Verification
 
 Use `npm run test:unit` and `npm run test:db` — never raw `node --test`. The npm

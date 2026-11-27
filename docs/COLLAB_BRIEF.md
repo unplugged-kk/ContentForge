@@ -6,7 +6,7 @@
 ## 1. Your job
 Review the vision, what is built, and the gaps. Then propose a **concrete, ordered plan to make ContentForge a product** (not just a personal tool). Be critical: say what to cut, what is risky, what is missing.
 
-Write suggestions to `docs/collab/REVIEW_<yourname>.md` and commit on this branch (or a sub-branch). Do not edit other docs without saying so. Do not widen the status vocabulary (IMPLEMENTED / PARTIALLY IMPLEMENTED / VERIFIED LIVE / NOT VERIFIED / DEFERRED / BLOCKED) - claim nothing you did not observe.
+Write suggestions to `docs/collab/REVIEW_<yourname>.md` and follow the [Git-only collaboration playbook](collab/README.md) for branch and PR rules. Do not edit other docs without saying so. Do not widen the status vocabulary (IMPLEMENTED / PARTIALLY IMPLEMENTED / VERIFIED LIVE / NOT VERIFIED / DEFERRED / BLOCKED) - claim nothing you did not observe.
 
 ## 2. Original vision
 Source: `docs/spec_contentforge_reimagined.md`.
@@ -18,7 +18,7 @@ Per `docs/HANDOVER.md` section 1: a **single-operator, AI-native content intelli
 
 `Discover > Research > Understand > Opportunities > Create > Repurpose > Approve > Distribute > Measure > Learn`
 
-Design rules: truthful status vocabulary; intelligence != decision != execution (Jev makes typed, logged decisions, execution re-validates); approval is always a human gate. X and Threads are output channels, not the core.
+Design rules: truthful status vocabulary; intelligence != decision != execution (Jev makes typed, logged decisions, execution re-validates); human approval is the intended gate. In the current implementation, `trusted` automation can approve an artifact without a person (see the [independent review](collab/REVIEW_ChatGPT.md)); keep that mode out of initial customer pilots. X and Threads are output channels, not the core.
 
 ## 4. What exists (summary, evidence in the linked docs)
 - Research providers (RSS, Reddit, YouTube, HN, web, transcripts), engine with dedupe/evidence/ranking, triage decision.
