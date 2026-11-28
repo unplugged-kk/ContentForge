@@ -63,10 +63,15 @@ case "$cmd" in
     echo "If the task continues an existing row, also read docs/HANDOVER.md and docs/CONSTRAINTS.md."
     echo "The map of every other document is docs/README.md."
     sha="$(git rev-parse --short HEAD)"
-    if ! grep -q "$sha" docs/STATUS.md 2>/dev/null; then
+    product_changes=""
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      product_changes="$(git diff --name-only origin/main...HEAD | grep -v -E '^(docs/|AGENTS\.md|CLAUDE\.md|Makefile|script/agent-context\.sh|CURRENT_ARCHITECTURE\.md|HANDOVER\.md)$' || true)"
+    fi
+    if [[ -n "$product_changes" ]] && ! grep -q "$sha" docs/STATUS.md 2>/dev/null; then
       echo
-      echo "WARNING: docs/STATUS.md does not mention $sha."
-      echo "Reconcile docs/STATUS.md and docs/ACTIVE_WORK.md before editing product code."
+      echo "WARNING: HEAD $sha changes product files and docs/STATUS.md does not mention it."
+      echo "Reconcile docs/STATUS.md and docs/ACTIVE_WORK.md before more product edits."
+      echo "$product_changes"
     fi
     ;;
   handover)
