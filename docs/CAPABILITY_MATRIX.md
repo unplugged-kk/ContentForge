@@ -1,5 +1,7 @@
 # ContentForge capability matrix
 
+> 2026-11-28. This matrix was last fully reconciled on 2026-11-11. Pull request 7, merged as `ae8ced2`, claims export, claim checks, owner-scoped credentials, a weekly digest, and CI jobs on top of `0dca955`. Those claims are commit messages and the authors' local test notes. Actions run 46132320299 failed, so do not promote a row to verified from the merge. The pre-merge audit is [`product-discovery/PRODUCT_CURRENT_STATE.md`](product-discovery/PRODUCT_CURRENT_STATE.md). Current work is [`ACTIVE_WORK.md`](ACTIVE_WORK.md).
+
 **Last reconciled:** 2026-11-11, branch `feat/auth0-migration`.
 **Source of truth for architecture:** [`../CURRENT_ARCHITECTURE.md`](../CURRENT_ARCHITECTURE.md).
 **Source of truth for the decision layer:** [`../JEV_DECISION_MAP.md`](../JEV_DECISION_MAP.md).

@@ -1,5 +1,7 @@
 # ContentForge — Current Architecture (as built, not as documented)
 
+> Current work and CI state are in [`docs/STATUS.md`](docs/STATUS.md) and [`docs/ACTIVE_WORK.md`](docs/ACTIVE_WORK.md), not in this file. This file is how the system is built.
+
 **Date:** 2026-10-02 · **Mode:** read-only audit, no code modified · **Source of truth:** the code.
 **Supersedes:** `docs/archive/JEV-OPPORTUNITY-AUDIT.md` (2026-09-20). Reuses its JC-01…JC-11 candidate table.
 **Companion:** `JEV_DECISION_MAP.md`.

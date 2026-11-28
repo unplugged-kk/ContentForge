@@ -1,6 +1,8 @@
 # ContentForge — agent notes
 
-The navigation rules for this repo live in **`AGENTS.md`**. Read it first:
+The navigation rules for this repo live in **`AGENTS.md`**. Read it first.
+
+Before any edit, run `script/agent-context.sh sync` and read `docs/STATUS.md` and `docs/ACTIVE_WORK.md`. Before you stop, update those two files and `docs/HANDOVER.md`.
 
 - **`CURRENT_ARCHITECTURE.md`** is the authoritative architecture doc.
 - **`docs/README.md`** indexes every other doc, tagged CURRENT or HISTORICAL.

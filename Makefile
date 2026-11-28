@@ -32,7 +32,7 @@ COMPOSE_VPS   := docker compose -f docker-compose.yml -f docker-compose.vps.yml 
 
 .PHONY: help up vps deploy-vps down ps logs backup restore check-env \
         db db-stop db-logs dev install start graph orient \
-        e2e e2e-live e2e-vps
+        e2e e2e-live e2e-vps status sync handover
 
 # Explain the failure and the fix, instead of a compose stack trace.
 check-env:
@@ -162,3 +162,17 @@ orient:
 	@echo ""
 	@echo "===== docs/README.md — where the docs are ====="
 	@sed -n '1,45p' docs/README.md 2>/dev/null || echo "(docs/README.md missing)"
+	@echo ""
+	@echo "Before editing, run: script/agent-context.sh sync"
+
+# ---------- agent context ----------
+# Read-only. status, sync, and handover print facts. They do not edit files.
+
+status: ## branch, commit, and the active-work register
+	@script/agent-context.sh status
+
+sync: ## git state plus the required reading list
+	@script/agent-context.sh sync
+
+handover: ## facts to write into the handover before stopping
+	@script/agent-context.sh handover

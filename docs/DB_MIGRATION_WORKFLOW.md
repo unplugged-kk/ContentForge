@@ -1,5 +1,7 @@
 # Database Migration Workflow (Production-Safe)
 
+> 2026-11-28. The Makefile says there is no Railway. `.github/workflows/` contains `e2e.yml` and `migration-guard.yml` only. There is no `prod-migrate.yml` in the tree. Treat the Railway paragraph below as historical. Deploy is the VPS Compose path in the Makefile. Do not edit an applied migration file. Decision `DEC-12`.
+
 This project uses **versioned Drizzle SQL migrations** committed to `migrations/`.
 
 ## Principle

@@ -3,17 +3,23 @@
 Navigation rules for coding agents. Keep this file short — it is injected into
 every session, so every line here costs tokens.
 
-## Read these first
+## Before you edit
 
-- **`CURRENT_ARCHITECTURE.md`** — the authoritative architecture doc (dated,
-  "as built, not as documented"). Read it before any architecture question.
-- **`docs/HANDOVER.md`** — current state, what was verified and when, the debt,
-  and the exact next task. Read it before starting any work.
-- **`docs/README.md`** — the index of every other doc, each tagged `CURRENT` or
-  `HISTORICAL`. Anything tagged HISTORICAL describes a past phase and may
-  contradict the code. Do not treat it as current.
-- **`docs/archive/`** — frozen history (pre-June plans, phase reports). Open
-  only to answer "what did we do in phase N".
+Run `script/agent-context.sh sync` (or `make sync`). Then read, in order:
+
+1. `docs/PROJECT.md`
+2. `docs/STATUS.md`
+3. `docs/ACTIVE_WORK.md`
+4. This file
+5. `docs/MENTAL-MODEL.md`
+6. `CURRENT_ARCHITECTURE.md` before any architecture question
+7. `docs/product-discovery/EXECUTION_ROADMAP.md` for product work
+
+If the task continues a row in `docs/ACTIVE_WORK.md`, also read `docs/HANDOVER.md` and `docs/CONSTRAINTS.md`. `docs/README.md` maps every other name to the file that holds it. Do not open `docs/archive/` unless you need an old phase.
+
+Before you stop, update `docs/STATUS.md`, the row in `docs/ACTIVE_WORK.md`, and `docs/HANDOVER.md`. Record the branch, the commit, the commands you ran, and the next action. A session that skips that update is not finished.
+
+`script/agent-context.sh status` prints the register. `script/agent-context.sh handover` prints the facts to write down. Neither command edits files.
 
 ## Verification
 

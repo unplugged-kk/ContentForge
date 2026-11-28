@@ -19,14 +19,16 @@
 
 ---
 
-## Remaining Follow-Ups (Post-M2 / Non-Blocking Polish)
+## Remaining Follow-Ups (updated 2026-11-28)
 
-1. **CI & Disposable DB Verification (Owner Push Required):** Trigger GitHub Actions on `work/productization-mvp` to verify `DB Integration Tests` (`npm run test:db`), `E2E Tests`, and `Schema/Migration Consistency` on clean Postgres 16.
-2. **Legacy `userId: null` schedule binding (`server/routes.ts`):** Noted in Wayfinder Wave-1 review (Medium #3) for legacy unowned post rows; low priority while canonical `server/content/*` enforces strict `userId`.
-3. **Human-edit revision re-audit (`server/content/artifact.ts:451-474`):** Currently `createHumanEditRevision` carries forward `prior.attribution`; optionally re-run `auditArtifactClaims` on human edits in a future increment.
-4. **Live gateway `{ payload, claims }` prompt hint (`server/content/model.ts`):** Extend `payloadShapeHint` when live LLM claim emission is benchmarked against founder drafts (currently Step-2 deterministic auditing runs on every generation).
-5. **Per-user offboarding deletion script:** Author and test a disposable-DB cascade delete script before inviting external pilot users (`PILOT_RUNBOOK.md` §5).
-6. **Benign `style_profiles_user_active_idx` schema declaration:** `migrations/0023_style_corpus.sql` creates index `style_profiles_user_active_idx` on `style_profiles (user_id, is_active)` which is omitted from `shared/schema.ts` (harmless today; declare only alongside a DB-verified migration).
+Items 2 through 6 below were claimed done in `341ef67`. That commit message is the evidence. They were not re-tested in the governance session. Item 1 ran on the merge and failed. See [`../BUGS.md`](../BUGS.md).
+
+1. **CI on `origin/main`:** Actions run 46132320299 failed Unit Tests, DB Integration Tests, E2E Tests, and Live E2E. Migration Guard run 46132320278 succeeded. This is workstream CF-CI, not "waiting for a push".
+2. **Legacy `userId: null` schedule binding:** `341ef67` says it binds those rows to the authenticated owner on `POST /api/schedules`, with `schedulingOwnership.test.ts`.
+3. **Human-edit revision re-audit:** `341ef67` says `createHumanEditRevision` re-runs `auditArtifactClaims`.
+4. **Gateway `{ payload, claims }` hint:** `341ef67` says the prompt asks for that shape when research evidence is supplied, and `unwrapModelOutput` stays compatible.
+5. **Per-user offboarding:** `341ef67` adds `server/user/offboard.ts` and `script/offboard-user.ts`, dry-run by default. A production restore drill is still an owner action.
+6. **`style_profiles_user_active_idx`:** `341ef67` says it is declared in `shared/schema.ts` and `0035_snapshot.json` with no change to applied SQL.
 
 ---
 

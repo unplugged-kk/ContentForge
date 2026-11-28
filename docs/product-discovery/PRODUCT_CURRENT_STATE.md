@@ -1,5 +1,7 @@
 # ContentForge — Reconstructed Actual Product State
 
+> 2026-11-28. Baseline audit of `origin/main` at `0dca955`, before pull request 7. Rows that say Missing or Unsafe were the input to productization. Many of those rows are what INC-01 through INC-10 and `341ef67` claim to have changed. Do not treat this file as the current product. See [`../STATUS.md`](../STATUS.md).
+
 **Date:** 2026-11-27  
 **Baseline Audited:** `origin/main` @ `0dca9550d161d08a7ec82b34488ce4a022db81e0`  
 **Audit Method:** Direct code inspection by Wayfinder (`a349d42b-b4fd-4e81-9608-066701151677`) and Poteto mode (`06a2e6f4-c012-4cbb-89ac-1b14ddace8e0`), plus fresh local execution of `npx tsc --noEmit` and `npm run test:unit`.

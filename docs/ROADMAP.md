@@ -1,5 +1,7 @@
 # ContentForge roadmap
 
+> 2026-11-28. P0-1 (CI jobs) landed in `bc2c1e4` and P0-2 (Drizzle snapshots) landed in `ab81f35`. Both are inside the merge `ae8ced2`. The jobs are red on `main`. The next engineering task is [`ACTIVE_WORK.md`](ACTIVE_WORK.md) row CF-CI, not a fresh P0-1. Productization waves are in [`product-discovery/EXECUTION_ROADMAP.md`](product-discovery/EXECUTION_ROADMAP.md). Items below P1 stay as the later list unless [`product-discovery/DECISIONS.md`](product-discovery/DECISIONS.md) `DEC-08` defers them.
+
 **Reconciled:** 2026-11-11, branch `feat/auth0-migration`.
 
 Locked context: the canonical lifecycle and the hard constraints in
