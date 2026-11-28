@@ -9,8 +9,23 @@ import { storage } from "./storage";
 import { aiCall, logAiUsage, safeJsonParse } from "./ai/chat";
 import { runRssAutopostForBatch } from "./rssAutopost";
 import { legacyShadows } from "./decision/legacy";
+import { safeFetch } from "./security/ssrf";
 
 const rssParser = new Parser();
+
+async function fetchAndParseRss(url: string) {
+  const res = await safeFetch(url, {
+    timeoutMs: 10_000,
+    maxBytes: 2 * 1024 * 1024,
+    headers: {
+      accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+    },
+  });
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`RSS feed returned HTTP ${res.status}`);
+  }
+  return rssParser.parseString(res.body);
+}
 
 export type DiscoverRefreshResult = {
   batchId: string;
@@ -154,7 +169,7 @@ export async function runDiscoverRefresh(ownerUserId: number): Promise<DiscoverR
       const results = await Promise.all(
         feeds.map(async (feed) => {
           try {
-            const parsed = await rssParser.parseURL(feed.feedUrl);
+            const parsed = await fetchAndParseRss(feed.feedUrl);
             return (parsed.items || []).slice(0, 2).map((item) => ({
               source: feed.name,
               sourceType: "rss",
@@ -202,7 +217,7 @@ export async function runDiscoverRefresh(ownerUserId: number): Promise<DiscoverR
   const arxivPromise = (async () => {
     try {
       const r = await fetch(
-        "http://export.arxiv.org/api/query?search_query=all:AI+infrastructure+OR+all:MLOps+OR+all:kubernetes+machine+learning&start=0&max_results=5&sortBy=submittedDate&sortOrder=descending",
+        "https://export.arxiv.org/api/query?search_query=all:AI+infrastructure+OR+all:MLOps+OR+all:kubernetes+machine+learning&start=0&max_results=5&sortBy=submittedDate&sortOrder=descending",
         { signal: AbortSignal.timeout(8000) },
       );
       const text = await r.text();
@@ -233,7 +248,7 @@ export async function runDiscoverRefresh(ownerUserId: number): Promise<DiscoverR
   // Google Trends — tech/AI daily trending topics via RSS
   const googleTrendsPromise = (async () => {
     try {
-      const parsed = await rssParser.parseURL(
+      const parsed = await fetchAndParseRss(
         "https://trends.google.com/trending/rss?geo=US&hl=en-US",
       );
       return (parsed.items || [])

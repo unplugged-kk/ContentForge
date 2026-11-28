@@ -11,6 +11,10 @@ import {
   getCreateFromStoryUrl,
   getCreateFromIdeaUrl,
   getCreateFromSourceUrl,
+  parseCreateSourceHandoff,
+  findConflictsForSourceUrl,
+  formatConflictClaims,
+  selectResearchProviders,
   sanitizeUntrustedText,
 } from "./sources-research-state";
 
@@ -136,6 +140,99 @@ describe("Phase 28.2E: Sources Research State Helpers", () => {
       assert.equal(
         getCreateFromSourceUrl({ title: "Kubernetes Trends", url: "https://example.com/k8s" }),
         "/create?topic=Kubernetes+Trends&sourceUrl=https%3A%2F%2Fexample.com%2Fk8s",
+      );
+    });
+
+    it("encodes and parses researchJobId and evidenceIds without breaking provenance", () => {
+      const href = getCreateFromSourceUrl({
+        title: "Cloud Native 2026",
+        url: "https://cncf.io/reports/2026",
+        researchJobId: 101,
+        evidenceIds: [201, 202, 201],
+      });
+      const parsed = parseCreateSourceHandoff(href.split("?")[1] ?? "");
+      assert.equal(parsed.topic, "Cloud Native 2026");
+      assert.equal(parsed.sourceUrl, "https://cncf.io/reports/2026");
+      assert.equal(parsed.researchJobId, 101);
+      assert.deepEqual(parsed.evidenceIds, [201, 202]);
+    });
+
+    it("ignores invalid researchJobId and evidenceIds when parsing query strings", () => {
+      const parsed = parseCreateSourceHandoff("topic=Test&researchJobId=abc&evidenceIds=0,-5,foo,12");
+      assert.equal(parsed.researchJobId, undefined);
+      assert.deepEqual(parsed.evidenceIds, [12]);
+    });
+  });
+
+  describe("conflict matching & claim formatting", () => {
+    it("matches canonical backend ResearchConflict claims[] by canonicalUrl", () => {
+      const conflicts = [
+        {
+          topic: "launch date",
+          claims: [
+            {
+              canonicalUrl: "https://example.com/a",
+              text: "Product launched in January 2026",
+              provider: "rss",
+            },
+            {
+              canonicalUrl: "https://example.com/b",
+              text: "Launch delayed to March 2026",
+              provider: "hn",
+            },
+          ],
+        },
+      ];
+
+      const matchesA = findConflictsForSourceUrl(conflicts, "https://example.com/a");
+      assert.equal(matchesA.length, 1);
+      assert.equal(matchesA[0].topic, "launch date");
+
+      const claims = formatConflictClaims(matchesA[0]);
+      assert.equal(claims.length, 2);
+      assert.equal(claims[0].provider, "rss");
+      assert.equal(claims[0].text, "Product launched in January 2026");
+      assert.equal(claims[1].canonicalUrl, "https://example.com/b");
+
+      assert.equal(findConflictsForSourceUrl(conflicts, "https://example.com/unmatched").length, 0);
+    });
+
+    it("defensively supports legacy sourceUrlA/sourceUrlB and claimA/claimB fixtures", () => {
+      const legacy = [
+        {
+          topic: "benchmark",
+          sourceUrlA: "https://example.com/legacy-a",
+          sourceUrlB: "https://example.com/legacy-b",
+          claimA: "<b>2x faster</b>",
+          claimB: "No measurable gain",
+        },
+      ];
+
+      const matches = findConflictsForSourceUrl(legacy, "https://example.com/legacy-b");
+      assert.equal(matches.length, 1);
+      assert.deepEqual(formatConflictClaims(matches[0]), [
+        { canonicalUrl: "https://example.com/legacy-a", text: "2x faster" },
+        { canonicalUrl: "https://example.com/legacy-b", text: "No measurable gain" },
+      ]);
+    });
+  });
+
+  describe("selectResearchProviders", () => {
+    it("keeps up to 4 available providers for normal topic queries", () => {
+      assert.deepEqual(
+        selectResearchProviders(["rss", "hn", "reddit", "youtube", "web"], "Postgres scaling"),
+        ["rss", "hn", "reddit", "youtube"],
+      );
+    });
+
+    it("ensures web provider is included when query or directUrl is an HTTP(S) URL", () => {
+      assert.deepEqual(
+        selectResearchProviders(["rss", "hn", "reddit", "youtube", "web"], "https://example.com/post"),
+        ["web", "rss", "hn", "reddit"],
+      );
+      assert.deepEqual(
+        selectResearchProviders(["rss", "hn", "reddit", "youtube"], "Release notes", "https://example.com/notes"),
+        ["web", "rss", "hn", "reddit"],
       );
     });
   });

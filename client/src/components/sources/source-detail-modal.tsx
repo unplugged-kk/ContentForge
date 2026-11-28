@@ -1,4 +1,4 @@
-import { ExternalLink, Bookmark, BookmarkCheck, FileText, Sparkles, AlertTriangle, ShieldCheck } from "lucide-react";
+import { ExternalLink, Bookmark, BookmarkCheck, FileText, Sparkles, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,8 @@ import {
   humanizeNovelty,
   formatRelativeTime,
   sanitizeUntrustedText,
+  formatConflictClaims,
+  type ResearchConflictLike,
 } from "@/lib/sources-research-state";
 
 export interface SourceDetailModalProps {
@@ -42,13 +44,7 @@ export interface SourceDetailModalProps {
   }>;
   /** True when the parent's evidence read failed — an absence of claims is then unknown, not empty. */
   evidenceError?: boolean;
-  conflicts?: Array<{
-    claimA?: string;
-    claimB?: string;
-    topic?: string;
-    sourceUrlA?: string;
-    sourceUrlB?: string;
-  }>;
+  conflicts?: ResearchConflictLike[];
   researchContext?: {
     query?: string | null;
     depth?: string | null;
@@ -135,12 +131,24 @@ export function SourceDetailModal({
               <p className="text-warning">
                 Independent sources report competing findings on this topic. Review all evidence before using this claim in published content.
               </p>
-              {conflicts.map((c, i) => (
-                <div key={i} className="pl-3 border-l-2 border-warning/40 space-y-1 my-1">
-                  {c.claimA && <p><span className="font-semibold">Source A:</span> {c.claimA}</p>}
-                  {c.claimB && <p><span className="font-semibold">Source B:</span> {c.claimB}</p>}
-                </div>
-              ))}
+              {conflicts.map((c, i) => {
+                const claims = formatConflictClaims(c);
+                return (
+                  <div key={i} className="pl-3 border-l-2 border-warning/40 space-y-1 my-1">
+                    {c.topic && (
+                      <p className="font-semibold text-foreground capitalize">{c.topic}</p>
+                    )}
+                    {claims.map((claim, claimIdx) => (
+                      <p key={claimIdx} className="break-words">
+                        <span className="font-semibold uppercase mr-1">
+                          {claim.provider || `Source ${claimIdx + 1}`}:
+                        </span>
+                        <span>{claim.text}</span>
+                      </p>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           )}
 

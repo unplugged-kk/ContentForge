@@ -50,10 +50,11 @@ function safeMethod(method: string): boolean {
 }
 
 function isExempt(path: string): boolean {
+  const normalised = path.toLowerCase();
   return (
-    PUBLIC_AUTH_PATHS.includes(path.toLowerCase()) ||
-    path.startsWith("/api/webhooks/") ||
-    path === "/api/csrf-token"
+    PUBLIC_AUTH_PATHS.includes(normalised) ||
+    normalised.startsWith("/api/webhooks/") ||
+    normalised === "/api/csrf-token"
   );
 }
 

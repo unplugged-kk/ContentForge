@@ -1,6 +1,7 @@
 import type { DiscoveredIdea, RssSource } from "@shared/schema";
 import { storage } from "./storage";
 import { aiCall, logAiUsage } from "./ai/chat";
+import { AUTO_GENERATED_POST_STATUS } from "./content/postStatus";
 import { addThreadNumbering } from "./utils/threadUtils";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 
@@ -39,7 +40,7 @@ Separate tweets with "---". Do NOT add numbering (system adds it).`,
       postType,
       tone: source.autopostTone || "educational",
       targetPlatform: source.autopostPlatform || "x",
-      status: "draft",
+      status: AUTO_GENERATED_POST_STATUS,
       autopilot: false,
     },
     tweetRows,

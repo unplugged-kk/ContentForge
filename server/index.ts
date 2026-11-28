@@ -11,7 +11,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
 import { existsSync } from "fs";
 import { securityHeaders } from "./middleware/security";
-import { globalLimiter } from "./middleware/rateLimit";
+import { aiLimiter, globalLimiter } from "./middleware/rateLimit";
 import { auditLog } from "./middleware/audit";
 import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
@@ -43,9 +43,6 @@ const appDir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
 const app = express();
 const httpServer = createServer(app);
 
-// Trust Railway's reverse proxy so req.secure and cookies work correctly
-app.set("trust proxy", 1);
-
 // Security headers must be FIRST so they are set on every response, including
 // error responses and before any other middleware short-circuits.
 app.use(securityHeaders);
@@ -58,13 +55,14 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
 // Global rate limit applies only to /api/* (see rateLimit.skip). Placed early
 // so abusive clients are dropped before they can hit expensive handlers.
@@ -96,9 +94,9 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        // Phase 30: never log credential-shaped fields (tokens, secrets,
-        // cookies). Redaction mirrors server/jobs/logger.ts.
+      if (capturedJsonResponse && process.env.NODE_ENV !== "production") {
+        // Never log credential-shaped fields. Production logs omit response
+        // bodies entirely so drafts and emails do not land in stdout.
         logLine += ` :: ${JSON.stringify(redactForAccessLog(capturedJsonResponse))}`;
       }
 
@@ -211,6 +209,25 @@ app.use((req, res, next) => {
   // Mounted globally (not on "/api"): Express strips the mount point from
   // req.path, which would break allowlist matching (see authGate.ts).
   app.use(authGate);
+  for (const prefix of [
+    "/api/generate",
+    "/api/ingest",
+    "/api/research",
+    "/api/agent",
+    "/api/ai",
+    "/api/images",
+    "/api/visual-generations",
+    "/api/video-generations",
+    "/api/audio",
+    "/api/video",
+    "/api/decision",
+    "/api/autopilot",
+    "/api/discover",
+    "/api/chat",
+    "/api/content-actions",
+  ]) {
+    app.use(prefix, aiLimiter);
+  }
   app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
   // Phase 30: real liveness/readiness (no secrets, no internals). Readiness
   // reports up/down only; the driver error is logged server-side.

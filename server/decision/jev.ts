@@ -148,6 +148,21 @@ async function jevDecideViaApi(
   throw new Error("JEV_REQUEST_FAILED");
 }
 
+const JEV_CLI_ENV_BASE = ["PATH", "HOME", "TMPDIR"] as const;
+
+export function buildJevCliEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of JEV_CLI_ENV_BASE) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("JEV_") && value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 async function jevDecideViaCli(
   state: unknown,
   questions: Record<string, JevQuestion>,
@@ -158,7 +173,11 @@ async function jevDecideViaCli(
     const { stdout } = await execFileAsync(
       bin,
       ["-p", request, "-m", "typesafe/jev", "--skip-onboarding"],
-      { timeout: Number(process.env.TYPESAFE_TIMEOUT_MS ?? 120_000), maxBuffer: 8 * 1024 * 1024 },
+      {
+        env: buildJevCliEnv(process.env),
+        timeout: Number(process.env.TYPESAFE_TIMEOUT_MS ?? 120_000),
+        maxBuffer: 8 * 1024 * 1024,
+      },
     );
     // The CLI may print framing lines; take the last balanced JSON object.
     const start = stdout.indexOf("{");

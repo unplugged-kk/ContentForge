@@ -17,7 +17,7 @@ const STATS_B = [
   { v: "1", l: "Approval per exact revision", t: "linkedin", g: "linear-gradient(110deg,#9012b4,#b015b4)" },
   { v: "0", l: "Blind retries after a send", t: "x", g: "linear-gradient(110deg,#b015b4,#c8189a)" },
   { v: "x5", l: "Shorts concepts", t: "video", g: "linear-gradient(110deg,#c8189a,#d81b80)" },
-  { v: "x10", l: "Quote cards", t: "instagram", g: "linear-gradient(110deg,#8a0f6f,#5c0a50)" },
+  { v: "MD", l: "Export-first Markdown briefs", t: "web", g: "linear-gradient(110deg,#8a0f6f,#5c0a50)" },
 ];
 
 const stat = (s: (typeof STATS_A)[number]) =>
@@ -107,10 +107,10 @@ export const HOME_FAQ: [string, string][] = [
   ["Which channels can ContentForge publish to?", "Today the registered channel adapters are X, LinkedIn, Threads, Instagram and YouTube. Each adapter owns its own limits, payload validation and publishing mechanics, so new channels plug in without touching the lifecycle."],
   ["Where does the research come from?", "Seven research providers: RSS, Reddit, YouTube, Hacker News, web pages, video transcripts and an optional last-30-days current-events provider. Sources are deduplicated, ranked and stored with provenance."],
   ["Can AI agents like ChatGPT or Claude drive ContentForge?", "The in-app Agent workspace already drives the lifecycle through 29 typed domain tools. Exposing those same tools to ChatGPT, Claude and other assistants over MCP is the next step on the roadmap; see the AI Agents pages for details."],
-  ["Does anything get published without me?", "No, not by default. Only approved revisions can be scheduled or published. Auto-publishing requires an explicit trusted policy that you turn on; otherwise automation stops and waits for your approval."],
+  ["Does anything get published without me?", "No. Human approval is enforced by default and locked in pilot mode: only approved revisions can be scheduled or published. Unattended trusted automation is off by default and requires explicit operator opt-in outside pilot mode."],
   ["Will the content sound like me?", "Voice profiles are built from your own writing samples, brand pillars and audience, and are frozen into every generation policy. Approved edits and rejected drafts feed back as learning signals."],
   ["Can it repurpose one article into many posts?", "Yes. One story can fan out into X posts and threads, LinkedIn and Threads posts, carousels, newsletters and video scripts. Each output is adapted to its platform and approved on its own."],
-  ["What analytics does ContentForge track?", "Impressions, likes, comments, shares, saves, clicks, replies, followers gained and engagement rate per publication, rolled up by channel and format, with experiments for hooks, formats and posting times."],
+  ["What analytics does ContentForge track?", "Channel and format performance signals (impressions, likes, comments, shares, saves, clicks, replies and engagement rate where the platform provides them), rolled up with honest missingness when a metric is unavailable."],
   ["Does ContentForge make videos?", "ContentForge writes scripts and submits versioned production requests to Video Factory, a separate service that owns voice, media, composition, rendering and validation."],
   ["Can I manage more than one brand?", "The domain model is owner-scoped and brand profiles are separate from stories, so multiple brands are supported by design. A multi-brand workspace switcher is on the roadmap."],
   ["Is ContentForge free and open source?", "ContentForge is self-hosted from its GitHub repository. You bring your own model provider keys and channel credentials; there is no subscription."],
@@ -141,7 +141,7 @@ export function renderHome(): string {
   </div>
   <h1 id="hero-title" class="head">Run your content engine on autopilot with
     <span class="rotor" data-rotor="${esc(JSON.stringify(ROTOR))}"><span class="rotor-icon" style="background:${first.bg}">${first.svg}</span><span class="rotor-word">${first.name}</span></span></h1>
-  <p class="hero-sub">ContentForge is the content operating system: AI agents discover topics, research them with sources and draft every format, and you approve everything before it ships.</p>
+  <p class="hero-sub">ContentForge is the content operating system: AI agents discover topics, research them with sources and draft every format, with human approval enforced by default (locked in pilot mode).</p>
   <a class="btn btn-light btn-lg" href="${APP_PATH}">Start your first research for $0 ${I.arrows}</a>
   <div class="channel-strip" aria-label="Channels and research sources">${strip.map((t) => tile(t)).join("")}</div>
 </section>
@@ -235,8 +235,8 @@ export function renderHome(): string {
         <div class="chatbox">${I.plus}Ask anything<i></i></div></div></div>
       <span class="tag">AI agents</span><h3 class="head">Work with AI agents</h3>
       <p>Research, writing, critique and publishing agents work through the same domain tools you do, with approval gates.</p></article>
-    <article class="tool full t-img" id="intelligence"><div><span class="tag">AI image</span><h3 class="head">Design it with AI</h3>
-      <p>Generate brand-aware images, carousels and quote cards at each platform's dimensions, with visual quality checks.</p></div>
+    <article class="tool full t-img" id="intelligence"><div><span class="tag">Visuals &amp; export</span><h3 class="head">Sourced briefs, visuals and export</h3>
+      <p>Generate brand-aware images and carousels sized for each channel, keep immutable revisions linked to sourced research briefs, and copy or export Markdown anytime.</p></div>
       <div class="mock"><div class="studio"><div class="top">Visual studio <b>Use this media</b></div>
         <div class="canvas"><div class="tools-col"><span>Text</span><span class="on">Images</span><span>Elements</span><span>Background</span><span>AI image</span></div>
         <div class="thumbs"><b style="grid-column:1/-1;font-size:12px">Brand library</b><i style="background:linear-gradient(135deg,#fde68a,#f97316)"></i><i style="background:#111"></i><i style="background:linear-gradient(135deg,#fbcfe8,#a78bfa)"></i><i style="background:#f472b6"></i><i style="background:#22d3ee"></i><i style="background:linear-gradient(135deg,#818cf8,#4c1d95)"></i></div>
@@ -252,11 +252,11 @@ export function renderHome(): string {
           <div class="nav"><span>Today</span><span>Create</span><span>Sources</span><span>Agent</span><span>Schedule</span><span>Insights</span><span>Settings</span></div>
           <div class="post"><b>Approval inbox</b><p style="font-size:12px;color:#ffffffb3;margin-top:6px">LinkedIn post · revision 3 · from story "AI pricing pages"</p><div class="card"></div></div>
           <div class="actions"><span>Approve</span><span>Edit</span><span>Reject</span><span>Schedule</span></div></div></div>
-        <span class="tag">Approvals</span><h3 class="head">Nothing ships unapproved</h3>
-        <p>Review the exact revision, edit to create a new one, then approve. Durable scheduling publishes it and reconciles anything uncertain.</p></article>
+        <span class="tag">Approvals</span><h3 class="head">Human approval by default</h3>
+        <p>Human approval is enforced by default and locked in pilot mode (unattended trusted automation is off by default). Review immutable revisions, copy or export Markdown anytime, or approve for durable channel publishing.</p></article>
     </div>
-    <article class="tool full t-an"><div><span class="tag">Analytics</span><h3 class="head">Comprehensive analytics</h3>
-      <p>See which topics, formats, hooks and posting times perform, then run experiments before changing policy.</p></div>
+    <article class="tool full t-an"><div><span class="tag">Analytics</span><h3 class="head">Channel and format signals</h3>
+      <p>Track channel and format performance signals with honest missingness when a platform omits a metric, so you can review real results without invented causality.</p></div>
       <div class="mock"><div class="charts">
         <div class="c">Impressions${curve("M0 60C30 40 50 70 80 50S130 10 160 30 210 60 240 20", "#a855f7")}<b>6,224</b></div>
         <div class="c">Engagement${curve("M0 40C20 10 40 70 70 30S110 0 140 50 200 40 240 60", "#ec4899")}<b>7,435</b></div>

@@ -78,7 +78,7 @@ export async function resolvePublicationMedia(
         `visual asset ${ref.visualAssetId} referenced by artifact ${artifact.id} was not found`,
       );
     }
-    if (asset.userId !== null && asset.userId !== artifact.userId) {
+    if (asset.userId !== artifact.userId) {
       throw new MediaResolutionError(
         "permanent",
         `visual asset ${asset.id} does not belong to the artifact owner`,
@@ -476,13 +476,16 @@ export async function reconcileUnknownPublications(
   now: Date,
   deps: ReconcileDeps,
   limit = 50,
+  options?: { ownerId?: number },
 ): Promise<ReconcileUnknownResult> {
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
   const owner = deps.owner ?? "reconcile-worker";
+  const ownerId = options?.ownerId;
   const result: ReconcileUnknownResult = { resolved: 0, requeued: 0, stillUnknown: 0, exhausted: 0 };
 
   const candidates = await deps.content.listUnknownPublications(limit);
   for (const candidate of candidates) {
+    if (ownerId !== undefined && candidate.userId !== ownerId) continue;
     if (candidate.attempt >= MAX_RECONCILE_ATTEMPTS) {
       result.exhausted += 1;
       continue;

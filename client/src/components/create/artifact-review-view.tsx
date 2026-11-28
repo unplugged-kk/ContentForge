@@ -22,6 +22,18 @@ import {
   type CapabilityFormat,
 } from "@/lib/create-workflow";
 import {
+  X_POST_CHAR_BUDGET,
+  extractThreadUnits,
+  buildEditedArtifactPayload,
+  formatArtifactPlainText,
+  formatArtifactNumberedThread,
+  formatArtifactMarkdownExport,
+  buildArtifactExportFilename,
+  enrichEvidenceWithSources,
+  type ArtifactExportEvidence,
+  type ArtifactExportSource,
+} from "@/lib/artifact-export";
+import {
   Sparkles,
   Edit3,
   RefreshCw,
@@ -32,16 +44,38 @@ import {
   AlertTriangle,
   XCircle,
   History,
-  FileText,
-  Image as ImageIcon,
-  Film,
-  Music,
+  Copy,
+  Download,
+  ListOrdered,
+  Plus,
+  Trash2,
+  ShieldCheck,
+  ShieldAlert,
+  FileSearch,
 } from "lucide-react";
 
 export interface ArtifactReviewViewProps {
   artifactId: number;
   onBackToCreate?: () => void;
   onSelectArtifact?: (id: number) => void;
+}
+
+interface AuditedClaimRecord {
+  unitIndex: number;
+  claimText: string;
+  evidenceIds: number[];
+  status: "supported" | "unsupported" | "opinion";
+  reason?: string;
+}
+
+interface ArtifactAttributionEntry {
+  kind?: string;
+  researchJobId?: number | null;
+  evidenceIds?: number[];
+  claims?: AuditedClaimRecord[];
+  unsupportedCount?: number;
+  paraphraseOverlap?: number;
+  qualityFlags?: string[];
 }
 
 interface ArtifactRecord {
@@ -55,7 +89,57 @@ interface ArtifactRecord {
   provenance: string | null;
   opportunityId: number | null;
   generationJobId: number | null;
+  attribution?: ArtifactAttributionEntry[];
+  attributionReason?: string | null;
   createdAt: string;
+}
+
+const QUALITY_FLAG_LABELS: Record<string, string> = {
+  boilerplate_heavy: "Boilerplate-heavy phrasing",
+  paraphrase_heavy: "High source paraphrase overlap",
+  ungrounded_first_person: "Ungrounded first-person claim",
+  over_limit: "Exceeds channel length limit",
+  no_hook: "Weak or missing opening hook",
+  missing_cta: "Missing closing call-to-action",
+  repetitive: "Repetitive phrasing",
+  hedging_heavy: "Excessive hedging",
+  no_specifics: "Low technical specificity",
+  too_few_units: "Too few thread units",
+  too_many_units: "Too many thread units",
+};
+
+function parseClaimAuditSummary(entries: ArtifactAttributionEntry[] | undefined) {
+  const list = Array.isArray(entries) ? entries : [];
+  const claimEntry = list.find((e) => e && e.kind === "claim_evidence_v1");
+  const hasClaimAudit = Boolean(claimEntry);
+  const evidenceIds = Array.from(
+    new Set(
+      list.flatMap((e) => (Array.isArray(e?.evidenceIds) ? e.evidenceIds : [])),
+    ),
+  );
+  const claims = Array.isArray(claimEntry?.claims) ? claimEntry.claims : [];
+  const qualityFlags = Array.isArray(claimEntry?.qualityFlags) ? claimEntry.qualityFlags : [];
+  const paraphraseOverlap =
+    typeof claimEntry?.paraphraseOverlap === "number" ? claimEntry.paraphraseOverlap : 0;
+  const supportedCount = claims.filter((c) => c.status === "supported").length;
+  const unsupportedCount =
+    typeof claimEntry?.unsupportedCount === "number"
+      ? claimEntry.unsupportedCount
+      : claims.filter((c) => c.status === "unsupported").length;
+  const opinionCount = claims.filter((c) => c.status === "opinion").length;
+  const hasAuditData = hasClaimAudit || evidenceIds.length > 0;
+
+  return {
+    hasClaimAudit,
+    hasAuditData,
+    evidenceIds,
+    claims,
+    qualityFlags,
+    paraphraseOverlap,
+    supportedCount,
+    unsupportedCount,
+    opinionCount,
+  };
 }
 
 interface OpportunityRecord {
@@ -75,6 +159,8 @@ interface StoryRecord {
   title: string;
   insightBody: string;
   provenance: string;
+  researchJobId?: number | null;
+  evidenceRefs?: number[];
 }
 
 export function ArtifactReviewView({
@@ -85,6 +171,7 @@ export function ArtifactReviewView({
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [draftText, setDraftText] = useState("");
+  const [draftUnits, setDraftUnits] = useState<string[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleIso, setScheduleIso] = useState<string | null>(null);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
@@ -138,6 +225,24 @@ export function ArtifactReviewView({
     enabled: !!opportunityQuery.data?.storyId,
   });
 
+  const storyEvidenceQuery = useQuery<ArtifactExportEvidence[]>({
+    queryKey: ["/api/research/jobs", storyQuery.data?.researchJobId, "evidence"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/research/jobs/${storyQuery.data!.researchJobId}/evidence`);
+      return res.json();
+    },
+    enabled: Boolean(storyQuery.data?.researchJobId),
+  });
+
+  const storySourcesQuery = useQuery<ArtifactExportSource[]>({
+    queryKey: ["/api/research/jobs", storyQuery.data?.researchJobId, "sources"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/research/jobs/${storyQuery.data!.researchJobId}/sources`);
+      return res.json();
+    },
+    enabled: Boolean(storyQuery.data?.researchJobId),
+  });
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId] });
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId, "history"] });
@@ -147,9 +252,15 @@ export function ArtifactReviewView({
   const reviseMutation = useMutation({
     mutationFn: async () => {
       if (!artifact) throw new Error("Missing artifact");
+      const nextPayload = buildEditedArtifactPayload(
+        artifact.format,
+        artifact.payload,
+        draftText,
+        artifact.format === "x_thread" ? draftUnits : undefined,
+      );
       const res = await apiRequest("POST", `/api/artifacts/${artifact.id}/revise`, {
         baseArtifactId: artifact.id,
-        payload: { ...(artifact.payload ?? {}), text: draftText },
+        payload: nextPayload,
         attributionReason: "Human review edit",
       });
       return res.json();
@@ -292,11 +403,85 @@ export function ArtifactReviewView({
   }
 
   const text = extractArtifactPreviewText(artifact.payload);
+  const isThread = artifact.format === "x_thread";
+  const threadUnits = isThread ? extractThreadUnits(artifact.payload) : [];
   const isApproved = artifact.readiness === "approved";
   const isInReview = artifact.readiness === "in_review";
   const isRejected = artifact.readiness === "rejected";
   const history = historyQuery.data || [];
   const currentVersion = deriveVersionNumber(artifact.id, history);
+
+  const rawEvidence = enrichEvidenceWithSources(
+    storyEvidenceQuery.data ?? [],
+    storySourcesQuery.data ?? [],
+  );
+  const storyEvidenceRefSet = new Set(storyQuery.data?.evidenceRefs ?? []);
+  const exportEvidence =
+    storyEvidenceRefSet.size > 0
+      ? rawEvidence.filter((item) => typeof item.id === "number" && storyEvidenceRefSet.has(item.id))
+      : rawEvidence;
+
+  const openEditor = () => {
+    if (isThread) {
+      setDraftUnits(threadUnits.length > 0 ? [...threadUnits] : [""]);
+    } else {
+      setDraftText(text);
+    }
+    setEditing(true);
+  };
+
+  const canSaveEdit = isThread
+    ? draftUnits.some((u) => u.trim().length > 0)
+    : draftText.trim().length > 0;
+
+  const handleCopyPlainText = async () => {
+    const plain = formatArtifactPlainText(artifact);
+    if (!plain) {
+      toast({ title: "Nothing to copy", description: "This artifact has no text content yet." });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(plain);
+      toast({ title: "Copied text", description: "Content copied to clipboard." });
+    } catch {
+      toast({ title: "Copy failed", description: "Clipboard access was blocked by the browser.", variant: "destructive" });
+    }
+  };
+
+  const handleCopyThread = async () => {
+    const numbered = formatArtifactNumberedThread(artifact);
+    if (!numbered) {
+      toast({ title: "Nothing to copy", description: "This thread has no posts yet." });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(numbered);
+      toast({ title: "Copied numbered thread", description: "Numbered thread copied to clipboard." });
+    } catch {
+      toast({ title: "Copy failed", description: "Clipboard access was blocked by the browser.", variant: "destructive" });
+    }
+  };
+
+  const handleExportMarkdown = () => {
+    const exportContext = {
+      version: currentVersion,
+      storyTitle: storyQuery.data?.title,
+      opportunityConcept: opportunityQuery.data?.concept,
+      evidence: exportEvidence,
+    };
+    const markdown = formatArtifactMarkdownExport(artifact, exportContext);
+    const filename = buildArtifactExportFilename(artifact, exportContext);
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+    toast({ title: "Exported Markdown", description: `Downloaded ${filename}` });
+  };
 
   // Target Account resolution
   const matchedAccount = accountsQuery.data?.find((a) => a.platform === artifact.channel);
@@ -316,6 +501,12 @@ export function ArtifactReviewView({
     storyTitle: storyQuery.data?.title,
     ideaTitle: opportunityQuery.data?.concept,
   });
+
+  const claimAudit = parseClaimAuditSummary(artifact.attribution);
+  const evidenceById = new Map<number, ArtifactExportEvidence>();
+  for (const item of rawEvidence) {
+    if (typeof item.id === "number") evidenceById.set(item.id, item);
+  }
 
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 md:p-6 max-w-6xl mx-auto gap-6" data-testid="view-artifact-review">
@@ -378,7 +569,9 @@ export function ArtifactReviewView({
                 <span className="capitalize">{artifact.format.replace(/_/g, " ")}</span>
               </div>
               <span className="text-xs text-muted-foreground">
-                {text.length} characters
+                {isThread
+                  ? `${(editing ? draftUnits : threadUnits).length} posts · ${text.length} characters`
+                  : `${text.length} characters`}
               </span>
             </CardHeader>
 
@@ -389,13 +582,77 @@ export function ArtifactReviewView({
                     <Edit3 className="h-3.5 w-3.5" />
                     Editing will create Version {history.length + 1} in draft status.
                   </div>
-                  <Textarea
-                    value={draftText}
-                    onChange={(e) => setDraftText(e.target.value)}
-                    rows={8}
-                    className="font-sans text-sm leading-relaxed"
-                    data-testid="textarea-review-edit"
-                  />
+                  {isThread ? (
+                    <div className="space-y-3" data-testid="editor-thread-units">
+                      {draftUnits.map((unit, idx) => {
+                        const overBudget = unit.length > X_POST_CHAR_BUDGET;
+                        const fieldId = `textarea-thread-unit-${idx}`;
+                        return (
+                          <div key={idx} className="space-y-1.5 rounded-md border p-3 bg-muted/10">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <label htmlFor={fieldId} className="font-medium text-foreground">
+                                Post {idx + 1} of {draftUnits.length}
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={overBudget ? "text-destructive font-medium" : "text-muted-foreground"}
+                                  data-testid={`text-thread-unit-count-${idx}`}
+                                >
+                                  {unit.length} / {X_POST_CHAR_BUDGET}
+                                </span>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                                  disabled={draftUnits.length <= 1}
+                                  onClick={() =>
+                                    setDraftUnits((prev) => prev.filter((_, unitIdx) => unitIdx !== idx))
+                                  }
+                                  aria-label={`Remove post ${idx + 1}`}
+                                  data-testid={`button-thread-remove-unit-${idx}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                            <Textarea
+                              id={fieldId}
+                              value={unit}
+                              onChange={(e) => {
+                                const next = [...draftUnits];
+                                next[idx] = e.target.value;
+                                setDraftUnits(next);
+                              }}
+                              rows={3}
+                              className="font-sans text-sm leading-relaxed"
+                              data-testid={`textarea-thread-unit-${idx}`}
+                            />
+                          </div>
+                        );
+                      })}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 text-xs"
+                        onClick={() => setDraftUnits((prev) => [...prev, ""])}
+                        data-testid="button-thread-add-unit"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Post to Thread
+                      </Button>
+                    </div>
+                  ) : (
+                    <Textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      rows={8}
+                      aria-label="Edit content"
+                      className="font-sans text-sm leading-relaxed"
+                      data-testid="textarea-review-edit"
+                    />
+                  )}
                   <div className="flex gap-2 justify-end">
                     <Button
                       size="sm"
@@ -408,12 +665,28 @@ export function ArtifactReviewView({
                     <Button
                       size="sm"
                       onClick={() => reviseMutation.mutate()}
-                      disabled={reviseMutation.isPending || !draftText.trim()}
+                      disabled={reviseMutation.isPending || !canSaveEdit}
                       data-testid="button-review-save-edit"
                     >
                       Save Version {history.length + 1}
                     </Button>
                   </div>
+                </div>
+              ) : isThread && threadUnits.length > 0 ? (
+                <div className="space-y-3" data-testid="text-review-rendered-content">
+                  {threadUnits.map((unit, idx) => (
+                    <div key={idx} className="rounded-md border bg-muted/10 p-3 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span className="font-mono font-medium">
+                          {idx + 1}/{threadUnits.length}
+                        </span>
+                        <span className={unit.length > X_POST_CHAR_BUDGET ? "text-destructive font-medium" : ""}>
+                          {unit.length} / {X_POST_CHAR_BUDGET}
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed font-sans">{unit}</p>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div
@@ -468,8 +741,172 @@ export function ArtifactReviewView({
           )}
         </div>
 
-        {/* Right: Metadata & Workflow Actions */}
+        {/* Right: Metadata, Claim Audit & Workflow Actions */}
         <div className="lg:col-span-4 space-y-4">
+          {claimAudit.hasAuditData && (
+            <Card className="border shadow-xs" data-testid="card-claim-audit">
+              <CardHeader className="pb-3 border-b bg-muted/20">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    {!claimAudit.hasClaimAudit ? (
+                      <FileSearch className="h-3.5 w-3.5 text-muted-foreground" />
+                    ) : claimAudit.unsupportedCount > 0 || claimAudit.qualityFlags.length > 0 ? (
+                      <ShieldAlert className="h-3.5 w-3.5 text-warning" />
+                    ) : (
+                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                    )}
+                    Evidence &amp; Claim Audit
+                  </CardTitle>
+                  {claimAudit.paraphraseOverlap > 0 && (
+                    <span
+                      className={`text-[11px] font-mono ${
+                        claimAudit.paraphraseOverlap >= 0.35
+                          ? "text-destructive font-semibold"
+                          : "text-muted-foreground"
+                      }`}
+                      data-testid="text-paraphrase-overlap"
+                    >
+                      {Math.round(claimAudit.paraphraseOverlap * 100)}% overlap
+                    </span>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 space-y-3 text-xs">
+                <div className="flex flex-wrap gap-1.5">
+                  {claimAudit.hasClaimAudit ? (
+                    <>
+                      <Badge
+                        variant="secondary"
+                        className="text-[11px]"
+                        data-testid="badge-claims-supported"
+                      >
+                        {claimAudit.supportedCount} supported
+                      </Badge>
+                      <Badge
+                        variant={claimAudit.unsupportedCount > 0 ? "destructive" : "outline"}
+                        className="text-[11px]"
+                        data-testid="badge-claims-unsupported"
+                      >
+                        {claimAudit.unsupportedCount} unsupported
+                      </Badge>
+                      {claimAudit.opinionCount > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="text-[11px]"
+                          data-testid="badge-claims-opinion"
+                        >
+                          {claimAudit.opinionCount} opinion
+                        </Badge>
+                      )}
+                    </>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="text-[11px] text-muted-foreground"
+                      data-testid="badge-legacy-provenance"
+                    >
+                      Legacy provenance (no claim audit)
+                    </Badge>
+                  )}
+                  {claimAudit.evidenceIds.length > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="text-[11px] font-mono"
+                      data-testid="badge-audit-evidence-count"
+                    >
+                      <FileSearch className="h-3 w-3 mr-1" />
+                      {claimAudit.evidenceIds.length} source{claimAudit.evidenceIds.length === 1 ? "" : "s"}
+                    </Badge>
+                  )}
+                </div>
+
+                {claimAudit.qualityFlags.length > 0 && (
+                  <div
+                    className="rounded-md border border-warning/30 bg-warning/10 p-2.5 space-y-1.5"
+                    data-testid="list-quality-flags"
+                  >
+                    <p className="font-medium text-warning flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      Quality &amp; Grounding Warnings
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {claimAudit.qualityFlags.map((flag) => (
+                        <Badge
+                          key={flag}
+                          variant="outline"
+                          className="text-[11px] border-warning/40 text-foreground bg-background/70"
+                          data-testid={`badge-quality-flag-${flag}`}
+                        >
+                          {QUALITY_FLAG_LABELS[flag] ?? flag.replace(/_/g, " ")}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {claimAudit.claims.length > 0 && (
+                  <div className="space-y-2" data-testid="list-audited-claims">
+                    {claimAudit.claims.map((claim, idx) => (
+                      <div
+                        key={`${claim.unitIndex}-${idx}`}
+                        className="rounded-md border p-2 space-y-1 bg-muted/10"
+                        data-testid={`item-audited-claim-${idx}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge
+                            variant={
+                              claim.status === "unsupported"
+                                ? "destructive"
+                                : claim.status === "supported"
+                                  ? "secondary"
+                                  : "outline"
+                            }
+                            className="text-[10px] uppercase"
+                          >
+                            {claim.status}
+                          </Badge>
+                          {claim.evidenceIds.length > 0 && (
+                            <span className="text-[11px] font-mono text-muted-foreground">
+                              {claim.evidenceIds.map((id) => `#${id}`).join(", ")}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-foreground break-words leading-snug">{claim.claimText}</p>
+                        {claim.reason && (
+                          <p className="text-[11px] text-muted-foreground">{claim.reason}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {claimAudit.evidenceIds.length > 0 && (
+                  <div className="pt-1 border-t space-y-1" data-testid="list-audit-evidence">
+                    <span className="text-[11px] font-medium text-muted-foreground block">
+                      Linked Evidence
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {claimAudit.evidenceIds.map((id) => {
+                        const match = evidenceById.get(id);
+                        return (
+                          <Badge
+                            key={id}
+                            variant="outline"
+                            className="text-[11px] font-mono max-w-full truncate"
+                            title={match?.excerpt || `Evidence #${id}`}
+                          >
+                            #{id}
+                            {match?.excerpt ? ` · ${match.excerpt.slice(0, 32)}` : ""}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card className="border shadow-xs">
             <CardHeader className="pb-3 border-b bg-muted/20">
               <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -527,10 +964,7 @@ export function ArtifactReviewView({
                         variant="outline"
                         size="sm"
                         className="gap-1.5"
-                        onClick={() => {
-                          setDraftText(text);
-                          setEditing(true);
-                        }}
+                        onClick={openEditor}
                         data-testid="button-review-edit"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
@@ -582,10 +1016,7 @@ export function ArtifactReviewView({
                         variant="outline"
                         size="sm"
                         className="gap-1.5"
-                        onClick={() => {
-                          setDraftText(text);
-                          setEditing(true);
-                        }}
+                        onClick={openEditor}
                         data-testid="button-review-edit"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
@@ -635,10 +1066,7 @@ export function ArtifactReviewView({
                       variant="ghost"
                       size="sm"
                       className="w-full text-xs text-muted-foreground mt-2"
-                      onClick={() => {
-                        setDraftText(text);
-                        setEditing(true);
-                      }}
+                      onClick={openEditor}
                       data-testid="button-review-new-version"
                     >
                       Create another version
@@ -646,6 +1074,50 @@ export function ArtifactReviewView({
                   </div>
                 </>
               )}
+
+              {/* Export-First Copy & Markdown Actions (available on all states) */}
+              <div className="pt-3 mt-2 border-t space-y-2" data-testid="section-artifact-export">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
+                  Copy &amp; Export
+                </span>
+                <div className="grid grid-cols-1 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-center gap-1.5 text-xs"
+                    onClick={() => void handleCopyPlainText()}
+                    data-testid="button-copy-artifact"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Text
+                  </Button>
+                  {isThread && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-center gap-1.5 text-xs"
+                      onClick={() => void handleCopyThread()}
+                      data-testid="button-copy-thread"
+                    >
+                      <ListOrdered className="h-3.5 w-3.5" />
+                      Copy Thread
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-center gap-1.5 text-xs"
+                    onClick={handleExportMarkdown}
+                    data-testid="button-export-markdown"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export Markdown
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>

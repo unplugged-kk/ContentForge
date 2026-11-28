@@ -1,4 +1,4 @@
-import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
+import rateLimit, { ipKeyGenerator, type RateLimitRequestHandler } from "express-rate-limit";
 
 /**
  * Rate limiting for ContentForge.
@@ -46,6 +46,19 @@ export const authLimiter: RateLimitRequestHandler = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { message: "Too many auth attempts. Try again in a minute." },
+});
+
+/** Billable AI, research, and media routes. Keyed by the signed-in user. */
+export const aiLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: 60 * 1000,
+  limit: process.env.CONTENTFORGE_E2E_SERVER === "1" ? 1000 : 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const userId = (req as { userId?: number }).userId;
+    return userId ? `user:${userId}` : ipKeyGenerator(req.ip ?? "");
+  },
+  message: { message: "Too many AI or research requests. Try again in a minute." },
 });
 
 export const publishLimiter: RateLimitRequestHandler = rateLimit({

@@ -44,9 +44,11 @@ import {
   rejectArtifact,
   submitArtifactForReview,
   ArtifactMediaReferenceError,
+  ArtifactOpportunityKilledError,
   InvalidArtifactPayloadError,
   ArtifactStateError,
 } from "./artifact";
+import { createLearningRecorder } from "./learning/record";
 import { publicationIdempotencyKey } from "./scheduling";
 import {
   channelSupportsFormat,
@@ -152,6 +154,9 @@ function memoryStore() {
     },
     async getArtifact(id: number) {
       return arts.find((a) => a.id === id);
+    },
+    async listArtifactsByOpportunity(opportunityId: number) {
+      return arts.filter((a) => a.opportunityId === opportunityId);
     },
     async getArtifactByGenerationJob(generationJobId: number) {
       return arts.find((a) => a.generationJobId === generationJobId);
@@ -512,6 +517,94 @@ describe("artifact boundary", () => {
       { artifacts: store },
     );
     assert.equal(second.readiness, "draft", "a new revision starts unapproved");
+  });
+
+  it("refuses an Artifact under a killed Opportunity, and writes no row", async () => {
+    const store = memoryStore();
+    const opp = await store.insertOpportunity({
+      ...opportunity({ status: "killed" }),
+      killReason: "off-pillar",
+    } as never);
+
+    await assert.rejects(
+      () =>
+        createArtifact(
+          { ...base, opportunityId: opp.id, payload: { text: "x" } },
+          { artifacts: store },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof ArtifactOpportunityKilledError);
+        assert.equal(error.opportunityId, opp.id);
+        assert.equal(error.killReason, "off-pillar", "the reason travels with the refusal");
+        return true;
+      },
+    );
+    assert.equal(store.arts.length, 0, "no partially-created revision survives a refusal");
+  });
+
+  it("still authors under a proposed or selected Opportunity", async () => {
+    const store = memoryStore();
+    for (const status of ["proposed", "selected"] as const) {
+      const opp = await store.insertOpportunity(opportunity({ status }) as never);
+      const artifact = await createArtifact(
+        { ...base, opportunityId: opp.id, payload: { text: `ok-${status}` } },
+        { artifacts: store },
+      );
+      assert.equal(artifact.readiness, "draft");
+    }
+    assert.equal(store.arts.length, 2, "the guard refuses only the killed status");
+  });
+
+  it("a killed Opportunity cannot reach approval and scheduling", async () => {
+    const store = memoryStore();
+    const opp = await store.insertOpportunity(opportunity({ status: "killed" }) as never);
+
+    await assert.rejects(
+      () => createArtifact({ ...base, opportunityId: opp.id, payload: { text: "x" } }, { artifacts: store }),
+      ArtifactOpportunityKilledError,
+    );
+    assert.equal(store.arts.length, 0);
+  });
+
+  it("records approvedBy actor (human default vs automation_trusted) in approval learning signal payloads", async () => {
+    const store = memoryStore();
+    const signals: Array<{ signalType: string; payload: Record<string, unknown> }> = [];
+    let signalId = 0;
+    const emptyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [],
+          }),
+        }),
+      }),
+    } as never;
+    const learning = createLearningRecorder(
+      {
+        insertLearningSignal: async (row) => {
+          signalId += 1;
+          signals.push({ signalType: row.signalType, payload: row.payload as Record<string, unknown> });
+          return { row: { id: signalId, ...row } as never, created: true };
+        },
+      } as never,
+      emptyDb,
+    );
+
+    const humanArtifact = await createArtifact({ ...base, payload: { text: "human approved" } }, { artifacts: store });
+    await submitArtifactForReview(humanArtifact.id, { artifacts: store });
+    await approveArtifact(humanArtifact.id, { artifacts: store, learning });
+
+    const trustedArtifact = await createArtifact(
+      { ...base, payload: { text: "trusted approved" } },
+      { artifacts: store },
+    );
+    await submitArtifactForReview(trustedArtifact.id, { artifacts: store });
+    await approveArtifact(trustedArtifact.id, { artifacts: store, learning }, { actor: "automation_trusted" });
+
+    const approvals = signals.filter((s) => s.signalType === "approval");
+    assert.equal(approvals.length, 2);
+    assert.equal(approvals[0].payload.approvedBy, "human");
+    assert.equal(approvals[1].payload.approvedBy, "automation_trusted");
   });
 });
 

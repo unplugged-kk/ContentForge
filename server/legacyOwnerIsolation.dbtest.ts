@@ -257,6 +257,7 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
    * Authorization header, not on internal state.
    */
   it("never sends a foreign owner's connected-account token to the provider", async () => {
+    const previousFallback = process.env.ALLOW_ENV_CHANNEL_FALLBACK;
     const previousBaseUrl = process.env.LINKEDIN_API_BASE_URL;
     const previousToken = process.env.LINKEDIN_ACCESS_TOKEN;
     const previousUrn = process.env.LINKEDIN_AUTHOR_URN;
@@ -276,6 +277,7 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
     await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
     const providerPort = (provider.address() as { port: number }).port;
 
+    delete process.env.ALLOW_ENV_CHANNEL_FALLBACK;
     process.env.LINKEDIN_API_BASE_URL = `http://127.0.0.1:${providerPort}`;
     process.env.LINKEDIN_ACCESS_TOKEN = "deployment-env-token";
     process.env.LINKEDIN_AUTHOR_URN = "urn:li:person:deployment_default";
@@ -292,9 +294,15 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
       const createdAccountId = account.id;
 
       try {
-        // Owner A has no connected LinkedIn account: A must fall back to the
-        // deployment env pair, and specifically never to owner B's stored row.
-        await postTextToLinkedIn("Owner A publication attempt", ownerA);
+        await assert.rejects(
+          () => postTextToLinkedIn("Owner A publication attempt", ownerA),
+          /LINKEDIN_CONFIG_MISSING/,
+          "owner A fails closed without a connected account or explicit env fallback opt-in",
+        );
+        assert.equal(seen.length, 0);
+
+        process.env.ALLOW_ENV_CHANNEL_FALLBACK = "1";
+        await postTextToLinkedIn("Owner A opted-in fallback attempt", ownerA);
         assert.equal(seen.length, 1);
         assert.equal(
           seen[0].authorization,
@@ -303,7 +311,6 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
         );
         assert.equal(seen[0].author, "urn:li:person:deployment_default");
 
-        // Owner B keeps their own credential, which outranks the env default.
         await postTextToLinkedIn("Owner B publication attempt", ownerB);
         assert.equal(seen.length, 2);
         assert.equal(seen[1].authorization, "Bearer owner-b-linkedin-token");
@@ -313,6 +320,8 @@ describe("legacy route owner isolation (real HTTP + PostgreSQL)", () => {
       }
     } finally {
       await new Promise<void>((resolve, reject) => provider.close((error) => error ? reject(error) : resolve()));
+      if (previousFallback === undefined) delete process.env.ALLOW_ENV_CHANNEL_FALLBACK;
+      else process.env.ALLOW_ENV_CHANNEL_FALLBACK = previousFallback;
       if (previousBaseUrl === undefined) delete process.env.LINKEDIN_API_BASE_URL;
       else process.env.LINKEDIN_API_BASE_URL = previousBaseUrl;
       if (previousToken === undefined) delete process.env.LINKEDIN_ACCESS_TOKEN;

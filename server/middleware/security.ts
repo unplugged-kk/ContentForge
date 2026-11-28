@@ -18,7 +18,7 @@ const auth0Origin = auth0Config ? [new URL(auth0Config.issuer).origin] : [];
  * - referrerPolicy strict-origin-when-cross-origin avoids leaking the session
  *   cookie via Referer.
  */
-export const securityHeaders: RequestHandler = helmet({
+const helmetMiddleware: RequestHandler = helmet({
   contentSecurityPolicy: {
     useDefaults: true,
     directives: {
@@ -52,5 +52,12 @@ export const securityHeaders: RequestHandler = helmet({
     : false,
   noSniff: true,
   referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  xssFilter: true,
 });
+
+export const securityHeaders: RequestHandler = (req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  );
+  return helmetMiddleware(req, res, next);
+};

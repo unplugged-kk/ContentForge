@@ -8,7 +8,7 @@
  * stay importable, and tests can inject their own database handle.
  */
 
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import * as schema from "@shared/schema";
@@ -27,14 +27,13 @@ export type RssConfigLoader = (ctx: RssConfigContext) => Promise<RssProviderConf
 
 /**
  * Build a loader bound to a specific database handle. When a userId is
- * supplied, legacy rows with no user_id are included so pre-Phase-C sources
- * keep working until per-user isolation lands.
+ * supplied, only that user's feeds are loaded. Unowned feeds stay hidden.
  */
 export function createRssConfigLoader(database: RssConfigDatabase): RssConfigLoader {
   return async (ctx: RssConfigContext = {}) => {
     const userFilter =
       ctx.userId != null
-        ? or(eq(rssSources.userId, ctx.userId), isNull(rssSources.userId))
+        ? eq(rssSources.userId, ctx.userId)
         : undefined;
 
     const rows = await database

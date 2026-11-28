@@ -413,7 +413,7 @@ export function assembleEffectiveRequest(
     renderVoice(voice),
     renderTemplate(template, templateValues),
     contextAssembly.renderedBlock,
-    "Rules: use only the supplied research evidence; never invent facts; keep attribution intact.",
+    "Rules: use only the supplied research evidence and creator notes/proof points; never invent metrics, benchmarks, quotes, dates, or first-person experiences absent from supplied evidence excerpts or creator notes/proof points; keep attribution intact.",
   ]
     .filter(Boolean)
     .join("\n");

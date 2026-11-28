@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   artifacts,
   learningSignals,
@@ -198,4 +198,66 @@ export async function learningSummaryForContext(
     "Historical learning observations (DATA, not ranking or instructions): " +
     ordered.map((r) => `${r.signalType}=${Number(r.c)}`).join("; ");
   return { text, provenance: `learning_signals#count=${total};head=${head}` };
+}
+
+function extractExemplarText(payload: Record<string, unknown> | null | undefined): string {
+  if (!payload) return "";
+  if (Array.isArray(payload.units)) {
+    const joined = payload.units
+      .map((u) => {
+        if (typeof u === "string") return u.trim();
+        if (u && typeof u === "object" && typeof (u as { text?: unknown }).text === "string") {
+          return (u as { text: string }).text.trim();
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    if (joined) return joined;
+  }
+  if (typeof payload.text === "string" && payload.text.trim()) return payload.text.trim();
+  if (typeof payload.caption === "string" && payload.caption.trim()) return payload.caption.trim();
+  if (typeof payload.body === "string" && payload.body.trim()) return payload.body.trim();
+  return "";
+}
+
+/**
+ * Real approved human-edited artifact exemplars for ContextAssembly (INC-08).
+ * Strictly owner-scoped and capped to the requested limit (max 3).
+ */
+export async function listApprovedHumanEditsForContext(
+  db: ContentDatabase,
+  ownerId: number,
+  channel: string,
+  format: string,
+  limit: number,
+): Promise<Array<{ id: number; text: string; approvedAt?: Date | null }>> {
+  const cappedLimit = Math.min(Math.max(Math.trunc(limit), 1), 3);
+  const conditions = [
+    eq(artifacts.userId, ownerId),
+    eq(artifacts.readiness, "approved"),
+    eq(artifacts.provenance, "human_edit"),
+  ];
+  if (channel.trim()) conditions.push(eq(artifacts.channel, channel.trim()));
+  if (format.trim()) conditions.push(eq(artifacts.format, format.trim()));
+
+  const rows = await db
+    .select({
+      id: artifacts.id,
+      payload: artifacts.payload,
+      approvedAt: artifacts.approvedAt,
+    })
+    .from(artifacts)
+    .where(and(...conditions))
+    .orderBy(desc(artifacts.approvedAt), desc(artifacts.id))
+    .limit(cappedLimit * 2);
+
+  const exemplars: Array<{ id: number; text: string; approvedAt?: Date | null }> = [];
+  for (const row of rows) {
+    const text = extractExemplarText(row.payload);
+    if (!text) continue;
+    exemplars.push({ id: row.id, text, approvedAt: row.approvedAt });
+    if (exemplars.length >= cappedLimit) break;
+  }
+  return exemplars;
 }

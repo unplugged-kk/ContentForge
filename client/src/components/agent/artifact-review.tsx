@@ -18,6 +18,7 @@ import { XCircle } from "lucide-react";
 import { classifyAgentError } from "@shared/agent-ui";
 import { Link } from "wouter";
 import { getCanonicalReviewUrl } from "@/lib/agent-workspace-state";
+import { buildEditedArtifactPayload, formatArtifactPlainText } from "@/lib/artifact-export";
 import { PublicationCard, VisualAssetCard } from "./workspace-cards";
 
 type Artifact = {
@@ -32,18 +33,6 @@ type Artifact = {
   opportunityId: number | null;
   generationJobId: number | null;
 };
-
-function payloadText(payload: Record<string, unknown> | null): string {
-  if (!payload) return "";
-  if (typeof payload.text === "string") return payload.text;
-  if (Array.isArray(payload.units)) {
-    return payload.units
-      .map((unit) => (typeof unit === "string" ? unit : typeof (unit as { text?: string }).text === "string" ? (unit as { text: string }).text : ""))
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
 
 export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   const { toast } = useToast();
@@ -88,7 +77,7 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   });
 
   const artifact = artifactQuery.data;
-  const text = payloadText(artifact?.payload ?? null);
+  const text = artifact ? formatArtifactPlainText(artifact) : "";
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["/api/artifacts", artifactId] });
@@ -106,9 +95,14 @@ export function ArtifactReviewCard({ artifactId }: { artifactId: number }) {
   const revise = useMutation({
     mutationFn: async () => {
       if (!artifact) throw new Error("missing artifact");
+      const nextPayload = buildEditedArtifactPayload(
+        artifact.format,
+        artifact.payload,
+        draft,
+      );
       const res = await apiRequest("POST", `/api/artifacts/${artifact.id}/revise`, {
         baseArtifactId: artifact.id,
-        payload: { ...(artifact.payload ?? {}), text: draft },
+        payload: nextPayload,
         attributionReason: "human workspace edit",
       });
       return res.json();

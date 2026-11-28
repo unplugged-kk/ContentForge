@@ -185,6 +185,7 @@ export async function publishArtifactToChannels(
           recurrence: target.recurrence,
           channel: target.channel,
           intentKey,
+          ownerUserId: callerUserId ?? undefined,
         },
         { content: deps.content },
       );

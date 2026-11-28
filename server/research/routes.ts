@@ -321,7 +321,7 @@ async function loadOwnedJob(
   // Same default-user convention as job creation (single-operator today), so
   // anonymous/legacy access keeps working while distinct users stay isolated.
   const userId = requireOwnerId(req);
-  if (job.userId !== null && job.userId !== userId) {
+  if (job.userId !== userId) {
     res.status(404).json({ message: "Research job not found" });
     return undefined;
   }

@@ -9,3 +9,13 @@ export {
   type QualityProfile,
   type QualitySignals,
 } from "./signals";
+
+export {
+  auditArtifactClaims,
+  computeParaphraseOverlap,
+  type AuditArtifactClaimsInput,
+  type AuditedClaim,
+  type ClaimEvidenceAttribution,
+  type ClaimStatus,
+  type ModelClaimInput,
+} from "./claimCheck";

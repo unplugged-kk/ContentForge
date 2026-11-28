@@ -40,6 +40,10 @@ export interface CreateStudioProps {
   initialConcept?: string;
   /** Handed off from Sources: the source carried in `?sourceUrl=`. */
   initialSourceUrl?: string;
+  /** Handed off from Sources: the research job carried in `?researchJobId=`. */
+  initialResearchJobId?: number;
+  /** Handed off from Sources: evidence IDs carried in `?evidenceIds=`. */
+  initialEvidenceIds?: number[];
 }
 
 type StartWithSource = "story" | "idea" | "source" | "blank";
@@ -50,6 +54,20 @@ interface StoryItem {
   insightBody: string;
   provenance: string;
   angles?: string[];
+}
+
+const CREATOR_NOTES_HEADER = "First-hand notes & proof points:";
+
+function extractStoryCreatorNotes(story: StoryItem | null): string | null {
+  if (!story) return null;
+  const body = story.insightBody?.trim() ?? "";
+  if (!body) return null;
+  const idx = body.indexOf(CREATOR_NOTES_HEADER);
+  if (idx >= 0) {
+    const after = body.slice(idx + CREATOR_NOTES_HEADER.length).trim();
+    return after.length > 0 ? after : null;
+  }
+  return story.provenance === "human" ? body : null;
 }
 
 interface IdeaItem {
@@ -80,6 +98,8 @@ export function CreateStudio({
   initialIdeaId,
   initialConcept,
   initialSourceUrl,
+  initialResearchJobId,
+  initialEvidenceIds = [],
 }: CreateStudioProps) {
   const { toast } = useToast();
 
@@ -111,7 +131,13 @@ export function CreateStudio({
   // State
   const [contentType, setContentType] = useState<ContentType>(initialType);
   const [startWith, setStartWith] = useState<StartWithSource>(
-    initialStoryId ? "story" : initialIdeaId ? "idea" : initialSourceUrl ? "source" : "blank",
+    initialStoryId
+      ? "story"
+      : initialIdeaId
+        ? "idea"
+        : initialSourceUrl || initialResearchJobId
+          ? "source"
+          : "blank",
   );
 
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(initialStoryId ?? null);
@@ -121,6 +147,7 @@ export function CreateStudio({
 
   const [channel, setChannel] = useState<string>("x");
   const [concept, setConcept] = useState<string>(initialConcept ?? "");
+  const [creatorNotes, setCreatorNotes] = useState<string>("");
   const [objective, setObjective] = useState<string>("Educate and share a concrete insight");
   const [audience, setAudience] = useState<string>("Platform & software engineers");
   const [angle, setAngle] = useState<string>("");
@@ -170,15 +197,28 @@ export function CreateStudio({
 
       let storyId = selectedStoryId;
 
-      // If no pre-existing story selected, create a human story row
+      // If no pre-existing story selected, create a Story preserving research provenance when present
       if (!storyId) {
-        const storyRes = await apiRequest("POST", "/api/stories", {
+        const hasResearchProvenance = Boolean(initialResearchJobId && startWith === "source");
+        const baseInsight = concept.trim() || "Direct generation concept";
+        const trimmedNotes = creatorNotes.trim();
+        const insightBody = trimmedNotes
+          ? `${baseInsight}\n\nFirst-hand notes & proof points:\n${trimmedNotes}`
+          : baseInsight;
+        const storyPayload: Record<string, unknown> = {
           title: concept.trim().slice(0, 100) || "Direct content concept",
-          insightBody: concept.trim() || "Direct generation concept",
-          provenance: "human",
+          insightBody,
+          provenance: hasResearchProvenance ? "researched" : "human",
           status: "ready",
           angles: angle ? [angle] : [],
-        });
+        };
+        if (hasResearchProvenance && initialResearchJobId) {
+          storyPayload.researchJobId = initialResearchJobId;
+          if (initialEvidenceIds.length > 0) {
+            storyPayload.evidenceRefs = initialEvidenceIds;
+          }
+        }
+        const storyRes = await apiRequest("POST", "/api/stories", storyPayload);
         const createdStory = await storyRes.json();
         storyId = createdStory.id;
       }
@@ -244,6 +284,11 @@ export function CreateStudio({
   });
 
   const selectedVoice = voicesQuery.data?.find((v) => v.id === selectedVoiceId);
+  const selectedStory =
+    selectedStoryId !== null
+      ? storiesQuery.data?.find((s) => s.id === selectedStoryId) ?? null
+      : null;
+  const selectedStoryNotes = extractStoryCreatorNotes(selectedStory);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 md:p-6 max-w-5xl mx-auto gap-6" data-testid="create-studio-container">
@@ -310,7 +355,13 @@ export function CreateStudio({
                 className={`h-8 text-xs font-medium gap-1.5 ${
                   isSelected ? "border-foreground/30 shadow-2xs font-semibold" : "text-muted-foreground"
                 }`}
-                onClick={() => setStartWith(entry.id as StartWithSource)}
+                onClick={() => {
+                  const next = entry.id as StartWithSource;
+                  setStartWith(next);
+                  if (next !== "story") {
+                    setSelectedStoryId(null);
+                  }
+                }}
                 data-testid={`button-start-with-${entry.id}`}
               >
                 <entry.icon className="h-3.5 w-3.5" />
@@ -393,13 +444,20 @@ export function CreateStudio({
 
         {startWith === "source" && (
           <Card className="p-3 bg-muted/20 border-dashed space-y-2" data-testid="card-picker-source">
-            <span className="text-xs font-medium text-muted-foreground">Creating from a source:</span>
-            {initialSourceUrl ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Creating from a source:</span>
+              {initialResearchJobId && (
+                <Badge variant="outline" className="text-xs" data-testid="badge-create-research-provenance">
+                  Researched (Job #{initialResearchJobId})
+                </Badge>
+              )}
+            </div>
+            {initialSourceUrl || initialResearchJobId ? (
               <>
                 {initialConcept && (
                   <p className="text-xs font-semibold text-foreground break-words">{initialConcept}</p>
                 )}
-                {/^https?:\/\//i.test(initialSourceUrl) ? (
+                {initialSourceUrl && (/^https?:\/\//i.test(initialSourceUrl) ? (
                   <a
                     href={initialSourceUrl}
                     target="_blank"
@@ -411,9 +469,11 @@ export function CreateStudio({
                   </a>
                 ) : (
                   <span className="text-xs text-muted-foreground break-all">{initialSourceUrl}</span>
-                )}
+                ))}
                 <p className="text-xs text-muted-foreground italic">
-                  The topic above was carried over from this source. Edit it before generating.
+                  {initialResearchJobId
+                    ? "Research provenance and citations will stay attached when this content is generated."
+                    : "The topic above was carried over from this source. Edit it before generating."}
                 </p>
               </>
             ) : (
@@ -468,6 +528,45 @@ export function CreateStudio({
             data-testid="input-create-concept"
           />
         </div>
+
+        {/* Optional First-Hand Notes / Proof Points */}
+        {selectedStoryId !== null ? (
+          <div
+            className="rounded-md border border-dashed bg-muted/20 p-3 space-y-1 text-xs text-muted-foreground"
+            data-testid="note-story-creator-notes"
+          >
+            <p className="font-medium text-foreground">
+              First-hand notes come from Story #{selectedStoryId}
+            </p>
+            {selectedStoryNotes ? (
+              <p
+                className="whitespace-pre-wrap break-words text-muted-foreground"
+                data-testid="text-story-creator-notes"
+              >
+                {selectedStoryNotes}
+              </p>
+            ) : (
+              <p>
+                This existing Story has no attached first-hand notes. Switch to Blank canvas, Idea, or Source to author a new Story with your own notes.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="input-creator-notes">
+              Your first-hand notes / proof points (optional)
+            </label>
+            <Textarea
+              id="input-creator-notes"
+              value={creatorNotes}
+              onChange={(e) => setCreatorNotes(e.target.value)}
+              placeholder="Add first-hand observations, metrics you measured, or proof points to ground the draft without inventing claims"
+              rows={2}
+              className="text-sm leading-relaxed"
+              data-testid="input-creator-notes"
+            />
+          </div>
+        )}
 
         {/* Objective & Audience (2-col on desktop) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -644,7 +743,13 @@ export function CreateStudio({
           <p>
             <span className="text-muted-foreground">Source: </span>
             <span className="font-medium">
-              {selectedStoryId ? `Story #${selectedStoryId}` : selectedIdeaId ? `Idea #${selectedIdeaId}` : "Direct draft"}
+              {selectedStoryId
+                ? `Story #${selectedStoryId}`
+                : selectedIdeaId
+                  ? `Idea #${selectedIdeaId}`
+                  : initialResearchJobId && startWith === "source"
+                    ? `Research Job #${initialResearchJobId}`
+                    : "Direct draft"}
             </span>
           </p>
           {selectedVoice && (

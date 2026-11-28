@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import DOMPurify from "isomorphic-dompurify";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -584,7 +585,7 @@ IMPORTANT: Only mirror structural and stylistic patterns. Kishore's DevOps/multi
                   <div className="space-y-1">
                     <div
                       className="text-sm prose prose-sm dark:prose-invert max-w-none line-clamp-6 [&>*]:my-1"
-                      dangerouslySetInnerHTML={{ __html: variation.contentHtml || "" }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(variation.contentHtml || "") }}
                     />
                     <p className="text-xs text-muted-foreground">
                       {(variation.contentHtml || "").replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length} words

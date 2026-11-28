@@ -7,7 +7,7 @@ on:
 jobs:
   guard:
     name: Schema/Migration Consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -30,8 +30,10 @@ jobs:
 
       - name: Ensure generated migration files are committed
         run: |
-          if ! git diff --quiet -- migrations; then
-            echo "::error::Uncommitted migration drift detected. Run 'npm run db:generate' and commit migrations/*."
+          status="$(git status --porcelain -- migrations)"
+          if [ -n "$status" ]; then
+            echo "::error::Uncommitted or untracked migration drift detected. Run 'npm run db:generate' and commit migrations/*."
+            echo "$status"
             git --no-pager diff -- migrations
             exit 1
           fi

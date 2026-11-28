@@ -22,6 +22,10 @@ import { getInstagramConfigSummary, verifyInstagramAccessToken, isProfessionalAc
 import { getUserId, requireOwnerId } from "./middleware/userContext";
 import { isToday } from "date-fns";
 import { addThreadNumbering } from "./utils/threadUtils";
+import { fitUnitToBudget } from "./content/unitFit";
+import { checkScheduleWrite } from "./content/scheduleTime";
+import { normalisePostBody } from "./content/postBody";
+import { xUnitBudgetAt } from "./social/xTextLimits";
 import { getBrandSystemPrompt, platformForAiPrompt } from "./brandSystemPrompt";
 import { authLimiter, publishLimiter } from "./middleware/rateLimit";
 import DOMPurify from "isomorphic-dompurify";
@@ -48,13 +52,21 @@ function sanitizeHtml(input: unknown): string {
       "table", "thead", "tbody", "tr", "th", "td",
       "span", "div",
     ],
-    ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "id", "target", "rel"],
+    ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "target", "rel"],
     ALLOW_DATA_ATTR: false,
   });
 }
 
 const uploadsDir = process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+function publicConnectedAccount(account: object, accessToken: string) {
+  return {
+    ...account,
+    accessToken: accessToken ? "••••••" + accessToken.slice(-4) : null,
+    refreshToken: undefined,
+  };
+}
 
 function sessionUserId(req: { userId?: number }): number {
   // Phase 30.1: fail closed. The /api authGate guarantees an authenticated
@@ -114,18 +126,28 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  app.use("/uploads", (await import("express")).default.static(uploadsDir));
+  const { requireAuth } = await import("./auth");
+  const expressStatic = (await import("express")).default.static;
+  app.use(
+    "/uploads",
+    requireAuth,
+    (_req, res, next) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      next();
+    },
+    expressStatic(uploadsDir, { dotfiles: "deny", index: false, fallthrough: false }),
+  );
 
   // ==================== PILLARS ====================
   app.get("/api/pillars", async (req, res) => {
     try { res.json(await storage.getPillars(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== POSTS ====================
   app.get("/api/posts", async (req, res) => {
     try { res.json(await storage.getPosts(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   /** Ready + today's scheduled — approval / daily queue. */
@@ -151,7 +173,7 @@ export async function registerRoutes(
       });
       res.json(queue);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -160,12 +182,14 @@ export async function registerRoutes(
       const result = await storage.getPost(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/posts", async (req, res) => {
     try {
       const parsed = createPostBody.parse(req.body);
+      const guard = checkScheduleWrite(parsed.status, parsed.scheduledAt);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
       const { tweets: tweetData, ...postData } = parsed;
       const result = await storage.createPost(
         sessionUserId(req),
@@ -189,21 +213,42 @@ export async function registerRoutes(
 
   app.put("/api/posts/:id", async (req, res) => {
     try {
-      const result = await storage.updatePost(sessionUserId(req), parseInt(req.params.id), req.body);
+      const normalised = normalisePostBody(req.body);
+      if (normalised.bad.length > 0) {
+        return res.status(400).json({
+          message: `${normalised.bad.join(", ")} must be a valid ISO date string`,
+        });
+      }
+      const postId = parseInt(req.params.id);
+      const userId = sessionUserId(req);
+      let effectiveStatus = normalised.value.status as string | undefined;
+      if (effectiveStatus === undefined && normalised.value.scheduledAt !== undefined) {
+        const existing = await storage.getPost(userId, postId);
+        if (!existing) return res.status(404).json({ message: "Post not found" });
+        effectiveStatus = existing.status ?? undefined;
+      }
+      const guard = checkScheduleWrite(
+        effectiveStatus,
+        normalised.value.scheduledAt as string | Date | undefined,
+      );
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
+      const result = await storage.updatePost(userId, postId, normalised.value);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.patch("/api/posts/:id/status", async (req, res) => {
     try {
       const parsed = updateStatusBody.parse(req.body);
+      const guard = checkScheduleWrite(parsed.status, parsed.scheduledAt);
+      if (!guard.ok) return res.status(400).json({ message: guard.reason });
       const result = await storage.updatePostStatus(sessionUserId(req), parseInt(req.params.id), parsed.status, parsed.scheduledAt);
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -213,7 +258,7 @@ export async function registerRoutes(
       if (!deleted) return res.status(404).json({ message: "Post not found" });
       res.status(204).send();
     }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/posts/:id/publish", publishLimiter, async (req, res, next) => {
@@ -245,14 +290,14 @@ export async function registerRoutes(
       if (!result) return res.status(404).json({ message: "Post not found" });
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
   // ==================== IDEAS ====================
   app.get("/api/ideas", async (req, res) => {
     try { res.json(await storage.getIdeas(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/ideas/:id", async (req, res) => {
@@ -260,7 +305,7 @@ export async function registerRoutes(
       const idea = await storage.getIdea(sessionUserId(req), parseInt(req.params.id));
       if (!idea) return res.status(404).json({ message: "Idea not found" });
       res.json(idea);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/ideas", async (req, res) => {
@@ -280,7 +325,7 @@ export async function registerRoutes(
       if (!deleted) return res.status(404).json({ message: "Idea not found" });
       res.status(204).send();
     }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/ideas/:id/expand", async (req, res) => {
@@ -315,7 +360,7 @@ export async function registerRoutes(
   // ==================== TEMPLATES ====================
   app.get("/api/templates", async (req, res) => {
     try { res.json(await storage.getTemplates(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/templates/fill", async (req, res) => {
@@ -376,7 +421,7 @@ export async function registerRoutes(
   // ==================== ANALYTICS ====================
   app.get("/api/analytics/summary", async (req, res) => {
     try { res.json(await storage.getAnalyticsSummary(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/analytics/insights", async (req, res) => {
@@ -446,7 +491,7 @@ export async function registerRoutes(
 
       res.json({ topPosts, bestHours, pillarStats });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -463,7 +508,7 @@ export async function registerRoutes(
       await refreshXAnalytics(days, sessionUserId(req));
       res.json({ ok: true, days });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -500,7 +545,7 @@ export async function registerRoutes(
         period: { from: monthStart.toISOString(), to: now.toISOString() },
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -514,13 +559,13 @@ export async function registerRoutes(
       await syncPostAnalyticsFromX(postId, ownerUserId);
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
   app.get("/api/usage", async (req, res) => {
     try { res.json(await storage.getAiUsageLogs(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── AI USAGE DASHBOARD ────────────────────────────────────────────────────────
@@ -677,14 +722,14 @@ export async function registerRoutes(
         daysWindow: days,
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
   // ==================== ARTICLES ====================
   app.get("/api/articles", async (req, res) => {
     try { res.json(await storage.getArticles(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/articles/:id", async (req, res) => {
@@ -692,7 +737,7 @@ export async function registerRoutes(
       const result = await storage.getArticle(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Article not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/articles", async (req, res) => {
@@ -726,7 +771,7 @@ export async function registerRoutes(
       const result = await storage.updateArticle(sessionUserId(req), parseInt(req.params.id), req.body);
       if (!result) return res.status(404).json({ message: "Article not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/articles/:id", async (req, res) => {
@@ -735,7 +780,7 @@ export async function registerRoutes(
       if (!deleted) return res.status(404).json({ message: "Article not found" });
       res.status(204).send();
     }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/articles/upload-image", upload.single("image"), async (req, res) => {
@@ -782,7 +827,7 @@ export async function registerRoutes(
       ]);
 
       await logAiUsage(usage, latency, "expand_section");
-      res.json({ content: content.trim() });
+      res.json({ content: sanitizeHtml(content.trim()) });
     } catch (err: any) {
       console.error("Expand section error:", err);
       res.status(500).json({ message: "Failed to expand section." });
@@ -804,7 +849,7 @@ export async function registerRoutes(
 
       await logAiUsage(usage, latency, "generate_full_article");
       const wordCount = content.replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length;
-      res.json({ content: content.trim(), wordCount, estimatedReadMinutes: Math.ceil(wordCount / 200) });
+      res.json({ content: sanitizeHtml(content.trim()), wordCount, estimatedReadMinutes: Math.ceil(wordCount / 200) });
     } catch (err: any) {
       console.error("Generate full article error:", err);
       res.status(500).json({ message: "Failed to generate article." });
@@ -823,7 +868,7 @@ export async function registerRoutes(
       ]);
 
       await logAiUsage(usage, latency, "improve_section");
-      res.json({ content: content.trim() });
+      res.json({ content: sanitizeHtml(content.trim()) });
     } catch (err: any) {
       console.error("Improve error:", err);
       res.status(500).json({ message: "Failed to improve text." });
@@ -933,7 +978,7 @@ export async function registerRoutes(
       const capability = await getXArticlePublishCapability(sessionUserId(req));
       res.json(capability);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -964,7 +1009,7 @@ export async function registerRoutes(
   // ==================== SOURCE ANALYSIS / REFERENCES ====================
   app.get("/api/references", async (req, res) => {
     try { res.json(await storage.getReferences(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/references/:id", async (req, res) => {
@@ -972,7 +1017,7 @@ export async function registerRoutes(
       const result = await storage.getReference(sessionUserId(req), parseInt(req.params.id));
       if (!result) return res.status(404).json({ message: "Reference not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== URL DETECTION & EXTRACTION HELPERS ====================
@@ -1071,7 +1116,7 @@ export async function registerRoutes(
     const idMatch = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)/);
     if (!idMatch) throw new Error("Invalid ArXiv URL");
     const arxivId = idMatch[1];
-    const apiUrl = `http://export.arxiv.org/api/query?id_list=${arxivId}`;
+    const apiUrl = `https://export.arxiv.org/api/query?id_list=${arxivId}`;
     const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
     const xml = await response.text();
     const $ = cheerio.load(xml, { xml: true });
@@ -1483,7 +1528,7 @@ Return JSON:
       const data = await ingestRes.json();
       res.status(ingestRes.status).json(data);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1681,7 +1726,7 @@ ${isArticle
       if (isArticle) {
         variations = parsed.variations.map((v: any) => ({
           title: String(v.title || ref.title || "").trim(),
-          contentHtml: String(v.contentHtml || v.content || "").trim(),
+          contentHtml: sanitizeHtml(String(v.contentHtml || v.content || "").trim()),
           isArticle: true,
         }));
       } else {
@@ -1708,7 +1753,7 @@ ${isArticle
 
   app.get("/api/styles", async (req, res) => {
     try { res.json(await storage.getStyleProfiles(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/styles", async (req, res) => {
@@ -1720,7 +1765,7 @@ ${isArticle
         await storage.updateReference(sessionUserId(req), sourceReferenceId, { isStyleSaved: true });
       }
       res.json(profile);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/styles/:id", async (req, res) => {
@@ -1729,7 +1774,7 @@ ${isArticle
       if (!deleted) return res.status(404).json({ message: "Style profile not found" });
       res.status(204).send();
     }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/styles/:id/apply", async (req, res) => {
@@ -1760,7 +1805,7 @@ ${contentType === "thread" ? "Each tweet under 280 characters." : "Single tweet 
         return { tweets: numbered.map((content) => ({ content, charCount: content.length })) };
       });
       res.json({ variations, model: MODELS.TEXT, styleName: profile.name });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== ENHANCED REFERENCES ENDPOINTS ====================
@@ -1821,7 +1866,7 @@ Each tweet under ${charLimit} characters.` },
       if (!deleted) return res.status(404).json({ message: "Reference not found" });
       res.status(204).send();
     }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/references/:id/bookmark", async (req, res) => {
@@ -1830,7 +1875,7 @@ Each tweet under ${charLimit} characters.` },
       if (!ref) return res.status(404).json({ message: "Reference not found" });
       const result = await storage.updateReference(sessionUserId(req), parseInt(req.params.id), { isBookmarked: !ref.isBookmarked });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/references/:id/note", async (req, res) => {
@@ -1839,18 +1884,26 @@ Each tweet under ${charLimit} characters.` },
       const result = await storage.updateReference(sessionUserId(req), parseInt(req.params.id), { notes });
       if (!result) return res.status(404).json({ message: "Reference not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/references/batch/:batchId", async (req, res) => {
     try {
       const refs = await storage.getReferencesByBatch(sessionUserId(req), req.params.batchId);
       res.json(refs);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/bookmarklet", (req, res) => {
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const configured = process.env.APP_ORIGIN?.trim();
+    const host = req.get("host") ?? "";
+    const hostOk = /^[a-zA-Z0-9.-]+(:\d{1,5})?$/.test(host);
+    const baseUrl = configured && /^https?:\/\//.test(configured)
+      ? configured.replace(/\/+$/, "")
+      : hostOk
+        ? `${req.protocol}://${host}`
+        : null;
+    if (!baseUrl) return res.status(400).json({ message: "Invalid host" });
     const bookmarklet = `javascript:void(fetch('${baseUrl}/api/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:window.location.href})}).then(r=>r.json()).then(d=>alert('ContentForge: Saved! '+d.title)).catch(e=>alert('ContentForge: Error - '+e.message)))`;
     res.json({ bookmarklet, instructions: "Drag this to your bookmarks bar to capture any page into ContentForge." });
   });
@@ -1864,7 +1917,7 @@ Each tweet under ${charLimit} characters.` },
         hint: "Posting uses xQuick. Set XQUIK_API_KEY and XQUIK_ACCOUNT (the connected X username/account ID in xQuick). XQUIK_API_BASE_URL defaults to https://xquik.com/api/v1.",
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1875,7 +1928,7 @@ Each tweet under ${charLimit} characters.` },
         hint: "Publishing uses the Threads Graph API. Connect via POST /api/accounts/connect { platform: \"threads\", accessToken } or set THREADS_ACCESS_TOKEN and THREADS_USER_ID. Scopes: threads_basic, threads_content_publish, threads_manage_insights.",
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1886,7 +1939,7 @@ Each tweet under ${charLimit} characters.` },
         hint: "Publishing uses Instagram Content Publishing (professional accounts). Connect via POST /api/accounts/connect { platform: \"instagram\", accessToken } or set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID. Scopes: instagram_business_basic, instagram_business_content_publish, instagram_business_manage_insights.",
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1899,7 +1952,7 @@ Each tweet under ${charLimit} characters.` },
         hint: "Connect via GET /api/social/youtube/connect (Google OAuth offline). Real publishes require CONTENTFORGE_REAL_PUBLISH_E2E=1. Prefer private/unlisted for certification.",
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1932,7 +1985,7 @@ Each tweet under ${charLimit} characters.` },
       }
       return res.redirect(url);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -1991,7 +2044,7 @@ Each tweet under ${charLimit} characters.` },
         refreshToken: undefined,
       }));
       res.json(safeAccounts);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/accounts/connect", async (req, res) => {
@@ -2017,7 +2070,7 @@ Each tweet under ${charLimit} characters.` },
               isActive: true,
               profileData: accountData || {},
             });
-            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+            return res.json(publicConnectedAccount(account, accessToken));
           } else {
             const account = await storage.upsertConnectedAccount({
               platform: "x",
@@ -2026,7 +2079,7 @@ Each tweet under ${charLimit} characters.` },
               accessToken,
               isActive: true,
             });
-            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but could not verify with xQuick. Posting may not work until token is verified." });
+            return res.json({ ...publicConnectedAccount(account, accessToken), warning: "Token saved but could not verify with xQuick. Posting may not work until token is verified." });
           }
         } catch (e) {
           const account = await storage.upsertConnectedAccount({
@@ -2036,7 +2089,7 @@ Each tweet under ${charLimit} characters.` },
             accessToken,
             isActive: true,
           });
-          return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but xQuick verification request failed. Check your network." });
+          return res.json({ ...publicConnectedAccount(account, accessToken), warning: "Token saved but xQuick verification request failed. Check your network." });
         }
       }
 
@@ -2065,7 +2118,7 @@ Each tweet under ${charLimit} characters.` },
           isActive: true,
           profileData,
         });
-        return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+        return res.json(publicConnectedAccount(account, accessToken));
       }
 
       if (platform === "instagram") {
@@ -2095,11 +2148,11 @@ Each tweet under ${charLimit} characters.` },
           isActive: true,
           profileData,
         });
-        return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+        return res.json(publicConnectedAccount(account, accessToken));
       }
 
       return res.status(400).json({ message: `Unknown platform: ${platform}` });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/accounts/:id", async (req, res) => {
@@ -2107,7 +2160,7 @@ Each tweet under ${charLimit} characters.` },
       const deleted = await storage.deleteConnectedAccount(sessionUserId(req), parseInt(req.params.id));
       if (!deleted) return res.status(404).json({ message: "Account not found" });
       res.status(204).send();
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/accounts/:id/test", async (req, res) => {
@@ -2147,7 +2200,7 @@ Each tweet under ${charLimit} characters.` },
       }
 
       return res.json({ success: false, error: "Unknown platform" });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== IDEA DISCOVERY ====================
@@ -2155,7 +2208,7 @@ Each tweet under ${charLimit} characters.` },
     try {
       const batchId = req.query.batchId as string | undefined;
       res.json(await storage.getDiscoveredIdeas(sessionUserId(req), batchId));
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/discover/refresh", async (req, res) => {
@@ -2175,7 +2228,7 @@ Each tweet under ${charLimit} characters.` },
       const result = await storage.updateDiscoveredIdeaStatus(sessionUserId(req), parseInt(req.params.id), status);
       if (!result) return res.status(404).json({ message: "Idea not found" });
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/discover/ideas/:id/to-draft", async (req, res) => {
@@ -2190,7 +2243,7 @@ Each tweet under ${charLimit} characters.` },
       });
       await storage.updateDiscoveredIdeaStatus(sessionUserId(req), parseInt(req.params.id), "saved");
       res.json(idea);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== DISCOVERY SETTINGS & SOURCES ====================
@@ -2199,19 +2252,19 @@ Each tweet under ${charLimit} characters.` },
   // user read and overwrote every other user's custom keywords.
   app.get("/api/discover/settings", async (req, res) => {
     try { res.json(await storage.getDiscoverySettings(requireOwnerId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.put("/api/discover/settings", async (req, res) => {
     try { res.json(await storage.updateDiscoverySettings(requireOwnerId(req), req.body)); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/discover/sources", async (req, res) => {
     try {
       const [accounts, feeds] = await Promise.all([storage.getMonitoredAccounts(sessionUserId(req)), storage.getRssSources(sessionUserId(req))]);
       res.json({ accounts, feeds });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/discover/sources/rss", async (req, res) => {
@@ -2236,7 +2289,7 @@ Each tweet under ${charLimit} characters.` },
 
   app.get("/api/discover/rss-sources", async (req, res) => {
     try { res.json(await storage.getRssSources(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.patch("/api/discover/rss-sources/:id/autopost", async (req, res) => {
@@ -2254,13 +2307,13 @@ Each tweet under ${charLimit} characters.` },
       if (!updated) return res.status(404).json({ message: "RSS source not found" });
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
   app.get("/api/discover/monitored-accounts", async (req, res) => {
     try { res.json(await storage.getMonitoredAccounts(sessionUserId(req))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/discover/ideas/:id/bookmark", async (req, res) => {
@@ -2270,7 +2323,7 @@ Each tweet under ${charLimit} characters.` },
       if (!idea) return res.status(404).json({ message: "Idea not found" });
       const [updated] = await db.update(discoveredIdeas).set({ isBookmarked: !idea.isBookmarked }).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req)))).returning();
       res.json(updated);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/discover/ideas/:id", async (req, res) => {
@@ -2280,7 +2333,7 @@ Each tweet under ${charLimit} characters.` },
       if (deleted.length === 0) return res.status(404).json({ message: "Idea not found" });
       res.status(204).send();
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -2309,12 +2362,16 @@ Each tweet under ${charLimit} characters.` },
       await logAiUsage(usage, latency, "expand_idea");
 
       const result = safeJsonParse(content) || {};
-      const tweets = (result.tweets || []).map((t: any, i: number) => ({
-        content: String(t.content || "").slice(0, 280),
-        position: i,
-        charCount: String(t.content || "").length,
-        postId: 0,
-      }));
+      const rawTweets = result.tweets || [];
+      const tweets = rawTweets.map((t: any, i: number) => {
+        const fitted = fitUnitToBudget(String(t.content || ""), xUnitBudgetAt(i, rawTweets.length));
+        return {
+          content: fitted.text,
+          position: i,
+          charCount: fitted.text.length,
+          postId: 0,
+        };
+      });
 
       const post = await storage.createPost(
         sessionUserId(req),
@@ -2323,7 +2380,7 @@ Each tweet under ${charLimit} characters.` },
       );
       await db.update(discoveredIdeas).set({ status: "used" }).where(and(eq(discoveredIdeas.id, id), eq(discoveredIdeas.userId, sessionUserId(req))));
       res.json({ postId: (post as any).id, postType, tweetCount: tweets.length, hashtags: result.hashtag_suggestions || [] });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/discover/sources/:id", async (req, res) => {
@@ -2337,7 +2394,7 @@ Each tweet under ${charLimit} characters.` },
         if (!deleted) return res.status(404).json({ message: "Monitored account not found" });
       }
       res.status(204).send();
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ==================== VIRAL OPTIMIZATION ====================
@@ -2474,7 +2531,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
 
   app.get("/api/viral/scores/:postId", async (req, res) => {
     try { res.json(await storage.getViralScores(sessionUserId(req), parseInt(req.params.postId))); }
-    catch (err: any) { res.status(500).json({ message: err.message }); }
+    catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── AUTH ROUTES ──────────────────────────────────────────────────────────────
@@ -2514,10 +2571,12 @@ Return ONLY the improved content text. Keep the same format and length constrain
     app.use(passport.initialize());
 
     app.get("/api/auth/google",
+      authLimiter,
       passport.authenticate("google", { scope: ["profile", "email"], session: false })
     );
 
     app.get("/api/auth/google/callback",
+      authLimiter,
       passport.authenticate("google", { failureRedirect: "/?error=google_auth_failed", session: false }),
       (req: any, res) => {
         if (!req.user) {
@@ -2622,7 +2681,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       if (!user) return res.status(401).json({ message: "User not found" });
       res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar, title: user.title, bio: user.bio });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -2636,7 +2695,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
         .returning();
       res.json({ id: updated.id, email: updated.email, name: updated.name, avatar: updated.avatar, title: updated.title, bio: updated.bio });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -2646,7 +2705,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       res.json(profile || {});
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.put("/api/profile/memory", async (req, res) => {
@@ -2677,7 +2736,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
           .returning();
       }
       res.json(result);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.get("/api/profile/memory/preview-prompt", async (req, res) => {
@@ -2686,7 +2745,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const prompt = await getBrandSystemPrompt(uid, "x");
       res.json({ prompt });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -2695,7 +2754,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const userId = sessionUserId(req);
       const [profile] = await db.select().from(userProfile).where(eq(userProfile.userId, userId));
       res.json((profile?.brandingJson as any) || {});
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.put("/api/profile/branding", async (req, res) => {
@@ -2714,7 +2773,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
           .returning();
       }
       res.json(result.brandingJson);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/profile/memory/ai-learn", async (req, res) => {
@@ -2739,7 +2798,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
         [result] = await db.insert(userProfile).values({ userId, memoryJson: updatedMemory, brandVoice: learned.brandVoice }).returning();
       }
       res.json({ learned, profile: result });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── AI IMAGE GENERATION ───────────────────────────────────────────────────────
@@ -2749,7 +2808,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
     try {
       const images = await db.select().from(generatedImages).where(eq(generatedImages.userId, sessionUserId(req))).orderBy(desc(generatedImages.createdAt));
       res.json(images);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/images/generate", async (req, res, next) => {
@@ -2820,7 +2879,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       if (!current) return res.status(404).json({ message: "Image not found" });
       const [updated] = await db.update(generatedImages).set({ isFavorite: !current.isFavorite }).where(and(eq(generatedImages.id, id), eq(generatedImages.userId, sessionUserId(req)))).returning();
       res.json(updated);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/images/:id", async (req, res) => {
@@ -2828,7 +2887,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       const deleted = await db.delete(generatedImages).where(and(eq(generatedImages.id, parseInt(req.params.id)), eq(generatedImages.userId, sessionUserId(req)))).returning({ id: generatedImages.id });
       if (deleted.length === 0) return res.status(404).json({ message: "Image not found" });
       res.status(204).end();
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/images/generate-for-post", async (req, res) => {
@@ -2844,7 +2903,7 @@ Return ONLY the improved content text. Keep the same format and length constrain
       ]);
       await logAiUsage(usage, latency, "image_prompt_for_post");
       res.json({ suggestedPrompt: promptSuggestion.trim() });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── SMART SCHEDULING ─────────────────────────────────────────────────────────
@@ -2863,7 +2922,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       await logAiUsage(usage, latency, "smart_scheduling");
       const parsed = safeJsonParse(content);
       res.json(parsed || { suggestions: [] });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── CONTEXT VAULT ────────────────────────────────────────────────────────────
@@ -2873,7 +2932,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
     try {
       const items = await db.select().from(vaultTable).where(eq(vaultTable.userId, sessionUserId(req))).orderBy(desc(vaultTable.createdAt));
       res.json(items);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/vault", async (req, res) => {
@@ -2882,7 +2941,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       if (!title || !content) return res.status(400).json({ message: "Title and content are required" });
       const [item] = await db.insert(vaultTable).values({ userId: sessionUserId(req), title, content, category, tags, sourceUrl, sourceType }).returning();
       res.json(item);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/vault/extract-url", async (req, res) => {
@@ -2913,14 +2972,16 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       if (err?.name === "UnsafeUrlError") {
         return res.status(400).json({ message: `Could not fetch URL: ${err.message}` });
       }
-      res.status(500).json({ message: `Failed to extract URL: ${err.message}` });
+      console.error(err); res.status(500).json({ message: "Failed to extract URL" });
     }
   });
 
   app.post("/api/vault/extract-image", async (req, res) => {
     try {
       const { imageBase64, mimeType = "image/jpeg" } = req.body;
+      const allowedMime = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
       if (!imageBase64) return res.status(400).json({ message: "Image data required" });
+      if (!allowedMime.has(mimeType)) return res.status(400).json({ message: "Unsupported image type" });
       const response = await ai.chat.completions.create({
         model: MODELS.VISION,
         messages: [{
@@ -2939,7 +3000,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       res.json({ content: extracted, title: "Extracted from Image" });
     } catch (err: any) {
       console.error("Image extract error:", err);
-      res.status(500).json({ message: `Failed to analyze image: ${err.message}` });
+      console.error(err); res.status(500).json({ message: "Failed to analyze image" });
     }
   });
 
@@ -2950,7 +3011,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       if (!current) return res.status(404).json({ message: "Not found" });
       const [updated] = await db.update(vaultTable).set({ isFavorite: !current.isFavorite }).where(and(eq(vaultTable.id, id), eq(vaultTable.userId, sessionUserId(req)))).returning();
       res.json(updated);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/vault/:id", async (req, res) => {
@@ -2958,7 +3019,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       const deleted = await db.delete(vaultTable).where(and(eq(vaultTable.id, parseInt(req.params.id)), eq(vaultTable.userId, sessionUserId(req)))).returning({ id: vaultTable.id });
       if (deleted.length === 0) return res.status(404).json({ message: "Not found" });
       res.status(204).end();
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── YOUTUBE TO POST ───────────────────────────────────────────────────────────
@@ -2977,7 +3038,7 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
       const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
       res.json({ videoId, title, author, thumbnailUrl, url: `https://www.youtube.com/watch?v=${videoId}` });
     } catch (err: any) {
-      res.status(500).json({ message: `Failed to extract YouTube info: ${err.message}` });
+      console.error(err); res.status(500).json({ message: "Failed to extract YouTube info" });
     }
   });
 
@@ -3016,7 +3077,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       const tweets = numbered.map((content) => ({ content, charCount: content.length }));
       res.json({ tweets, model: MODELS.TEXT });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3024,7 +3085,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
     try {
       res.json(await storage.getYoutubeChannels(sessionUserId(req)));
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3067,7 +3128,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       if (!updated) return res.status(404).json({ message: "Channel not found" });
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3077,7 +3138,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       if (!deleted) return res.status(404).json({ message: "Channel not found" });
       res.status(204).end();
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3087,7 +3148,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       await checkYoutubeChannels(sessionUserId(req));
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3101,7 +3162,7 @@ Separate tweets with "---". Do NOT add numbering (system handles it).` },
       await checkYoutubeChannelRow(ch);
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3148,7 +3209,7 @@ For each variation, use "---VARIATION---" as separator. For threads, separate tw
       const fallback = [{ tweets: addThreadNumbering([content.trim()]).map((c) => ({ content: c, charCount: c.length })) }];
       res.json({ variations: variations.length ? variations : fallback, model: MODELS.TEXT });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3180,7 +3241,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
       await logAiUsage(usage, latency, "hook_generate");
       const parsed = safeJsonParse(content);
       res.json(parsed || { hooks: [] });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── CAROUSEL BUILDER ──────────────────────────────────────────────────────────
@@ -3188,7 +3249,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
     try {
       const items = await db.select().from(carouselsTable).where(eq(carouselsTable.userId, sessionUserId(req))).orderBy(desc(carouselsTable.createdAt));
       res.json(items);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/carousels", async (req, res) => {
@@ -3197,7 +3258,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
       if (!title) return res.status(400).json({ message: "Title is required" });
       const [item] = await db.insert(carouselsTable).values({ userId: sessionUserId(req), title, pillarId: pillarId || null, slides: slides || [], platform, backgroundStyle }).returning();
       res.json(item);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.put("/api/carousels/:id", async (req, res) => {
@@ -3206,7 +3267,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
       const [updated] = await db.update(carouselsTable).set({ userId: sessionUserId(req), title, slides, status, backgroundStyle, platform, pillarId: pillarId || null }).where(and(eq(carouselsTable.id, parseInt(req.params.id)), eq(carouselsTable.userId, sessionUserId(req)))).returning();
       if (!updated) return res.status(404).json({ message: "Carousel not found" });
       res.json(updated);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/carousels/:id", async (req, res) => {
@@ -3214,7 +3275,7 @@ Return JSON: { "hooks": [{ "text": "...", "type": "...", "viralScore": 8, "why":
       const deleted = await db.delete(carouselsTable).where(and(eq(carouselsTable.id, parseInt(req.params.id)), eq(carouselsTable.userId, sessionUserId(req)))).returning({ id: carouselsTable.id });
       if (deleted.length === 0) return res.status(404).json({ message: "Carousel not found" });
       res.status(204).end();
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/carousels/generate", async (req, res) => {
@@ -3245,7 +3306,7 @@ Return JSON: {
       await logAiUsage(usage, latency, "carousel_generate");
       const parsed = safeJsonParse(content);
       res.json(parsed || { title: topic, slides: [] });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   const cannedResponseBody = z.object({
@@ -3260,7 +3321,7 @@ Return JSON: {
     try {
       res.json(await storage.getCannedResponses(sessionUserId(req)));
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3283,7 +3344,7 @@ Return JSON: {
       res.json(updated);
     } catch (err: any) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors.map((e) => e.message).join(", ") });
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3293,7 +3354,7 @@ Return JSON: {
       if (!deleted) return res.status(404).json({ message: "Canned response not found" });
       res.status(204).end();
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3303,7 +3364,7 @@ Return JSON: {
       if (!row) return res.status(404).json({ message: "Not found" });
       res.json(row);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3330,7 +3391,7 @@ Return JSON only: { "suggestions": [{ "title": "short label", "content": "reply 
       const parsed = safeJsonParse(content);
       res.json(parsed || { suggestions: [] });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3360,7 +3421,7 @@ If the user asks to generate a post or says something like "write this", "create
       const postContent = postMatch ? postMatch[1].trim() : null;
       const displayContent = postMatch ? content.replace(/\[POST_START\][\s\S]*?\[POST_END\]/, "").trim() : content;
       res.json({ content: displayContent, postContent, hasPost: !!postContent });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.post("/api/chat/refine-post", async (req, res) => {
@@ -3379,7 +3440,7 @@ Return only the refined post content, no explanation.` },
       ]);
       await logAiUsage(usage, latency, "chat_refine");
       res.json({ content: content.trim() });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
   });
 
   // ── AUTOPILOT ─────────────────────────────────────────────────────────────────
@@ -3417,7 +3478,7 @@ Return only the refined post content, no explanation.` },
         lastUpdated: now.toISOString(),
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3428,7 +3489,7 @@ Return only the refined post content, no explanation.` },
       const pulse = await getMarketPulse();
       res.json(pulse);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3439,7 +3500,7 @@ Return only the refined post content, no explanation.` },
       const result = await runMorningBriefing(sessionUserId(req));
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3451,7 +3512,7 @@ Return only the refined post content, no explanation.` },
       const result = await autofillCalendar(sessionUserId(req), Math.min(days, 14));
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3470,7 +3531,7 @@ Return only the refined post content, no explanation.` },
         .map((p) => ({ id: p.id, name: p.name, color: p.color }));
       res.json({ gaps, daysWindow: days });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -3515,12 +3576,15 @@ Return only the refined post content, no explanation.` },
       }
       res.json({ success: true, postId: result.postId, scheduledAt: scheduleTime });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 
   // POST /api/autopilot/smoke-test — trigger immediate pipeline run for testing
   app.post("/api/autopilot/smoke-test", async (req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(404).json({ message: "Not found" });
+    }
     try {
       const { runDailyAutoPost } = await import("./autopilot");
       console.log("[smoke-test] Triggering immediate auto-post pipeline...");
@@ -3534,7 +3598,7 @@ Return only the refined post content, no explanation.` },
         topIdeas: result.topIdeas.slice(0, 3),
       });
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error(err); res.status(500).json({ message: "Internal server error" });
     }
   });
 

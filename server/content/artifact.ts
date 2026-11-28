@@ -21,8 +21,14 @@ import {
   payloadSchemaRegistry,
 } from "../artifacts/payloadSchemas";
 import type { ContentStoragePort, JsonRecord } from "./storage";
+import type { ApprovalActor } from "./learning/approval";
 import type { LearningRecorder } from "./learning/record";
 import { ALLOWED_AUDIO_MIMES, ALLOWED_VIDEO_MIMES, ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
+import {
+  auditArtifactClaims,
+  reconstructEvidenceFromClaimAttribution,
+  type ClaimCheckEvidenceItem,
+} from "../intelligence/quality/claimCheck";
 
 export interface ArtifactDeps {
   artifacts: ContentStoragePort;
@@ -80,6 +86,26 @@ export class InvalidArtifactPayloadError extends Error {
   }
 }
 
+/**
+ * The Opportunity this Artifact would belong to is killed.
+ *
+ * `createGenerationJob` already refuses a killed Opportunity, and killing is
+ * terminal (`killReason` is mandatory). Refusing at the artifact boundary too
+ * ensures a killed Opportunity cannot produce drafts, approvals, or schedules.
+ */
+export class ArtifactOpportunityKilledError extends Error {
+  constructor(
+    readonly opportunityId: number,
+    readonly killReason: string | null,
+  ) {
+    super(
+      `Opportunity ${opportunityId} is killed and cannot receive artifacts` +
+        (killReason ? `: ${killReason}` : ""),
+    );
+    this.name = "ArtifactOpportunityKilledError";
+  }
+}
+
 /** A visual media reference named by the payload does not resolve to a usable asset. */
 export class ArtifactMediaReferenceError extends Error {
   constructor(
@@ -93,11 +119,34 @@ export class ArtifactMediaReferenceError extends Error {
 }
 
 /** Provenance pointer for the research this content rests on (IDs, not copies). */
-export const attributionSchema = z.object({
+export const researchEvidenceAttributionSchema = z.object({
   kind: z.literal("research_evidence"),
   researchJobId: z.number().int().positive().nullable(),
   evidenceIds: z.array(z.number().int().positive()),
 });
+
+export const auditedClaimSchema = z.object({
+  unitIndex: z.number().int().min(0),
+  claimText: z.string().trim().min(1),
+  evidenceIds: z.array(z.number().int().positive()),
+  status: z.enum(["supported", "unsupported", "opinion"]),
+  reason: z.string().optional(),
+});
+
+export const claimEvidenceAttributionSchema = z.object({
+  kind: z.literal("claim_evidence_v1"),
+  researchJobId: z.number().int().positive().nullable(),
+  evidenceIds: z.array(z.number().int().positive()),
+  claims: z.array(auditedClaimSchema),
+  unsupportedCount: z.number().int().min(0),
+  paraphraseOverlap: z.number().min(0).max(1),
+  qualityFlags: z.array(z.string()),
+});
+
+export const attributionSchema = z.discriminatedUnion("kind", [
+  researchEvidenceAttributionSchema,
+  claimEvidenceAttributionSchema,
+]);
 
 export interface CreateArtifactInput {
   userId?: number | null;
@@ -125,6 +174,19 @@ export async function createArtifact(
     throw new InvalidArtifactPayloadError(input.format, [
       `no payload schema registered for format "${input.format}"`,
     ]);
+  }
+
+  // A killed Opportunity is terminal and produces nothing. Checked first,
+  // before payload validation and before any row exists. `getOpportunity` is
+  // checked dynamically so hand-built test doubles that omit it keep working.
+  if (typeof deps.artifacts.getOpportunity === "function") {
+    const opportunity = await deps.artifacts.getOpportunity(input.opportunityId);
+    if (opportunity !== undefined && opportunity.status === "killed") {
+      throw new ArtifactOpportunityKilledError(
+        input.opportunityId,
+        (opportunity as { killReason?: string | null }).killReason ?? null,
+      );
+    }
   }
 
   let validated: JsonRecord;
@@ -158,7 +220,7 @@ export async function createArtifact(
         `visual asset ${ref.visualAssetId} not found`,
       );
     }
-    if (asset.userId !== null && asset.userId !== ownerId) {
+    if (asset.userId !== ownerId) {
       throw new ArtifactMediaReferenceError(
         input.format,
         ref.visualAssetId,
@@ -303,10 +365,15 @@ export async function submitArtifactForReview(
   return updated;
 }
 
+export interface ApproveArtifactOptions {
+  actor?: ApprovalActor;
+}
+
 /** in_review → approved. Approval is pinned to this exact revision. */
 export async function approveArtifact(
   artifactId: number,
   deps: ArtifactDeps,
+  options: ApproveArtifactOptions = {},
 ): Promise<Artifact> {
   const artifact = await deps.artifacts.getArtifact(artifactId);
   if (!artifact) throw new ArtifactNotFoundError(artifactId);
@@ -317,7 +384,7 @@ export async function approveArtifact(
   if (!updated) throw new ArtifactNotFoundError(artifactId);
   if (deps.learning) {
     const chain = await getArtifactHistory(artifactId, deps);
-    await deps.learning.recordApproval(updated, chain);
+    await deps.learning.recordApproval(updated, chain, { actor: options.actor ?? "human" });
   }
   return updated;
 }
@@ -380,6 +447,14 @@ export function schedulableReadiness(): ArtifactReadiness {
   return "approved";
 }
 
+export interface CreateHumanEditOptions {
+  actorNote?: string | null;
+  attributionReason?: string | null;
+  evidence?: ClaimCheckEvidenceItem[];
+  creatorNotes?: string | null;
+  researchJobId?: number | null;
+}
+
 /**
  * Human editing produces a NEW revision (Ticket 05 §8/§18): the AI-generated
  * row is never overwritten, provenance records the human edit, and the new
@@ -390,10 +465,52 @@ export async function createHumanEditRevision(
   priorArtifactId: number,
   payload: JsonRecord,
   deps: ArtifactDeps,
-  options: { actorNote?: string | null; attributionReason?: string | null } = {},
+  options: CreateHumanEditOptions = {},
 ): Promise<Artifact> {
   const prior = await deps.artifacts.getArtifact(priorArtifactId);
   if (!prior) throw new ArtifactNotFoundError(priorArtifactId);
+
+  const priorAttribution = Array.isArray(prior.attribution) ? prior.attribution : [];
+  let priorClaimAudit: z.infer<typeof claimEvidenceAttributionSchema> | undefined;
+  let priorResearchEvidence: z.infer<typeof researchEvidenceAttributionSchema> | undefined;
+  const preservedAttribution: unknown[] = [];
+
+  for (const entry of priorAttribution) {
+    if (entry && typeof entry === "object" && (entry as { kind?: unknown }).kind === "claim_evidence_v1") {
+      const parsed = claimEvidenceAttributionSchema.safeParse(entry);
+      if (parsed.success && !priorClaimAudit) {
+        priorClaimAudit = parsed.data;
+      }
+      continue;
+    }
+    if (entry && typeof entry === "object" && (entry as { kind?: unknown }).kind === "research_evidence") {
+      const parsed = researchEvidenceAttributionSchema.safeParse(entry);
+      if (parsed.success && !priorResearchEvidence) {
+        priorResearchEvidence = parsed.data;
+      }
+    }
+    preservedAttribution.push(entry);
+  }
+
+  let nextAttribution: unknown[] = priorAttribution;
+  if (options.evidence !== undefined || priorClaimAudit !== undefined) {
+    const evidence =
+      options.evidence ?? reconstructEvidenceFromClaimAttribution(priorClaimAudit!);
+    const researchJobId =
+      options.researchJobId !== undefined
+        ? options.researchJobId
+        : (priorClaimAudit?.researchJobId ?? priorResearchEvidence?.researchJobId ?? null);
+    const reAudited = auditArtifactClaims({
+      format: prior.format,
+      channel: prior.channel,
+      payload,
+      researchJobId,
+      evidence,
+      creatorNotes: options.creatorNotes,
+      modelClaims: undefined,
+    });
+    nextAttribution = [...preservedAttribution, attributionSchema.parse(reAudited)];
+  }
 
   const created = await createArtifact(
     {
@@ -405,7 +522,7 @@ export async function createHumanEditRevision(
       payload,
       supersedesId: prior.id,
       provenance: "human_edit",
-      attribution: prior.attribution,
+      attribution: nextAttribution,
       attributionReason:
         options.attributionReason ?? prior.attributionReason ?? options.actorNote ?? "human edit",
     },

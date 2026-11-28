@@ -116,11 +116,13 @@ describeDb("LinkedIn channel adapter (db)", () => {
 
     const port = await fixture.start();
     savedEnv = {
+      ALLOW_ENV_CHANNEL_FALLBACK: process.env.ALLOW_ENV_CHANNEL_FALLBACK,
       LINKEDIN_API_BASE_URL: process.env.LINKEDIN_API_BASE_URL,
       LINKEDIN_ACCESS_TOKEN: process.env.LINKEDIN_ACCESS_TOKEN,
       LINKEDIN_AUTHOR_URN: process.env.LINKEDIN_AUTHOR_URN,
       LINKEDIN_TIMEOUT_MS: process.env.LINKEDIN_TIMEOUT_MS,
     };
+    process.env.ALLOW_ENV_CHANNEL_FALLBACK = "1";
     process.env.LINKEDIN_API_BASE_URL = `http://127.0.0.1:${port}`;
     process.env.LINKEDIN_ACCESS_TOKEN = "fixture-token";
     process.env.LINKEDIN_AUTHOR_URN = "urn:li:person:cf_test";

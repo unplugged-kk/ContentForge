@@ -84,6 +84,11 @@ export const createScheduleSchema = z.object({
    * concurrency arbiter. Legacy POST /schedules omits this and always inserts.
    */
   intentKey: z.string().trim().min(1).max(300).optional(),
+  /**
+   * Optional authenticated owner id supplied by the caller. Used as fallback
+   * when scheduling a legacy artifact whose own `userId` is null.
+   */
+  ownerUserId: z.number().int().positive().nullable().optional(),
 });
 
 export type CreateScheduleInput = z.input<typeof createScheduleSchema>;
@@ -182,7 +187,7 @@ export async function createSchedule(
 
   const startAt = body.startAt ? new Date(body.startAt) : new Date();
   const row = {
-    userId: artifact.userId ?? null,
+    userId: artifact.userId ?? body.ownerUserId ?? null,
     artifactId: artifact.id,
     channel,
     intentKey: body.intentKey ?? null,
@@ -196,6 +201,15 @@ export async function createSchedule(
     return claimed.schedule;
   }
   return deps.content.insertSchedule(row);
+}
+
+export const MANUAL_SCHEDULE_INTENT_PREFIX = "manual:";
+
+export function isManualSchedule(schedule: Pick<Schedule, "intentKey">): boolean {
+  return (
+    typeof schedule.intentKey === "string" &&
+    schedule.intentKey.startsWith(MANUAL_SCHEDULE_INTENT_PREFIX)
+  );
 }
 
 /**
@@ -231,8 +245,10 @@ export async function dispatchDueOccurrences(
   now: Date,
   deps: DispatchDeps,
   limit = 50,
+  options?: { ownerId?: number },
 ): Promise<DispatchResult> {
   const result: DispatchResult = { materialized: 0, enqueued: 0, publications: [] };
+  const ownerId = options?.ownerId;
 
   // Materialize: for each active schedule, the next unmaterialized slot (the
   // count of existing occurrences is the durable index — see module docs). At
@@ -241,6 +257,9 @@ export async function dispatchDueOccurrences(
   // makes this idempotent under overlapping ticks.
   const active = await deps.content.listActiveSchedules(now, limit);
   for (const schedule of active) {
+    if (schedule.status !== "active" || isManualSchedule(schedule)) continue;
+    if (ownerId !== undefined && schedule.userId !== ownerId) continue;
+
     const existingCount = await deps.content.countOccurrences(schedule.id);
     if (existingCount >= schedule.count) continue; // series fully materialized
 
@@ -258,6 +277,13 @@ export async function dispatchDueOccurrences(
 
   const due = await deps.content.listDueOccurrences(now, limit);
   for (const occurrence of due) {
+    if (occurrence.status === "published" || occurrence.status === "cancelled") continue;
+
+    const schedule = await deps.content.getSchedule(occurrence.scheduleId);
+    if (!schedule || isManualSchedule(schedule)) continue;
+    if (ownerId !== undefined && schedule.userId !== ownerId) continue;
+    if (schedule.status === "cancelled" || schedule.status === "paused") continue;
+
     // Claim the occurrence first (compare-and-set), so of two overlapping
     // scheduler ticks exactly one proceeds. `enqueued` rows are re-processed
     // (not re-claimed) so a crash before enqueue self-heals.
@@ -270,7 +296,7 @@ export async function dispatchDueOccurrences(
       if (!claimed) continue;
     }
 
-    const publication = await ensurePublicationForOccurrence(occurrence, deps);
+    const publication = await ensurePublicationForOccurrence(occurrence, deps, schedule);
     // Only the caller that actually created the Publication enqueues it; the
     // UNIQUE (schedule × occurrence × artifact revision) key is the arbiter.
     if (!publication) continue;
@@ -287,11 +313,12 @@ export async function dispatchDueOccurrences(
 async function ensurePublicationForOccurrence(
   occurrence: ScheduleOccurrence,
   deps: DispatchDeps,
+  loadedSchedule?: Schedule,
 ): Promise<Publication | undefined> {
   if (occurrence.status === "published" || occurrence.status === "cancelled") return undefined;
 
-  const schedule = await deps.content.getSchedule(occurrence.scheduleId);
-  if (!schedule) return undefined;
+  const schedule = loadedSchedule ?? (await deps.content.getSchedule(occurrence.scheduleId));
+  if (!schedule || isManualSchedule(schedule)) return undefined;
   if (schedule.status === "cancelled" || schedule.status === "paused") return undefined;
 
   const artifact = await deps.content.getArtifact(schedule.artifactId);

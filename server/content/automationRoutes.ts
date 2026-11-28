@@ -28,6 +28,7 @@ import {
   AutomationPolicyInactiveError,
   AutomationPolicyInputError,
   AutomationPolicyNotFoundError,
+  AutomationTrustedModeDisabledError,
   type AutomationDeps,
 } from "./automation";
 
@@ -121,6 +122,10 @@ function writeError(error: unknown, res: import("express").Response): boolean {
   }
   if (error instanceof AutomationPolicyInactiveError) {
     res.status(409).json({ message: error.message });
+    return true;
+  }
+  if (error instanceof AutomationTrustedModeDisabledError) {
+    res.status(403).json({ message: error.message });
     return true;
   }
   if (error instanceof AutomationLimitError) {
@@ -256,9 +261,10 @@ export function createAutomationRouter(deps: AutomationDeps): Router {
    * unfinished run. Exposed so operators and tests can drive automation
    * deterministically — the same reason `/api/publications/dispatch` exists.
    */
-  router.post("/tick", async (_req, res, next) => {
+  router.post("/tick", async (req, res, next) => {
     try {
-      const result = await dispatchAutomationDueRuns(new Date(), deps, 100);
+      const ownerId = requireOwnerId(req);
+      const result = await dispatchAutomationDueRuns(new Date(), deps, 100, { ownerId });
       return res.json(result);
     } catch (error) {
       return next(error);

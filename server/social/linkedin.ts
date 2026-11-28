@@ -12,6 +12,7 @@
  */
 
 import { storage } from "../storage";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
 
 /**
  * `LinkedIn-Version` is a YYYYMM date. LinkedIn keeps each version for about a
@@ -35,12 +36,9 @@ async function getLinkedInConfig(ownerUserId?: number | null): Promise<LinkedInC
   const account = ownerUserId == null
     ? await storage.getConnectedAccount("linkedin")
     : await storage.getConnectedAccountForOwner("linkedin", ownerUserId);
-  // The owner's own connected account wins. The deployment-level env pair is
-  // an operator-wide default (not another tenant's row), so it stays a valid
-  // fallback — owner scoping forbids borrowing a *different owner's* account,
-  // not the deployment's own configured credentials.
-  const token = account?.accessToken?.trim() || process.env.LINKEDIN_ACCESS_TOKEN?.trim() || null;
-  const authorUrn = account?.username?.trim() || process.env.LINKEDIN_AUTHOR_URN?.trim() || null;
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId);
+  const token = account?.accessToken?.trim() || (allowEnvFallback ? process.env.LINKEDIN_ACCESS_TOKEN?.trim() || null : null);
+  const authorUrn = account?.username?.trim() || (allowEnvFallback ? process.env.LINKEDIN_AUTHOR_URN?.trim() || null : null);
   if (!token || !authorUrn) return null;
   return { baseUrl: getLinkedInBaseUrl(), token, authorUrn };
 }

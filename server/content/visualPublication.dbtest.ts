@@ -152,6 +152,7 @@ describeDb("visual delivery — image publication through X (db)", () => {
 
     const port = await fixture.start();
     savedEnv = {
+      ALLOW_ENV_CHANNEL_FALLBACK: process.env.ALLOW_ENV_CHANNEL_FALLBACK,
       XQUIK_API_BASE_URL: process.env.XQUIK_API_BASE_URL,
       XQUIK_API_KEY: process.env.XQUIK_API_KEY,
       XQUIK_ACCOUNT: process.env.XQUIK_ACCOUNT,
@@ -160,6 +161,7 @@ describeDb("visual delivery — image publication through X (db)", () => {
       XQUIK_TIMEOUT_MS: process.env.XQUIK_TIMEOUT_MS,
       XQUIK_MEDIA_ENDPOINT: process.env.XQUIK_MEDIA_ENDPOINT,
     };
+    process.env.ALLOW_ENV_CHANNEL_FALLBACK = "1";
     process.env.XQUIK_API_BASE_URL = `http://127.0.0.1:${port}`;
     process.env.XQUIK_API_KEY = "fixture-key";
     process.env.XQUIK_ACCOUNT = "cf_test";

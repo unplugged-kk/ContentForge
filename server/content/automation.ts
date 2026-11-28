@@ -60,6 +60,7 @@ import type { ClaimJobInput, ClaimJobResult } from "../research/storage";
 import { hasProvider } from "../research/registry";
 import { createResearchJobBodySchema } from "../research/routes";
 import { createStoryFromResearch } from "../story/service";
+import { synthesizeStructuredBrief } from "../story/synthesis";
 import type { StoryStoragePort } from "../story/storage";
 import { approveArtifact, submitArtifactForReview, ArtifactStateError } from "./artifact";
 import { createSchedule, parseRecurrenceIntervalMs } from "./scheduling";
@@ -137,6 +138,19 @@ export class AutomationPolicyInactiveError extends Error {
   ) {
     super(`Automation policy ${policyId} is "${status}" and cannot be triggered`);
     this.name = "AutomationPolicyInactiveError";
+  }
+}
+
+export function isTrustedAutomationAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ALLOW_TRUSTED_AUTOMATION === "1";
+}
+
+export class AutomationTrustedModeDisabledError extends Error {
+  constructor(
+    message = 'Trusted automation mode is disabled; set ALLOW_TRUSTED_AUTOMATION=1 to allow approvalMode "trusted" or publicationConfig.mode "on_approval".',
+  ) {
+    super(message);
+    this.name = "AutomationTrustedModeDisabledError";
   }
 }
 
@@ -456,6 +470,17 @@ export interface AutomationDeps {
   publishGate?: import("./publishGate").PublishGatePort;
 }
 
+function assertTrustedAutomationPolicyAllowed(
+  normalized: NormalizedAutomationPolicy,
+  options: { allowDeactivatingPreexisting?: boolean } = {},
+): void {
+  const requestsTrusted =
+    normalized.approvalMode === "trusted" || normalized.publicationConfig.mode === "on_approval";
+  if (!requestsTrusted || isTrustedAutomationAllowed()) return;
+  if (options.allowDeactivatingPreexisting && normalized.status !== "active") return;
+  throw new AutomationTrustedModeDisabledError();
+}
+
 // ── policy service ────────────────────────────────────────────────────────────
 export async function createAutomationPolicy(
   ownerId: number,
@@ -466,6 +491,7 @@ export async function createAutomationPolicy(
     throw new AutomationPolicyInputError(["ownerId must be a positive integer"]);
   }
   const normalized = normalizeAutomationPolicyInput(input);
+  assertTrustedAutomationPolicyAllowed(normalized);
   return deps.automation.insertAutomationPolicy({
     userId: ownerId,
     name: normalized.name,
@@ -513,6 +539,15 @@ export async function updateAutomationPolicy(
     limits: patch.limits ?? existing.limits,
   };
   const normalized = normalizeAutomationPolicyInput(merged);
+  const existingPubMode = (existing.publicationConfig as { mode?: string } | null)?.mode;
+  const existingWasTrusted =
+    existing.approvalMode === "trusted" || existingPubMode === "on_approval";
+  const patchRequestsTrusted =
+    patch.approvalMode === "trusted" ||
+    (patch.publicationConfig as { mode?: string } | undefined)?.mode === "on_approval";
+  assertTrustedAutomationPolicyAllowed(normalized, {
+    allowDeactivatingPreexisting: existingWasTrusted && !patchRequestsTrusted,
+  });
 
   const updated = await deps.automation.updateAutomationPolicy(existing.id, {
     name: normalized.name,
@@ -893,10 +928,9 @@ async function runResearchStep(run: AutomationRun, deps: AutomationDeps): Promis
  * `createStoryFromResearch`. While research is still in flight this is not a
  * failure — the run simply stays in its durable intermediate state.
  *
- * The synthesis is DETERMINISTIC (policy name + research query + bounded
- * evidence excerpts). No AI client is reachable from this module, so automation
- * introduces no second model seam; model-written synthesis is an explicit
- * deferral, not a hidden call.
+ * `synthesizeStructuredBrief` is deterministic by default (offline, zero model
+ * calls) and only invokes `aiCall` when `STORY_LLM_SYNTHESIS=1` is explicitly
+ * enabled, with schema validation and automatic deterministic fallback.
  */
 async function runStoryStep(run: AutomationRun, deps: AutomationDeps): Promise<StepOutcome> {
   const researchJobId = run.researchJobId;
@@ -915,9 +949,24 @@ async function runStoryStep(run: AutomationRun, deps: AutomationDeps): Promise<S
   }
 
   const snapshot = run.policySnapshot as unknown as AutomationPolicySnapshot;
+  const baseSynthesis = synthesizeStory(snapshot, job, evidence);
+  const topic = job.query ?? (snapshot.researchConfig.query as string | undefined) ?? snapshot.name;
+  const briefResult = await synthesizeStructuredBrief({
+    topic,
+    evidence: evidence.slice(0, 5).map((e) => ({
+      id: e.id,
+      text: e.excerpt,
+      provider: e.kind,
+    })),
+    userId: run.userId,
+  });
   await createStoryFromResearch(
     job.id,
-    synthesizeStory(snapshot, job, evidence),
+    {
+      ...baseSynthesis,
+      insightBody: briefResult.markdown,
+      angles: briefResult.brief.angles,
+    },
     {
       stories: deps.stories,
       research: {
@@ -1152,7 +1201,7 @@ async function runSettleStep(run: AutomationRun, deps: AutomationDeps): Promise<
   }
 
   const wantsArtifacts = outcomes.some((o) => o.generationJobId !== null);
-  const trusted = snapshot.approvalMode === "trusted";
+  const trusted = snapshot.approvalMode === "trusted" && isTrustedAutomationAllowed();
 
   if (trusted) {
     for (const outcome of outcomes) {
@@ -1190,6 +1239,8 @@ async function settleTrustedArtifact(
   snapshot: AutomationPolicySnapshot,
   deps: AutomationDeps,
 ): Promise<number | null> {
+  if (!isTrustedAutomationAllowed()) return null;
+
   let artifact: Artifact | undefined = await deps.content.getArtifact(artifactId);
   if (!artifact) return null;
 
@@ -1224,10 +1275,14 @@ async function settleTrustedArtifact(
   }
   if (artifact.readiness === "in_review") {
     try {
-      artifact = await approveArtifact(artifactId, {
-        artifacts: deps.content,
-        learning: deps.learning,
-      });
+      artifact = await approveArtifact(
+        artifactId,
+        {
+          artifacts: deps.content,
+          learning: deps.learning,
+        },
+        { actor: "automation_trusted" },
+      );
     } catch (error) {
       if (!(error instanceof ArtifactStateError)) throw error;
       artifact = await deps.content.getArtifact(artifactId);
@@ -1268,6 +1323,7 @@ export async function dispatchScheduledAutomationPolicies(
   now: Date,
   deps: AutomationDeps,
   limit = 25,
+  options?: { ownerId?: number },
 ): Promise<ScheduledAutomationDispatchResult> {
   const result: ScheduledAutomationDispatchResult = {
     considered: 0,
@@ -1275,8 +1331,10 @@ export async function dispatchScheduledAutomationPolicies(
     deduplicated: 0,
     limited: 0,
   };
+  const ownerId = options?.ownerId;
   const policies = await deps.automation.listActiveScheduledPolicies(limit);
   for (const policy of policies) {
+    if (ownerId !== undefined && policy.userId !== ownerId) continue;
     const slot = dueAutomationSlot(policy, now);
     if (!slot) continue;
     result.considered += 1;
@@ -1326,11 +1384,14 @@ export async function dispatchAutomationDueRuns(
   now: Date,
   deps: AutomationDeps,
   limit = 25,
+  options?: { ownerId?: number },
 ): Promise<AutomationDispatchResult> {
-  const scheduled = await dispatchScheduledAutomationPolicies(now, deps, limit);
+  const ownerId = options?.ownerId;
+  const scheduled = await dispatchScheduledAutomationPolicies(now, deps, limit, options);
   const runs = await deps.automation.listAdvanceableAutomationRuns(limit);
   const result: AutomationDispatchResult = { scheduled, enqueued: 0, runIds: [] };
   for (const run of runs) {
+    if (ownerId !== undefined && run.userId !== ownerId) continue;
     const enqueued = await deps.enqueueAutomationRun(run);
     if (enqueued) result.enqueued += 1;
     result.runIds.push(run.id);

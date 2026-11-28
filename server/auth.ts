@@ -1,21 +1,47 @@
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
-import { promisify } from "util";
+import { scrypt, randomBytes, timingSafeEqual, type ScryptOptions } from "crypto";
 import { db } from "./db";
 import { users, userProfile } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
-const scryptAsync = promisify(scrypt);
+const SCRYPT_V1_PREFIX = "scrypt:v1:";
+const SCRYPT_KEY_LEN = 64;
+const MAX_PASSWORD_LEN = 128;
+const SCRYPT_V1_OPTIONS: ScryptOptions = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const SCRYPT_LEGACY_OPTIONS: ScryptOptions = { N: 16384, r: 8, p: 1 };
+
+function deriveScrypt(password: string, salt: string, keylen: number, options: ScryptOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, keylen, options, (err, derivedKey) => {
+      if (err) return reject(err);
+      resolve(derivedKey);
+    });
+  });
+}
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("hex");
-  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${buf.toString("hex")}.${salt}`;
+  const buf = await deriveScrypt(password, salt, SCRYPT_KEY_LEN, SCRYPT_V1_OPTIONS);
+  return `${SCRYPT_V1_PREFIX}${buf.toString("hex")}.${salt}`;
 }
 
 export async function comparePassword(supplied: string, stored: string): Promise<boolean> {
-  const [hashed, salt] = stored.split(".");
+  if (typeof supplied !== "string" || typeof stored !== "string") return false;
+  if (supplied.length > MAX_PASSWORD_LEN) return false;
+
+  const isV1 = stored.startsWith(SCRYPT_V1_PREFIX);
+  const payload = isV1 ? stored.slice(SCRYPT_V1_PREFIX.length) : stored;
+  const parts = payload.split(".");
+  if (parts.length !== 2) return false;
+
+  const [hashed, salt] = parts;
+  if (!hashed || !salt || hashed.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hashed)) {
+    return false;
+  }
+
   const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+  const options = isV1 ? SCRYPT_V1_OPTIONS : SCRYPT_LEGACY_OPTIONS;
+  const suppliedBuf = await deriveScrypt(supplied, salt, SCRYPT_KEY_LEN, options);
+  if (hashedBuf.length !== suppliedBuf.length) return false;
   return timingSafeEqual(hashedBuf, suppliedBuf);
 }
 
@@ -62,6 +88,13 @@ export async function findOrCreateGoogleUser(googleId: string, email: string | n
       return updated;
     }
     return user;
+  }
+
+  if (process.env.REGISTRATION_DISABLED === "1") {
+    const err = new Error("Registration is currently disabled") as Error & { status?: number; code?: string };
+    err.status = 403;
+    err.code = "REGISTRATION_DISABLED";
+    throw err;
   }
 
   // 2. Create new user

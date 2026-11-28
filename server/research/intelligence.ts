@@ -532,29 +532,82 @@ export function analyzeResearch(input: {
       quality,
     },
   };
-  return { ...analysis, synthesis: draftSynthesis(analysis as ResearchAnalysis) };
+  return { ...analysis, synthesis: draftSynthesis(analysis as ResearchAnalysis, input.sources) };
 }
 
-export function draftSynthesis(analysis: ResearchAnalysis): {
+function truncateSnippet(text: string, maxChars: number): string {
+  const normalized = normalizeText(text);
+  if (normalized.length <= maxChars) return normalized;
+  const slice = normalized.slice(0, Math.max(1, maxChars - 1));
+  const lastSpace = slice.lastIndexOf(" ");
+  return `${(lastSpace > maxChars * 0.5 ? slice.slice(0, lastSpace) : slice).trimEnd()}…`;
+}
+
+export function draftSynthesis(
+  analysis: ResearchAnalysis,
+  sources?: readonly NormalizedSource[],
+): {
   title: string;
   facts: string[];
   interpretation: string;
   angles: string[];
   conflictsNoted: string[];
 } {
+  const sourceByUrl = new Map<string, NormalizedSource>();
+  for (const source of sources ?? []) {
+    sourceByUrl.set(source.canonicalUrl, source);
+  }
+  const clusterById = new Map<string, SourceCluster>();
+  for (const cluster of analysis.clusters) {
+    clusterById.set(cluster.clusterId, cluster);
+  }
+
   const top = analysis.ranking.slice(0, 5);
-  const facts = top.map((row) => `${row.provider}: ${row.canonicalUrl}`);
-  const conflictsNoted = analysis.conflicts.map(
-    (conflict) => `Sources disagree on ${conflict.topic}: ${conflict.claims.map((claim) => claim.provider).join(" vs ")}`,
+  const facts: string[] = [];
+  let charBudget = RESEARCH_LIMITS.maxSynthesisChars;
+
+  for (const row of top) {
+    const source = sourceByUrl.get(row.canonicalUrl);
+    const cluster = clusterById.get(row.clusterId);
+    const rawTitle = normalizeText(source?.title ?? cluster?.title ?? "");
+    const rawExcerpt = normalizeText(source?.excerpt ?? "");
+    const title = rawTitle ? truncateSnippet(rawTitle, 120) : row.canonicalUrl;
+    const excerptDiffers =
+      rawExcerpt.length > 0 && rawExcerpt.toLowerCase() !== rawTitle.toLowerCase();
+    const excerptPart = excerptDiffers ? ` — ${truncateSnippet(rawExcerpt, 160)}` : "";
+    const finding = `[${row.provider}] ${title}${excerptPart} (${row.canonicalUrl})`;
+    if (finding.length > charBudget && facts.length > 0) break;
+    facts.push(finding);
+    charBudget -= finding.length;
+  }
+
+  const conflictsNoted = analysis.conflicts.map((conflict) => {
+    const details = conflict.claims
+      .map((claim) => `${claim.provider}: "${truncateSnippet(claim.text, 90)}" (${claim.canonicalUrl})`)
+      .join(" vs ");
+    return `Sources disagree on ${conflict.topic}: ${details}`;
+  });
+
+  const freshnessPhrase = `Freshness: ${analysis.summary.freshness}; quality: ${analysis.summary.quality}.`;
+  const interpretation =
+    conflictsNoted.length > 0
+      ? `${analysis.summary.sources} source(s) across ${analysis.summary.providers} provider(s) disagree on ${analysis.conflicts.length} claim(s); treat conflicting items as unresolved. ${freshnessPhrase}`
+      : `${analysis.summary.sources} source(s) across ${analysis.summary.providers} provider(s) grouped into ${analysis.summary.clusters} cluster(s) with no detected conflicts. ${freshnessPhrase}`;
+
+  const angles = Array.from(
+    new Set(
+      analysis.clusters
+        .slice(0, 5)
+        .map((cluster) => normalizeText(cluster.title))
+        .filter((t) => t.length > 0),
+    ),
   );
-  const interpretation = conflictsNoted.length > 0
-    ? `Sources disagree on ${analysis.conflicts.length} claim(s); do not treat any single provider as settled fact.`
-    : `Cross-source ranking under ${analysis.version} surfaces ${analysis.summary.clusters} cluster(s) from ${analysis.summary.providers} provider(s).`;
+
   return {
     title: analysis.clusters[0]?.title ?? "Research findings",
     facts,
     interpretation,
-    angles: analysis.clusters.slice(0, 5).map((cluster) => cluster.title),
+    angles,
     conflictsNoted,
   };
 }

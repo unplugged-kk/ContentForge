@@ -30,7 +30,7 @@ type AgentCfg = {
 };
 
 const COMMON_FAQ = (n: string): [string, string][] => [
-  [`Can ${n} publish without my approval?`, `No. ${n} can request drafts, critique them and ask for approval, but only an approved revision can be scheduled or published. Auto-publishing needs an explicit trusted policy you turn on yourself.`],
+  [`Can ${n} publish without my approval?`, `No. Human approval is enforced by default and locked in pilot mode. ${n} can request drafts, critique them and queue them for review, while unattended trusted automation is off by default and requires explicit operator opt-in outside pilot mode.`],
   [`Does ${n} need my social media passwords?`, "No. Channel credentials stay in your ContentForge server. Assistants only call domain tools, and every call is owner-scoped and audited."],
   [`Which platforms can ${n} post to through ContentForge?`, "X, LinkedIn, Threads, Instagram and YouTube, through the channel adapters registered in your ContentForge server."],
   [`Is the ContentForge MCP server available now?`, `Not yet. The same 29 domain tools already run the in-app Agent workspace; exposing them to ${n} over MCP is the next roadmap phase. Until then, use the Agent workspace with your chosen model provider.`],
@@ -47,7 +47,7 @@ const CAPS = (n: string): [string, string, string][] => [
   ["layers", "One story, every format", "Threads, LinkedIn posts, carousels, newsletters and scripts adapted to each platform."],
   ["calendar", "Plan and schedule ahead", "Approved revisions go into durable schedules that survive restarts and never double-post."],
   ["image", "Images and video requests", "Generate brand-aware images, and send video scripts to Video Factory through a versioned contract."],
-  ["lock", "Stays in your account", "Owner-scoped tools, audit logs and a human approval gate on everything that publishes."],
+  ["lock", "Stays in your account", "Owner-scoped tools, audit logs and human approval enforced by default (locked in pilot mode)."],
 ];
 
 const AGENTS: AgentCfg[] = [
@@ -74,12 +74,12 @@ const AGENTS: AgentCfg[] = [
     primary: "Set up automation", where: "Automation → Policies",
     asks: [
       { h: "A weekly content plan", q: "Every Monday, research my pillars and propose a week of posts for approval." },
-      { h: "Posts from a transcript", q: "Turn this podcast transcript into a thread, two LinkedIn posts and quote cards." },
+      { h: "Posts from a transcript", q: "Turn this podcast transcript into an X thread, two LinkedIn posts and a carousel." },
       { h: "Post with a generated image", q: "Make a carousel from yesterday's story with on-brand visuals." },
       { h: "Ship a launch everywhere", q: "Repurpose the launch story for every connected channel and queue it for review." },
     ],
     chips: [["What ran overnight?", "2 research jobs completed, 1 story created, 4 artifacts awaiting approval."], ["Pause automation for the weekend", "Automation policy paused until Monday 08:00. Nothing will be generated."], ["Show me what failed", "1 publication is in unknown state on X. It will be reconciled before any retry."]],
-    compare: { h: "Scheduled automation or an always-on agent?", rows: [["Setup", "Create an automation policy in ContentForge", "Give your dot the ContentForge tools (planned MCP)"], ["Runs", "Durable jobs on your server", "On the agent's own schedule"], ["Approval", "Stops at awaiting approval unless trusted", "Same server-side gate"], ["Observability", "Run history, journal and recovery", "Same run history"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
+    compare: { h: "Scheduled automation or an always-on agent?", rows: [["Setup", "Create an automation policy in ContentForge", "Give your dot the ContentForge tools (planned MCP)"], ["Runs", "Durable jobs on your server", "On the agent's own schedule"], ["Approval", "Enforced by default (locked in pilot mode; trusted opt-in off by default)", "Same server-side gate"], ["Observability", "Run history, journal and recovery", "Same run history"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
     same: { q: "How do dots compare to the Agent workspace?", cards: [["Agent workspace", "Built into ContentForge, available today."], ["OpenAI dots", "An outside always-on agent that would call the same tools over MCP."], ["Automation policies", "Deterministic, durable and observable runs with no agent in the loop."]] },
     faq: [["What can an always-on agent do with ContentForge?", "Run recurring research, score opportunities, request drafts and assemble a weekly plan, then stop and wait for your approval."], ...COMMON_FAQ("your dot")],
   },
@@ -111,7 +111,7 @@ const AGENTS: AgentCfg[] = [
       { h: "Read the numbers", q: "Which format performed best last month, and how sure are we?" },
     ],
     chips: [["Check my channels", "X, LinkedIn and Threads are connected. Instagram needs a new token."], ["Read last month's numbers", "Threads posts had the highest engagement rate (n=12). That is a correlation, not a cause."], ["Schedule the approved carousel", "Scheduled for Thursday 10:00 on Instagram and LinkedIn."]],
-    compare: { h: "Which way should you connect ContentForge to Claude Cowork?", rows: [["Setup", "Use the in-app Agent workspace", "Add ContentForge as a Cowork connector (planned)"], ["Best for", "Day-to-day review and approval", "Recurring desktop workflows"], ["Approval", "Human gate on every publish", "Same server-side gate"], ["Data", "Stays on your server", "Stays on your server"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
+    compare: { h: "Which way should you connect ContentForge to Claude Cowork?", rows: [["Setup", "Use the in-app Agent workspace", "Add ContentForge as a Cowork connector (planned)"], ["Best for", "Day-to-day review and approval", "Recurring desktop workflows"], ["Approval", "Enforced by default (locked in pilot mode; trusted opt-in off by default)", "Same server-side gate"], ["Data", "Stays on your server", "Stays on your server"], ["Status", "Available now", "Planned, roadmap Phase B"]] },
     same: { q: "How do social media workflows run in Claude Cowork?", cards: [["Discover", "List opportunities, stories and connected channels."], ["Create", "Request drafts and repurposing through domain tools."], ["Manage and analyze", "Schedule approved revisions and read performance."]] },
     faq: [["What is Claude Cowork?", "Claude Cowork is a desktop agent that can use connectors to run multi-step tasks. With the planned ContentForge MCP server it would call the same domain tools as the in-app agent."], ...COMMON_FAQ("Claude Cowork")],
   },
@@ -149,7 +149,7 @@ function renderAgent(a: AgentCfg): string {
     <h1 id="a-title" class="head">${a.title}</h1>
     <ul>${a.bullets.map((b) => `<li>${b}</li>`).join("")}</ul>
     <div class="a-btns"><a class="btn btn-light" href="${APP_PATH}">${a.primary}</a><a class="btn btn-ghost" href="${APP_PATH}">Start for $0 ${I.arrows}</a></div>
-    <p class="a-note">ContentForge is the AI-native content operating system that ${a.name} can drive through domain tools. Every publish passes a human approval gate. Part of the <a href="${DOCS_URL}">ContentForge agent docs</a>.</p>
+    <p class="a-note">ContentForge is the AI-native content operating system that ${a.name} can drive through domain tools. Human approval is enforced by default and locked in pilot mode (unattended trusted automation is off by default and requires explicit operator opt-in). Part of the <a href="${DOCS_URL}">ContentForge agent docs</a>.</p>
   </div>
   ${heroArt(a)}
 </div></section>

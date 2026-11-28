@@ -278,6 +278,6 @@ describeDb("research providers (db)", () => {
     const visible = (await storage.listJobs(mine, 200)).map((j) => j.correlationId);
     assert.ok(visible.includes(`${RUN}-owner-a`), "sees its own job");
     assert.ok(!visible.includes(`${RUN}-owner-b`), "does not see another user's job");
-    assert.ok(visible.includes(`${RUN}-owner-null`), "legacy unowned rows remain visible");
+    assert.ok(!visible.includes(`${RUN}-owner-null`), "legacy unowned rows are not visible");
   });
 });

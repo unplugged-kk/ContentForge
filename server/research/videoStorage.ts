@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { videoSources, videoChunks, videoClaims } from "@shared/schema";
@@ -6,10 +7,34 @@ import type { Transcript, TranscriptChunk } from "./transcript";
 /**
  * Persistence for video source intelligence.
  *
- * A transcript is stored once per `transcriptHash`; chunks and claims hang off
- * that source. Re-ingesting the same video returns the existing row and never
- * writes chunks twice.
+ * A transcript is stored once per `(ownerId, transcriptHash)`; chunks and claims
+ * hang off that owner-scoped source so tenants never share rows or extracted claims.
  */
+
+export function ownerScopedTranscriptHash(ownerId: number, transcriptHash: string): string {
+  return createHash("sha256").update(`${ownerId}:${transcriptHash}`).digest("hex");
+}
+
+export function getVideoSourceOwnerId(
+  source: { userId?: unknown; metadata?: unknown } | null | undefined,
+): number | null {
+  if (!source) return null;
+  if (typeof source.userId === "number" && Number.isInteger(source.userId)) {
+    return source.userId;
+  }
+  const meta =
+    source.metadata && typeof source.metadata === "object" && !Array.isArray(source.metadata)
+      ? (source.metadata as Record<string, unknown>)
+      : null;
+  return typeof meta?.userId === "number" && Number.isInteger(meta.userId) ? meta.userId : null;
+}
+
+export function isVideoSourceOwnedBy(
+  source: { userId?: unknown; metadata?: unknown } | null | undefined,
+  ownerId: number,
+): boolean {
+  return getVideoSourceOwnerId(source) === ownerId;
+}
 
 export async function getVideoSourceByHash(transcriptHash: string) {
   const [row] = await db
@@ -18,6 +43,10 @@ export async function getVideoSourceByHash(transcriptHash: string) {
     .where(eq(videoSources.transcriptHash, transcriptHash))
     .limit(1);
   return row ?? null;
+}
+
+export async function getVideoSourceByHashForOwner(ownerId: number, transcriptHash: string) {
+  return getVideoSourceByHash(ownerScopedTranscriptHash(ownerId, transcriptHash));
 }
 
 export async function getVideoSourceById(id: number) {
@@ -29,8 +58,10 @@ export async function saveTranscriptAsSource(input: {
   url: string;
   transcript: Transcript;
   chunks: TranscriptChunk[];
+  userId: number;
 }) {
-  const existing = await getVideoSourceByHash(input.transcript.hash);
+  const scopedHash = ownerScopedTranscriptHash(input.userId, input.transcript.hash);
+  const existing = await getVideoSourceByHash(scopedHash);
   if (existing) return { row: existing, reused: true };
 
   const lastCue = input.transcript.cues[input.transcript.cues.length - 1];
@@ -41,17 +72,22 @@ export async function saveTranscriptAsSource(input: {
       url: input.url,
       lang: input.transcript.lang,
       transcriptSource: input.transcript.source,
-      transcriptHash: input.transcript.hash,
+      transcriptHash: scopedHash,
       charCount: input.transcript.charCount,
       cueCount: input.transcript.cues.length,
       durationMs: lastCue ? lastCue.endMs : null,
-      metadata: { source: "yt-dlp", lang: input.transcript.lang },
+      metadata: {
+        source: "yt-dlp",
+        lang: input.transcript.lang,
+        userId: input.userId,
+        rawTranscriptHash: input.transcript.hash,
+      },
     })
     .onConflictDoNothing({ target: videoSources.transcriptHash })
     .returning();
 
-  // Lost the insert race: someone else wrote the same transcript hash.
-  const row = inserted ?? (await getVideoSourceByHash(input.transcript.hash));
+  // Lost the insert race: someone else wrote the same owner-scoped transcript hash.
+  const row = inserted ?? (await getVideoSourceByHash(scopedHash));
   if (!row) throw new Error("video source insert failed");
 
   if (inserted && input.chunks.length > 0) {

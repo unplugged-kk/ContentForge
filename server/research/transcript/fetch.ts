@@ -21,9 +21,22 @@ export function ytDlpPath(): string {
 
 type RunResult = { code: number; stdout: string; stderr: string };
 
+const YTDLP_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR"] as const;
+
+export function minimalYtDlpEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of YTDLP_ENV_ALLOWLIST) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  return out;
+}
+
 function run(bin: string, args: string[], timeoutMs: number): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, {
+      env: minimalYtDlpEnv(process.env),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -55,15 +68,27 @@ export async function ytDlpAvailable(): Promise<boolean> {
   }
 }
 
-const VIDEO_ID = /^[A-Za-z0-9_-]{6,20}$/;
+const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 export function youTubeIdFromUrl(input: string): string | null {
   const trimmed = input.trim();
   if (VIDEO_ID.test(trimmed)) return trimmed;
   try {
     const url = new URL(trimmed);
-    if (url.hostname.endsWith("youtu.be")) return url.pathname.replace(/^\//, "") || null;
-    return url.searchParams.get("v");
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const hostname = url.hostname.toLowerCase();
+    let candidate: string | null = null;
+    if (hostname === "youtu.be" || hostname.endsWith(".youtu.be")) {
+      candidate = url.pathname.replace(/^\/+/, "").split("/")[0] || null;
+    } else if (
+      hostname === "youtube.com" ||
+      hostname.endsWith(".youtube.com") ||
+      hostname === "youtube-nocookie.com" ||
+      hostname.endsWith(".youtube-nocookie.com")
+    ) {
+      candidate = url.searchParams.get("v");
+    }
+    return candidate && VIDEO_ID.test(candidate) ? candidate : null;
   } catch {
     return null;
   }
@@ -78,7 +103,7 @@ export async function fetchYouTubeTranscript(
   options: { lang?: string; timeoutMs?: number } = {},
 ): Promise<Transcript | null> {
   const videoId = youTubeIdFromUrl(input);
-  if (!videoId) throw new Error(`Not a YouTube video id or URL: ${input}`);
+  if (!videoId || !VIDEO_ID.test(videoId)) throw new Error(`Not a YouTube video id or URL: ${input}`);
 
   const dir = await mkdtemp(path.join(tmpdir(), "cf-subs-"));
   try {
@@ -97,6 +122,7 @@ export async function fetchYouTubeTranscript(
       "%(id)s.%(ext)s",
       "--paths",
       dir,
+      "--",
       `https://www.youtube.com/watch?v=${videoId}`,
     ];
     const result = await run(ytDlpPath(), args, options.timeoutMs ?? 60_000);

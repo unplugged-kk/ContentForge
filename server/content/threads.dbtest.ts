@@ -160,12 +160,14 @@ describeDb("Threads channel adapter (db)", () => {
     registerBuiltinChannelAdapters();
     const port = await fixture.start();
     savedEnv = {
+      ALLOW_ENV_CHANNEL_FALLBACK: process.env.ALLOW_ENV_CHANNEL_FALLBACK,
       THREADS_API_BASE_URL: process.env.THREADS_API_BASE_URL,
       THREADS_API_VERSION: process.env.THREADS_API_VERSION,
       THREADS_ACCESS_TOKEN: process.env.THREADS_ACCESS_TOKEN,
       THREADS_USER_ID: process.env.THREADS_USER_ID,
       THREADS_TIMEOUT_MS: process.env.THREADS_TIMEOUT_MS,
     };
+    process.env.ALLOW_ENV_CHANNEL_FALLBACK = "1";
     process.env.THREADS_API_BASE_URL = `http://127.0.0.1:${port}`;
     process.env.THREADS_API_VERSION = "v1.0";
     process.env.THREADS_ACCESS_TOKEN = "fixture-token";

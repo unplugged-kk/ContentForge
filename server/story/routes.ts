@@ -17,7 +17,10 @@ import {
   ResearchJobNotCompleteError,
   ResearchJobNotFoundError,
   type CreateStoryDeps,
+  type StorySynthesis,
 } from "./service";
+import { storyInputSchema, toStorySynthesis } from "./inputSchema";
+import { synthesizeStructuredBrief, type SynthesisEvidenceItem } from "./synthesis";
 
 export const createStoryBodySchema = z.object({
   researchJobId: z.number().int().positive().optional().nullable(),
@@ -30,6 +33,83 @@ export const createStoryBodySchema = z.object({
 });
 
 export type CreateStoryBody = z.infer<typeof createStoryBodySchema>;
+
+export const synthesizeBriefBodySchema = z.object({
+  researchJobId: z.number().int().positive(),
+  topic: z.string().trim().min(1).max(300).optional(),
+  evidenceRefs: z.array(z.number().int().positive()).min(1).max(1000).optional(),
+});
+
+export type SynthesizeBriefBody = z.infer<typeof synthesizeBriefBodySchema>;
+
+export interface StoryBriefResearchPort {
+  listEvidence(jobId: number): Promise<
+    Array<{
+      id: number;
+      sourceId?: number | null;
+      excerpt: string;
+      kind?: string | null;
+    }>
+  >;
+  listSources?(jobId: number): Promise<
+    Array<{
+      id: number;
+      title?: string | null;
+      canonicalUrl?: string | null;
+      provider?: string | null;
+    }>
+  >;
+}
+
+export interface StoryRouterDeps extends CreateStoryDeps {
+  briefResearch?: StoryBriefResearchPort;
+  synthesizeBrief?: typeof synthesizeStructuredBrief;
+}
+
+function formatZodIssues(issues: z.ZodIssue[]): string {
+  return issues
+    .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+    .join(", ");
+}
+
+type ParsedCreateStoryRequest =
+  | { ok: true; researchJobId: number | null; synthesis: StorySynthesis }
+  | { ok: false; message: string };
+
+/**
+ * Parse `POST /api/stories` payloads, accepting either the co-primary
+ * discriminated `storyInputSchema` (`mode: "first_hand" | "researched" | "hybrid"`)
+ * or the legacy flat `createStoryBodySchema`.
+ */
+export function parseCreateStoryRequest(rawBody: unknown): ParsedCreateStoryRequest {
+  if (
+    rawBody !== null &&
+    typeof rawBody === "object" &&
+    "mode" in rawBody &&
+    (rawBody as { mode?: unknown }).mode !== undefined
+  ) {
+    const parsed = storyInputSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return { ok: false, message: formatZodIssues(parsed.error.issues) };
+    }
+    return {
+      ok: true,
+      researchJobId: parsed.data.mode === "first_hand" ? null : parsed.data.researchJobId,
+      synthesis: toStorySynthesis(parsed.data),
+    };
+  }
+
+  const parsed = createStoryBodySchema.safeParse(rawBody ?? {});
+  if (!parsed.success) {
+    return { ok: false, message: formatZodIssues(parsed.error.issues) };
+  }
+  const { researchJobId, ...synthesis } = parsed.data;
+  return {
+    ok: true,
+    researchJobId: researchJobId ?? null,
+    synthesis,
+  };
+}
 
 function serializeStory(story: Story) {
   return {
@@ -56,7 +136,7 @@ function httpStatusFor(error: unknown): { status: number; message: string } | nu
   return null;
 }
 
-export function createStoryRouter(deps: CreateStoryDeps): Router {
+export function createStoryRouter(deps: StoryRouterDeps): Router {
   const router = Router();
 
   router.get("/", async (req, res, next) => {
@@ -67,7 +147,7 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
       const rows = deps.stories.listStories ? await deps.stories.listStories() : [];
       return res.json(
         rows
-          .filter((s) => s.userId === null || s.userId === ownerId)
+          .filter((s) => s.userId === ownerId)
           .map(serializeStory),
       );
     } catch (error) {
@@ -75,17 +155,89 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
     }
   });
 
-  router.post("/", async (req, res, next) => {
-    const parsed = createStoryBodySchema.safeParse(req.body ?? {});
+  router.post("/synthesize-brief", async (req, res, next) => {
+    const parsed = synthesizeBriefBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res.status(400).json({
-        message: parsed.error.issues
-          .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-          .join(", "),
-      });
+      return res.status(400).json({ message: formatZodIssues(parsed.error.issues) });
+    }
+    if (!deps.briefResearch) {
+      return res.status(501).json({ message: "Brief synthesis research port is not configured" });
     }
 
-    const { researchJobId, ...synthesis } = parsed.data;
+    const { researchJobId, topic, evidenceRefs } = parsed.data;
+    try {
+      const ownerId = getUserId(req);
+      const job = await deps.research.getJob(researchJobId);
+      if (!job || (job.userId !== ownerId)) {
+        throw new ResearchJobNotFoundError(researchJobId);
+      }
+      if (job.status !== "complete") {
+        throw new ResearchJobNotCompleteError(researchJobId, job.status);
+      }
+
+      const evidenceRows = await deps.briefResearch.listEvidence(researchJobId);
+      if (evidenceRows.length === 0) {
+        throw new ResearchJobHasNoEvidenceError(researchJobId);
+      }
+
+      let selectedRows = evidenceRows;
+      if (evidenceRefs && evidenceRefs.length > 0) {
+        const byId = new Map(evidenceRows.map((row) => [row.id, row]));
+        const uniqueRefs = Array.from(new Set(evidenceRefs));
+        const foreign = uniqueRefs.filter((id) => !byId.has(id));
+        if (foreign.length > 0) {
+          throw new InvalidStoryInputError([
+            `evidenceRefs do not belong to ResearchJob ${researchJobId}: ${foreign.join(", ")}`,
+          ]);
+        }
+        selectedRows = uniqueRefs.map((id) => byId.get(id)!);
+      }
+
+      const sources = deps.briefResearch.listSources
+        ? await deps.briefResearch.listSources(researchJobId)
+        : [];
+      const sourceById = new Map(sources.map((s) => [s.id, s]));
+
+      const items: SynthesisEvidenceItem[] = selectedRows.map((row) => {
+        const src = typeof row.sourceId === "number" ? sourceById.get(row.sourceId) : undefined;
+        return {
+          id: row.id,
+          text: row.excerpt,
+          title: src?.title ?? null,
+          canonicalUrl: src?.canonicalUrl ?? null,
+          provider: src?.provider ?? row.kind ?? null,
+        };
+      });
+
+      const synthesizer = deps.synthesizeBrief ?? synthesizeStructuredBrief;
+      const result = await synthesizer({
+        topic: topic ?? job.query ?? `Research Job #${job.id}`,
+        evidence: items,
+        userId: ownerId,
+      });
+
+      return res.json({
+        researchJobId,
+        evidenceRefs: items.map((item) => item.id),
+        brief: result.brief,
+        markdown: result.markdown,
+        usedFallback: result.usedFallback,
+        ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+      });
+    } catch (error) {
+      const mapped = httpStatusFor(error);
+      if (mapped) return res.status(mapped.status).json({ message: mapped.message });
+      return next(error);
+    }
+  });
+
+  router.post("/", async (req, res, next) => {
+    const parsed = parseCreateStoryRequest(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ message: parsed.message });
+    }
+
+    const { researchJobId, synthesis } = parsed;
 
     // Human-authored story without a research job is valid per locked domain model
     if (synthesis.provenance === "human" && !researchJobId) {
@@ -119,7 +271,7 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
       // Phase 30.2: a caller may only derive stories from their own (or
       // legacy unattributed) research — never from another owner's job.
       const job = await deps.research.getJob(researchJobId);
-      if (!job || (job.userId !== null && job.userId !== getUserId(req))) {
+      if (!job || (job.userId !== getUserId(req))) {
         throw new ResearchJobNotFoundError(researchJobId);
       }
       const story = await createStoryFromResearch(researchJobId, synthesis, deps);
@@ -140,7 +292,7 @@ export function createStoryRouter(deps: CreateStoryDeps): Router {
       const story = await deps.stories.getStory(id);
       // Phase 30.2: attributed foreign rows are indistinguishable from
       // missing (non-leaking 404); legacy NULL rows remain visible.
-      if (!story || (story.userId !== null && story.userId !== getUserId(req))) {
+      if (!story || (story.userId !== getUserId(req))) {
         return res.status(404).json({ message: "Story not found" });
       }
       return res.json(serializeStory(story));
@@ -165,6 +317,10 @@ export async function createDefaultStoryRouter(): Promise<Router> {
     research: {
       getJob: (jobId) => researchStorage.getJob(jobId),
       listEvidenceIds: (jobId) => researchStorage.listEvidenceIds(jobId),
+    },
+    briefResearch: {
+      listEvidence: (jobId) => researchStorage.listEvidence(jobId),
+      listSources: (jobId) => researchStorage.listSources(jobId),
     },
   });
 }

@@ -21,6 +21,7 @@ import {
   uploadMediaToX,
   XWriteActionPendingError,
 } from "../social/x";
+import { XPartialPublishError } from "../social/partialPublish";
 import { PERFORMANCE_SCHEMA_VERSION } from "./learning/constants";
 import { hourWindow } from "./learning/identity";
 import {
@@ -55,6 +56,7 @@ import {
   validateInstagramCaption,
   validateInstagramPublishMedia,
 } from "../social/instagram";
+import { validateXText } from "../social/xTextLimits";
 import {
   descriptionFromPayload,
   privacyFromPayload,
@@ -253,6 +255,22 @@ export function createXChannelAdapter(): ChannelAdapter {
       };
     }
 
+    const mediaText = mediaTextFor(request.format, request.payload);
+    if (mediaText.length > 0) {
+      const limitError = validateXText([mediaText]);
+      if (!limitError.ok) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: limitError.error ?? "x text exceeds the transport limit",
+        };
+      }
+    }
+
     const attachment = media[0];
     let uploaded: { mediaId: string | null; mediaUrl: string };
     try {
@@ -276,7 +294,7 @@ export function createXChannelAdapter(): ChannelAdapter {
     }
 
     try {
-      const result = await postContentToX([mediaTextFor(request.format, request.payload)], {
+      const result = await postContentToX([mediaText], {
         mediaUrls: [uploaded.mediaUrl],
         ownerUserId: request.ownerUserId,
       });
@@ -351,6 +369,21 @@ export function createXChannelAdapter(): ChannelAdapter {
         };
       }
 
+      // Reject over-long units before reaching the provider so thread numbering
+      // cannot silently truncate text on publish (D24).
+      const limitError = validateXText(texts);
+      if (!limitError.ok) {
+        return {
+          ok: false,
+          providerCalled: false,
+          externalId: null,
+          externalUrl: null,
+          publishedAt: null,
+          errorClass: "permanent",
+          errorMessage: limitError.error ?? "x text exceeds the transport limit",
+        };
+      }
+
       try {
         const result = await postContentToX(texts, { ownerUserId: request.ownerUserId });
         return {
@@ -376,6 +409,27 @@ export function createXChannelAdapter(): ChannelAdapter {
             publishedAt: null,
             errorMessage: error.message,
             metrics: { writeActionId: error.writeActionId },
+          };
+        }
+        // Partial thread publish: keep providerCalled=true and persist the live
+        // tweet ids in metrics so the outcome stays ambiguous and auditable.
+        if (error instanceof XPartialPublishError) {
+          return {
+            ok: false,
+            providerCalled: true,
+            externalId: error.tweetIds[0] ?? null,
+            externalUrl: error.urls[0] ?? null,
+            publishedAt: null,
+            errorMessage: error.message,
+            metrics: {
+              partialPublish: true,
+              publishedUnitCount: error.publishedCount,
+              publishedTweetIds: [...error.tweetIds],
+              publishedUrls: [...error.urls],
+              failedUnit: error.failedUnit,
+              totalUnits: error.totalUnits,
+              failedUnitOutcomeUnknown: error.unitOutcomeUnknown,
+            },
           };
         }
         const raw = error instanceof Error ? error.message : String(error);

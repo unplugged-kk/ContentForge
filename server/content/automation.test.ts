@@ -18,6 +18,8 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import express from "express";
+import type { AddressInfo } from "node:net";
 import type {
   Artifact,
   AutomationPolicy,
@@ -44,6 +46,7 @@ import {
   dispatchScheduledAutomationPolicies,
   dueAutomationSlot,
   isTerminalRunStatus,
+  isTrustedAutomationAllowed,
   normalizeAutomationPolicyInput,
   resolveAutomationLimits,
   summarizeAutomationRun,
@@ -53,10 +56,13 @@ import {
   AutomationLimitError,
   AutomationPolicyInactiveError,
   AutomationPolicyNotFoundError,
+  AutomationTrustedModeDisabledError,
   DEFAULT_AUTOMATION_LIMITS,
   type AutomationDeps,
   type AutomationResearchPort,
 } from "./automation";
+import { createAutomationRouter } from "./automationRoutes";
+import { createLearningRecorder } from "./learning/record";
 import type {
   AutomationStoragePort,
   InsertAutomationPolicyRow,
@@ -948,6 +954,8 @@ describe("step machine", () => {
     assert.ok(story, "the run derived a Story");
     assert.equal(story!.researchJobId, afterResearch!.researchJobId);
     assert.match(story!.insightBody, /first excerpt/);
+    assert.match(story!.insightBody, /## Grounded Facts/);
+    assert.ok(story!.angles.length >= 1, "structured brief populates candidate angles");
     assert.equal(story!.automationRunId, run.id);
 
     // fanout
@@ -1111,6 +1119,17 @@ describe("failure semantics", () => {
   });
 });
 
+async function withTrustedAutomation<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.ALLOW_TRUSTED_AUTOMATION;
+  process.env.ALLOW_TRUSTED_AUTOMATION = "1";
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.ALLOW_TRUSTED_AUTOMATION;
+    else process.env.ALLOW_TRUSTED_AUTOMATION = previous;
+  }
+}
+
 describe("approval boundary", () => {
   it("stops at awaiting_approval and never schedules under approval_required", async () => {
     const h = harness();
@@ -1123,37 +1142,161 @@ describe("approval boundary", () => {
     assert.equal(h.content.artifacts[0].readiness, "draft", "automation leaves approval to the human");
   });
 
-  it("in trusted mode moves artifacts through the Artifact model's OWN transitions and completes", async () => {
+  it("blocks trusted policy creation and activation by default (ALLOW_TRUSTED_AUTOMATION unset) with HTTP 403", async () => {
+    assert.equal(isTrustedAutomationAllowed(), false);
+    assert.equal(isTrustedAutomationAllowed({ ALLOW_TRUSTED_AUTOMATION: "0" }), false);
+    assert.equal(isTrustedAutomationAllowed({ ALLOW_TRUSTED_AUTOMATION: "1" }), true);
+
     const h = harness();
-    const policy = await createAutomationPolicy(1, validPolicy({ approvalMode: "trusted" }), h.deps);
-    const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: "trusted", deps: h.deps });
+    await assert.rejects(
+      () => createAutomationPolicy(1, validPolicy({ approvalMode: "trusted" }), h.deps),
+      AutomationTrustedModeDisabledError,
+    );
+    await assert.rejects(
+      () =>
+        createAutomationPolicy(
+          1,
+          validPolicy({ approvalMode: "trusted", publicationConfig: { mode: "on_approval" } }),
+          h.deps,
+        ),
+      AutomationTrustedModeDisabledError,
+    );
+
+    const safePolicy = await createAutomationPolicy(1, validPolicy(), h.deps);
+    await assert.rejects(
+      () => updateAutomationPolicy(safePolicy.id, 1, { approvalMode: "trusted" }, h.deps),
+      AutomationTrustedModeDisabledError,
+    );
+
+    // Pre-existing paused trusted policy cannot be activated when the flag is off,
+    // but can still be paused or downgraded to approval_required.
+    const preexisting = await withTrustedAutomation(() =>
+      createAutomationPolicy(1, validPolicy({ approvalMode: "trusted", status: "paused" }), h.deps),
+    );
+    await assert.rejects(
+      () => updateAutomationPolicy(preexisting.id, 1, { status: "active" }, h.deps),
+      AutomationTrustedModeDisabledError,
+    );
+    const archived = await updateAutomationPolicy(preexisting.id, 1, { status: "archived" }, h.deps);
+    assert.equal(archived.status, "archived");
+    const downgraded = await updateAutomationPolicy(
+      preexisting.id,
+      1,
+      { approvalMode: "approval_required", status: "active" },
+      h.deps,
+    );
+    assert.equal(downgraded.approvalMode, "approval_required");
+
+    // Verify HTTP 403 mapping through createAutomationRouter.
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.userId = 1;
+      next();
+    });
+    app.use("/api/automation", createAutomationRouter(h.deps));
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const createRes = await fetch(`${base}/api/automation/policies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(validPolicy({ approvalMode: "trusted" })),
+      });
+      assert.equal(createRes.status, 403);
+
+      const patchRes = await fetch(`${base}/api/automation/policies/${safePolicy.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ approvalMode: "trusted", publicationConfig: { mode: "on_approval" } }),
+      });
+      assert.equal(patchRes.status, 403);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("holds pre-existing trusted runs at awaiting_approval when ALLOW_TRUSTED_AUTOMATION is off", async () => {
+    const h = harness();
+    const policy = await withTrustedAutomation(() =>
+      createAutomationPolicy(
+        1,
+        validPolicy({ approvalMode: "trusted", publicationConfig: { mode: "on_approval" } }),
+        h.deps,
+      ),
+    );
+    const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: "trusted-held", deps: h.deps });
     await runToCompletion(run.id, h);
     const finalRun = await h.automation.getAutomationRun(run.id);
-    assert.equal(finalRun!.status, "completed");
-    assert.equal(h.content.artifacts[0].readiness, "approved", "approved via the documented transitions");
-    assert.ok(h.content.artifacts[0].approvedAt, "the approval is durably recorded");
-    assert.equal(h.content.schedules.length, 0, "on_approval was not requested");
+    assert.equal(finalRun!.status, "awaiting_approval");
+    assert.equal(h.content.artifacts[0].readiness, "draft");
+    assert.equal(h.content.schedules.length, 0);
+  });
+
+  it("in trusted mode moves artifacts through the Artifact model's OWN transitions, records automation_trusted actor, and completes", async () => {
+    await withTrustedAutomation(async () => {
+      const h = harness();
+      const recordedSignals: Array<{ signalType: string; payload: Record<string, unknown> }> = [];
+      const emptyDb = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => [],
+            }),
+          }),
+        }),
+      } as never;
+      h.deps.learning = createLearningRecorder(
+        {
+          insertLearningSignal: async (row) => {
+            const stored = { id: next(), ...row };
+            recordedSignals.push({
+              signalType: row.signalType,
+              payload: row.payload as Record<string, unknown>,
+            });
+            return { row: stored as never, created: true };
+          },
+        } as never,
+        emptyDb,
+      );
+
+      const policy = await createAutomationPolicy(1, validPolicy({ approvalMode: "trusted" }), h.deps);
+      const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: "trusted", deps: h.deps });
+      await runToCompletion(run.id, h);
+      const finalRun = await h.automation.getAutomationRun(run.id);
+      assert.equal(finalRun!.status, "completed");
+      assert.equal(h.content.artifacts[0].readiness, "approved", "approved via the documented transitions");
+      assert.ok(h.content.artifacts[0].approvedAt, "the approval is durably recorded");
+      assert.equal(h.content.schedules.length, 0, "on_approval was not requested");
+
+      const approvalSignal = recordedSignals.find((s) => s.signalType === "approval");
+      assert.ok(approvalSignal, "approval learning signal was recorded");
+      assert.equal(approvalSignal!.payload.approvedBy, "automation_trusted");
+    });
   });
 
   it("creates a Schedule in trusted + on_approval mode — through the existing pipeline only", async () => {
-    const h = harness();
-    const policy = await createAutomationPolicy(
-      1,
-      validPolicy({ approvalMode: "trusted", publicationConfig: { mode: "on_approval" } }),
-      h.deps,
-    );
-    const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: "trusted-pub", deps: h.deps });
-    await runToCompletion(run.id, h);
-    assert.equal((await h.automation.getAutomationRun(run.id))!.status, "completed");
-    assert.equal(h.content.schedules.length, 1, "one Schedule, created by createSchedule");
-    assert.equal(h.content.schedules[0].artifactId, h.content.artifacts[0].id);
-    assert.equal(h.content.schedules[0].channel, "x", "the channel comes from the Artifact, not a policy flag");
+    await withTrustedAutomation(async () => {
+      const h = harness();
+      const policy = await createAutomationPolicy(
+        1,
+        validPolicy({ approvalMode: "trusted", publicationConfig: { mode: "on_approval" } }),
+        h.deps,
+      );
+      const { run } = await createAutomationRun({ policy, triggerType: "manual", triggerIdentity: "trusted-pub", deps: h.deps });
+      await runToCompletion(run.id, h);
+      assert.equal((await h.automation.getAutomationRun(run.id))!.status, "completed");
+      assert.equal(h.content.schedules.length, 1, "one Schedule, created by createSchedule");
+      assert.equal(h.content.schedules[0].artifactId, h.content.artifacts[0].id);
+      assert.equal(h.content.schedules[0].channel, "x", "the channel comes from the Artifact, not a policy flag");
 
-    // Re-settling must not create a second Schedule.
-    const outcomes = (await h.automation.getAutomationRun(run.id))!.outcomes;
-    await h.automation.patchAutomationRun(run.id, { status: "running", outcomes });
-    await advanceAutomationRun(run.id, h.deps);
-    assert.equal(h.content.schedules.length, 1, "scheduling is idempotent");
+      // Re-settling must not create a second Schedule.
+      const outcomes = (await h.automation.getAutomationRun(run.id))!.outcomes;
+      await h.automation.patchAutomationRun(run.id, { status: "running", outcomes });
+      await advanceAutomationRun(run.id, h.deps);
+      assert.equal(h.content.schedules.length, 1, "scheduling is idempotent");
+    });
   });
 });
 

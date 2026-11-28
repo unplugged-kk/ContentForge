@@ -21,6 +21,16 @@ export type PublicProvider = {
   lastHealthError: string | null;
 };
 
+const SENSITIVE_HEADER_KEY = /(key|token|secret|auth|cookie|pass|bearer|cred)/i;
+
+function sanitizeExtraHeaders(headers: Record<string, string> | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    out[key] = SENSITIVE_HEADER_KEY.test(key) ? "[redacted]" : value;
+  }
+  return out;
+}
+
 export function toPublicProvider(row: AiProviderRow): PublicProvider {
   return {
     id: row.id,
@@ -30,7 +40,7 @@ export function toPublicProvider(row: AiProviderRow): PublicProvider {
     hasSecret: Boolean(row.secretCiphertext),
     organization: row.organization,
     project: row.project,
-    extraHeaders: row.extraHeaders ?? {},
+    extraHeaders: sanitizeExtraHeaders(row.extraHeaders),
     transport: row.transport,
     detectedTransport: row.detectedTransport,
     defaultModel: row.defaultModel,

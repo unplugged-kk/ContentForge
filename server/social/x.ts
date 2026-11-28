@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Post, Tweet } from "@shared/schema";
-import { assertEligibleForXPublish, type XPublishInvoker } from "@shared/xDeveloperRisk";
+import { assertEligibleForXPublish, type XPublishInvoker, type XPostPublishGateInput } from "@shared/xDeveloperRisk";
 import { storage } from "../storage";
 import { addThreadNumbering } from "../utils/threadUtils";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
+import { XPartialPublishError, partialPublishRecord } from "./partialPublish";
 
 /** X API monthly read budget (Basic tier). Warn at 70% (7000 reads). */
 export const X_MONTHLY_READ_LIMIT = 10_000;
@@ -236,10 +238,8 @@ async function getXQuickApiConfig(ownerUserId?: number | null): Promise<{ baseUr
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const baseUrl = getXQuickBaseUrl();
-  // Owner scoping forbids borrowing *another owner's* connected account; the
-  // deployment-level xQuick key/account pair is operator-wide configuration,
-  // not a tenant row, so it remains a valid fallback behind the owner's own.
-  const token = account?.accessToken?.trim() || getXQuickToken(null);
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId, { allowLegacyXQuickAlias: true });
+  const token = account?.accessToken?.trim() || (allowEnvFallback ? getXQuickToken(null) : null);
   if (!baseUrl || !token) return null;
   return { baseUrl, token };
 }
@@ -249,7 +249,9 @@ async function getXQuickClientConfig(ownerUserId?: number | null): Promise<{ bas
     ? await storage.getConnectedAccount("x")
     : await storage.getConnectedAccountForOwner("x", ownerUserId);
   const apiConfig = await getXQuickApiConfig(ownerUserId);
-  const xAccount = getXQuickAccount(account?.username ?? null);
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId, { allowLegacyXQuickAlias: true });
+  const ownedUsername = account?.username?.trim().replace(/^@/, "") || null;
+  const xAccount = ownedUsername || (allowEnvFallback ? getXQuickAccount(null) : null);
   if (!apiConfig || !xAccount) return null;
   return { ...apiConfig, account: xAccount };
 }
@@ -529,6 +531,9 @@ export async function postContentToX(
   const tweetIds: string[] = [];
   let lastId: string | undefined;
 
+  const liveUrls = (ids: readonly string[]) =>
+    ids.map((id) => `https://x.com/${username || "i"}/status/${id}`);
+
   for (let index = 0; index < tweets.length; index++) {
     const payload = buildXQuickPostPayload(
       config.account,
@@ -536,17 +541,43 @@ export async function postContentToX(
       lastId,
       index === 0 ? mediaUrls : [],
     );
-    const sent = await postViaXQuick(config, payload);
+    let sent: XQuickPostResponse;
+    try {
+      sent = await postViaXQuick(config, payload);
+    } catch (e) {
+      // Prior units are already live on X; carry their ids so callers record
+      // them instead of writing an empty failed row that invites duplicate retries.
+      if (tweetIds.length > 0) {
+        throw new XPartialPublishError({
+          tweetIds,
+          urls: liveUrls(tweetIds),
+          failedUnit: index + 1,
+          totalUnits: tweets.length,
+          cause: e,
+        });
+      }
+      throw e;
+    }
     const id = extractXQuickPostId(sent);
-    if (!id) throw new Error("XQUICK_POST_ID_MISSING");
+    if (!id) {
+      if (tweetIds.length > 0) {
+        throw new XPartialPublishError({
+          tweetIds,
+          urls: liveUrls(tweetIds),
+          failedUnit: index + 1,
+          totalUnits: tweets.length,
+          cause: new Error("XQUICK_POST_ID_MISSING"),
+        });
+      }
+      throw new Error("XQUICK_POST_ID_MISSING");
+    }
     username = username || extractXQuickUsername(sent);
     tweetIds.push(id);
     lastId = id;
   }
 
   const handle = username || "i";
-  const urls = tweetIds.map((id) => `https://x.com/${handle}/status/${id}`);
-  return { tweetIds, urls, username };
+  return { tweetIds, urls: tweetIds.map((id) => `https://x.com/${handle}/status/${id}`), username };
 }
 
 /**
@@ -627,8 +658,9 @@ export async function tryPublishPostById(
   const post = await storage.getPost(ownerUserId, postId);
   if (!post) throw new Error("Post not found");
 
+  // Pass the full row so `externalIds` reaches `rowHasLiveUnits` inside the gate.
   assertEligibleForXPublish(
-    { status: post.status, scheduledAt: post.scheduledAt },
+    post as unknown as XPostPublishGateInput,
     { invokedBy },
   );
 
@@ -647,6 +679,14 @@ export async function tryPublishPostById(
     );
     return result;
   } catch (e: any) {
+    if (e instanceof XPartialPublishError) {
+      await storage.updatePost(
+        ownerUserId,
+        postId,
+        partialPublishRecord(post, e) as any,
+      );
+      throw e;
+    }
     const friendly = translateXError(e?.message || String(e));
     await storage.updatePost(ownerUserId, postId, {
       status: "failed",

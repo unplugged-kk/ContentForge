@@ -27,6 +27,9 @@ import type {
   Voice,
 } from "@shared/schema";
 import { getUserId, requireOwnerId } from "../middleware/userContext";
+import { publishLimiter } from "../middleware/rateLimit";
+import type { ClaimCheckEvidenceItem } from "../intelligence/quality/claimCheck";
+import { extractCreatorNotesFromStory } from "../story/inputSchema";
 import type { ContentStoragePort } from "./storage";
 import {
   createOpportunityFromStory,
@@ -66,6 +69,7 @@ import {
   submitArtifactForReview,
   ArtifactMediaReferenceError,
   ArtifactNotFoundError,
+  ArtifactOpportunityKilledError,
   ArtifactStateError,
   InvalidArtifactPayloadError,
   QualityGateBlockedError,
@@ -89,6 +93,10 @@ import {
   ScheduleInputError,
 } from "./scheduling";
 import { publishArtifactToChannels, DistributionInputError } from "./distribution";
+import {
+  logManualPublication,
+  ManualPublishInputError,
+} from "./manualPublish";
 import { reconcileUnknownPublications } from "./publication";
 import { assembleContext } from "./context";
 import { requestStyleAnalysis, activateStyleProfile, publicReference, publicStyleProfile, ReferenceNotFoundError, StyleServiceInputError, StyleProfileNotFoundError } from "./styleService";
@@ -512,9 +520,9 @@ function parseId(value: unknown): number | null {
 /**
  * Phase 30.2: per-row owner check for id-addressed reads and mutations.
  *
- * Rows with NULL userId are legacy unattributed rows (visible bridge — the
- * pre-attribution corpus has no owner to enforce). Rows attributed to another
- * owner are indistinguishable from missing (404, non-leaking), mirroring the
+ * Rows with NULL userId are unowned legacy rows and are not readable. Rows
+ * attributed to another owner are indistinguishable from missing (404,
+ * non-leaking), mirroring the
  * established publication/style-profile pattern. The /api authGate guarantees
  * an authenticated caller; `ownerId` is derived server-side via getUserId.
  */
@@ -522,7 +530,7 @@ function isForeignRow(
   row: { userId: number | null } | null | undefined,
   ownerId: number | undefined,
 ): boolean {
-  return !!row && row.userId !== null && row.userId !== ownerId;
+  return !!row && row.userId !== ownerId;
 }
 
 function message(error: unknown): string | null {
@@ -878,6 +886,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
       if (error instanceof InvalidArtifactPayloadError) return res.status(422).json({ message: error.message });
+      if (error instanceof ArtifactOpportunityKilledError) return res.status(409).json({ message: error.message });
       if (error instanceof ArtifactMediaReferenceError) {
         const notFound = /not found/.test(error.message);
         return res.status(notFound ? 404 : 409).json({ message: error.message });
@@ -1052,11 +1061,36 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!head || isForeignRow(head, getUserId(req))) {
         return res.status(404).json({ message: "Artifact not found" });
       }
+      let evidence: ClaimCheckEvidenceItem[] | undefined;
+      let creatorNotes: string | null | undefined;
+      let researchJobId: number | null | undefined;
+      if (typeof deps.content.getOpportunity === "function") {
+        const opportunity = await deps.content.getOpportunity(head.opportunityId);
+        if (opportunity && typeof deps.generation?.stories?.getStory === "function") {
+          const story = await deps.generation.stories.getStory(opportunity.storyId);
+          if (story) {
+            creatorNotes = extractCreatorNotesFromStory(story);
+            researchJobId = story.researchJobId;
+            if (
+              story.researchJobId !== null &&
+              typeof deps.generation?.evidence?.listEvidence === "function"
+            ) {
+              const rows = await deps.generation.evidence.listEvidence(story.researchJobId);
+              evidence = rows.map((e) => ({ id: e.id, text: e.excerpt }));
+            }
+          }
+        }
+      }
       const artifact = await createHumanEditRevision(
         id,
         body.payload,
         { artifacts: deps.content, learning: deps.learning },
-        { attributionReason: body.attributionReason ?? null },
+        {
+          attributionReason: body.attributionReason ?? null,
+          ...(evidence !== undefined ? { evidence } : {}),
+          ...(creatorNotes !== undefined ? { creatorNotes } : {}),
+          ...(researchJobId !== undefined ? { researchJobId } : {}),
+        },
       );
       return res.status(201).json(serializeArtifact(artifact));
     } catch (error) {
@@ -1073,7 +1107,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
    * publishes inline. Duplicate deliveries reuse logical identity; pass
    * `republishKey` for an explicit new Publication.
    */
-  router.post("/artifacts/:id/publications", async (req, res, next) => {
+  router.post("/artifacts/:id/publications", publishLimiter, async (req, res, next) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
     try {
@@ -1115,9 +1149,50 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       const artifact = await deps.content.getArtifactForOwner(id, ownerId);
       if (!artifact) return res.status(404).json({ message: "Artifact not found" });
       const rows = await deps.content.listPublicationsByArtifact(id);
-      const owned = rows.filter((p) => p.userId === null || p.userId === ownerId);
+      const owned = rows.filter((p) => p.userId === ownerId);
       return res.json(owned.map(serializePublication));
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  /**
+   * Manual publish logging for export-first artifacts (INC-08).
+   * Persists canonical Schedule → Occurrence → Publication (providerCalled=false)
+   * → Result (outcome="published") so operators can immediately log metrics via
+   * POST /api/learning/publications/:id/observations.
+   */
+  router.post("/artifacts/:id/log-manual-publish", async (req, res, next) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ message: "Invalid artifact id" });
+    try {
+      const ownerId = requireOwnerId(req);
+      const outcome = await logManualPublication(id, ownerId, req.body ?? {}, {
+        content: deps.content,
+        learning: deps.learning,
+      });
+      return res.status(outcome.created ? 201 : 200).json({
+        publicationId: outcome.publication.id,
+        scheduleId: outcome.schedule.id,
+        occurrenceId: outcome.occurrence.id,
+        resultId: outcome.result?.id ?? null,
+        artifactId: outcome.artifact.id,
+        channel: outcome.publication.channel,
+        state: outcome.publication.state,
+        providerCalled: outcome.publication.providerCalled,
+        externalUrl: outcome.result?.externalUrl ?? null,
+        publishedAt: outcome.result?.publishedAt ?? outcome.schedule.startAt,
+        created: outcome.created,
+        publication: serializePublication(outcome.publication),
+        result: outcome.result,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
+      }
+      if (error instanceof ManualPublishInputError) return res.status(400).json({ message: error.message });
+      if (error instanceof ArtifactNotFoundError) return res.status(404).json({ message: error.message });
+      if (error instanceof ArtifactNotSchedulableError) return res.status(409).json({ message: error.message });
       return next(error);
     }
   });
@@ -1127,11 +1202,16 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createScheduleBody.parse(req.body ?? {});
       const { artifactId, ...options } = body;
+      const ownerId = requireOwnerId(req);
       const artifact = await deps.content.getArtifact(artifactId);
-      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+      if (!artifact || isForeignRow(artifact, ownerId)) {
         return res.status(404).json({ message: "Artifact not found" });
       }
-      const schedule = await createSchedule(artifactId, options, { content: deps.content });
+      const schedule = await createSchedule(
+        artifactId,
+        { ...options, ownerUserId: ownerId },
+        { content: deps.content },
+      );
       return res.status(201).json(serializeSchedule(schedule));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });
@@ -1192,13 +1272,15 @@ export function createContentRouter(deps: ContentApiDeps): Router {
 
   // ── Scheduler tick + publications ───────────────────────────────────────────
   /** One scheduler tick: materialize due occurrences and enqueue publications. */
-  router.post("/publications/dispatch", async (_req, res, next) => {
+  router.post("/publications/dispatch", async (req, res, next) => {
     try {
+      const ownerId = requireOwnerId(req);
       const now = new Date();
       const result = await dispatchDueOccurrences(
         now,
         { content: deps.content, enqueuePublication: deps.enqueuePublication },
         100,
+        { ownerId },
       );
       // Real provider-side reconciliation for Publications parked as `unknown`
       // (see `reconcileUnknownPublications`). Reused here so tests/operators
@@ -1207,11 +1289,14 @@ export function createContentRouter(deps: ContentApiDeps): Router {
         now,
         { content: deps.content, enqueuePublication: deps.enqueuePublication },
         100,
+        { ownerId },
       );
       return res.json({
         materialized: result.materialized,
         enqueued: result.enqueued,
-        publications: result.publications.map(serializePublication),
+        publications: result.publications
+          .filter((p) => p.userId === ownerId)
+          .map(serializePublication),
         reconciled,
       });
     } catch (error) {
@@ -1243,7 +1328,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
-      if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
+      if (!publication || (publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
       }
       const result = await deps.content.getResultByPublication(id);
@@ -1292,7 +1377,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
-      const voice = await reviseVoice(id, req.body ?? {}, { content: deps.content });
+      const ownerId = requireOwnerId(req);
+      const voice = await reviseVoice(id, req.body ?? {}, { content: deps.content }, ownerId);
       return res.status(201).json(serializeVoice(voice));
     } catch (error) {
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
@@ -1305,7 +1391,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
-      const archived = await archiveVoice(id, { content: deps.content });
+      const ownerId = requireOwnerId(req);
+      const archived = await archiveVoice(id, { content: deps.content }, ownerId);
       return res.json(serializeVoice(archived));
     } catch (error) {
       if (error instanceof VoiceNotFoundError) return res.status(404).json({ message: error.message });
@@ -1317,18 +1404,21 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
+      const ownerId = requireOwnerId(req);
       const voice = await deps.content.getVoice(id);
-      if (!voice) return res.status(404).json({ message: "Voice not found" });
-      const revisions = await listVoiceRevisions(voice.voiceKey ?? `voice:${voice.id}`, { content: deps.content });
+      if (!voice || voice.userId !== ownerId) return res.status(404).json({ message: "Voice not found" });
+      const revisions = await listVoiceRevisions(voice.voiceKey ?? `voice:${voice.id}`, { content: deps.content }, ownerId);
       return res.json(revisions.map(serializeVoice));
     } catch (error) {
       return next(error);
     }
   });
 
-  router.get("/voices", async (_req, res, next) => {
+  router.get("/voices", async (req, res, next) => {
     try {
-      return res.json((await deps.content.listVoices()).map(serializeVoice));
+      const ownerId = requireOwnerId(req);
+      const owned = (await deps.content.listVoices()).filter((v) => v.userId === ownerId);
+      return res.json(owned.map(serializeVoice));
     } catch (error) {
       return next(error);
     }
@@ -1338,8 +1428,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid voice id" });
     try {
+      const ownerId = requireOwnerId(req);
       const voice = await deps.content.getVoice(id);
-      if (!voice) return res.status(404).json({ message: "Voice not found" });
+      if (!voice || voice.userId !== ownerId) return res.status(404).json({ message: "Voice not found" });
       return res.json(serializeVoice(voice));
     } catch (error) {
       return next(error);
@@ -1364,7 +1455,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
-      const template = await reviseTemplate(id, req.body ?? {}, { content: deps.content });
+      const ownerId = requireOwnerId(req);
+      const template = await reviseTemplate(id, req.body ?? {}, { content: deps.content }, ownerId);
       return res.status(201).json(serializeTemplate(template));
     } catch (error) {
       if (error instanceof AuthoringInputError) return res.status(400).json({ message: error.message });
@@ -1377,7 +1469,8 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
-      const archived = await archiveTemplate(id, { content: deps.content });
+      const ownerId = requireOwnerId(req);
+      const archived = await archiveTemplate(id, { content: deps.content }, ownerId);
       return res.json(serializeTemplate(archived));
     } catch (error) {
       if (error instanceof TemplateNotFoundError) return res.status(404).json({ message: error.message });
@@ -1389,11 +1482,13 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
+      const ownerId = requireOwnerId(req);
       const template = await deps.content.getContentTemplate(id);
-      if (!template) return res.status(404).json({ message: "Template not found" });
+      if (!template || template.userId !== ownerId) return res.status(404).json({ message: "Template not found" });
       const revisions = await listTemplateRevisions(
         template.templateKey ?? `tpl:${template.id}`,
         { content: deps.content },
+        ownerId,
       );
       return res.json(revisions.map(serializeTemplate));
     } catch (error) {
@@ -1401,9 +1496,11 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     }
   });
 
-  router.get("/templates", async (_req, res, next) => {
+  router.get("/templates", async (req, res, next) => {
     try {
-      return res.json((await deps.content.listContentTemplates()).map(serializeTemplate));
+      const ownerId = requireOwnerId(req);
+      const owned = (await deps.content.listContentTemplates()).filter((t) => t.userId === ownerId);
+      return res.json(owned.map(serializeTemplate));
     } catch (error) {
       return next(error);
     }
@@ -1413,8 +1510,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid template id" });
     try {
+      const ownerId = requireOwnerId(req);
       const template = await deps.content.getContentTemplate(id);
-      if (!template) return res.status(404).json({ message: "Template not found" });
+      if (!template || template.userId !== ownerId) return res.status(404).json({ message: "Template not found" });
       return res.json(serializeTemplate(template));
     } catch (error) {
       return next(error);
@@ -1422,9 +1520,11 @@ export function createContentRouter(deps: ContentApiDeps): Router {
   });
 
   // ── Generation policies (immutable, content-addressed revisions) ─────────────
-  router.get("/generation-policies", async (_req, res, next) => {
+  router.get("/generation-policies", async (req, res, next) => {
     try {
-      return res.json((await deps.content.listGenerationPolicies()).map(serializeGenerationPolicy));
+      const ownerId = requireOwnerId(req);
+      const owned = (await deps.content.listGenerationPolicies()).filter((p) => p.userId === ownerId);
+      return res.json(owned.map(serializeGenerationPolicy));
     } catch (error) {
       return next(error);
     }
@@ -1434,8 +1534,9 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ message: "Invalid policy id" });
     try {
+      const ownerId = requireOwnerId(req);
       const policy = await deps.content.getGenerationPolicy(id);
-      if (!policy) return res.status(404).json({ message: "Generation policy not found" });
+      if (!policy || policy.userId !== ownerId) return res.status(404).json({ message: "Generation policy not found" });
       return res.json(serializeGenerationPolicy(policy));
     } catch (error) {
       return next(error);
@@ -1521,11 +1622,11 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const generation = await deps.content.getVisualGeneration(id);
-      if (!generation || (generation.userId !== null && generation.userId !== ownerId)) {
+      if (!generation || (generation.userId !== ownerId)) {
         return res.status(404).json({ message: "Visual generation not found" });
       }
       const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
-      const owned = assets.filter((a) => a.userId === null || a.userId === ownerId);
+      const owned = assets.filter((a) => a.userId === ownerId);
       return res.json({
         ...serializeVisualGeneration(generation),
         visualAssetId: owned[0]?.id ?? null,
@@ -1542,7 +1643,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const source = await deps.content.getVisualAsset(id);
-      if (!source || (source.userId !== null && source.userId !== ownerId)) {
+      if (!source || (source.userId !== ownerId)) {
         return res.status(404).json({ message: "Visual asset not found" });
       }
       const instruction = typeof req.body?.instruction === "string" ? req.body.instruction : "";
@@ -1623,7 +1724,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
     try {
       const asset = await deps.content.getVisualAsset(id);
-      if (!asset || asset.userId !== null && asset.userId !== (requireOwnerId(req))) {
+      if (!asset || asset.userId !== (requireOwnerId(req))) {
         return res.status(404).json({ message: "Visual asset not found" });
       }
       return res.json(serializeVisualAsset(asset));
@@ -1647,7 +1748,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (id === null) return res.status(400).json({ message: "Invalid visual asset id" });
       try {
         const asset = await deps.content.getVisualAsset(id);
-        if (!asset || (asset.userId !== null && asset.userId !== requireOwnerId(req))) {
+        if (!asset || (asset.userId !== requireOwnerId(req))) {
           return res.status(404).json({ message: "Visual asset not found" });
         }
         let bytes: Buffer;
@@ -1709,12 +1810,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (
         !generation ||
         generation.kind !== "video" ||
-        (generation.userId !== null && generation.userId !== ownerId)
+        (generation.userId !== ownerId)
       ) {
         return res.status(404).json({ message: "Video generation not found" });
       }
       const assets = await deps.content.listVisualAssetsForGeneration(generation.id);
-      const owned = assets.filter((a) => a.userId === null || a.userId === ownerId);
+      const owned = assets.filter((a) => a.userId === ownerId);
       return res.json({
         ...serializeVisualGeneration(generation),
         visualAssetId: owned[0]?.id ?? null,
@@ -1734,7 +1835,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (
         !source ||
         source.kind !== "video" ||
-        (source.userId !== null && source.userId !== ownerId)
+        (source.userId !== ownerId)
       ) {
         return res.status(404).json({ message: "Video asset not found" });
       }
@@ -1842,7 +1943,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (
         !asset ||
         asset.kind !== "video" ||
-        (asset.userId !== null && asset.userId !== (requireOwnerId(req)))
+        (asset.userId !== (requireOwnerId(req)))
       ) {
         return res.status(404).json({ message: "Video asset not found" });
       }
@@ -1930,12 +2031,12 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (
         !generation
         || generation.kind !== "audio"
-        || (generation.userId !== null && generation.userId !== ownerId)
+        || (generation.userId !== ownerId)
       ) {
         return res.status(404).json({ message: "Audio generation not found" });
       }
       const assets = (await deps.content.listVisualAssetsForGeneration(generation.id))
-        .filter((asset) => asset.userId === null || asset.userId === ownerId);
+        .filter((asset) => asset.userId === ownerId);
       return res.json({
         ...serializeVisualGeneration(generation),
         audioAssetId: assets[0]?.id ?? null,
@@ -1952,7 +2053,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const asset = await deps.content.getVisualAsset(id);
-      if (!asset || asset.kind !== "audio" || (asset.userId !== null && asset.userId !== ownerId)) {
+      if (!asset || asset.kind !== "audio" || (asset.userId !== ownerId)) {
         return res.status(404).json({ message: "Audio asset not found" });
       }
       return res.json(serializeVisualAsset(asset));
@@ -2044,7 +2145,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       for (const output of outputs) {
         if (!output.visualAssetId) continue;
         const asset = await deps.content.getVisualAsset(output.visualAssetId);
-        if (asset && (asset.userId === null || asset.userId === ownerId)) {
+        if (asset && (asset.userId === ownerId)) {
           assets.push(serializeVisualAsset(asset));
         }
       }
@@ -2079,7 +2180,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!artifact || isForeignRow(artifact, getUserId(req))) {
         return res.status(404).json({ message: "Artifact not found" });
       }
-      if (!asset || asset.userId !== null && asset.userId !== userId) {
+      if (!asset || asset.userId !== userId) {
         return res.status(404).json({ message: "Visual asset not found" });
       }
       if (asset.status !== "ready") {
@@ -2125,7 +2226,15 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const userId = requireOwnerId(req);
       if (!deps.generation.contextReader) return res.json({ sources: [], contextHash: "no-context" });
-      const assembly = await assembleContext(userId, deps.generation.contextReader);
+      const channel =
+        typeof req.query.channel === "string" && req.query.channel.trim()
+          ? req.query.channel.trim()
+          : undefined;
+      const format =
+        typeof req.query.format === "string" && req.query.format.trim()
+          ? req.query.format.trim()
+          : undefined;
+      const assembly = await assembleContext(userId, deps.generation.contextReader, { channel, format });
       return res.json({
         sources: assembly.sources.map((s) => ({ id: s.id, type: s.type, content: s.content, provenance: s.provenance })),
         contextHash: assembly.contextHash,
@@ -2225,7 +2334,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const userId = requireOwnerId(req);
       const analysis = await deps.style.storage.getStyleAnalysis(id);
-      if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
+      if (!analysis || (analysis.userId !== userId)) {
         return res.status(404).json({ message: "Style analysis not found" });
       }
       const profile = await deps.style.storage.getStyleProfileByAnalysisId(id);
@@ -2250,7 +2359,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const userId = requireOwnerId(req);
       const analysis = await deps.style.storage.getStyleAnalysis(id);
-      if (!analysis || (analysis.userId !== null && analysis.userId !== userId)) {
+      if (!analysis || (analysis.userId !== userId)) {
         return res.status(404).json({ message: "Style analysis not found" });
       }
       const observations = await deps.style.storage.listStyleObservations(id);
@@ -2334,7 +2443,7 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const userId = requireOwnerId(req);
       const profile = await deps.style.storage.getStyleProfile(id);
-      if (!profile || (profile.userId !== null && profile.userId !== userId)) {
+      if (!profile || (profile.userId !== userId)) {
         return res.status(404).json({ message: "Style profile not found" });
       }
       return res.json(publicStyleProfile(profile));

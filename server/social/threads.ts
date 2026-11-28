@@ -12,6 +12,7 @@
  */
 
 import { storage } from "../storage";
+import { isEnvCredentialFallbackAllowed } from "./envFallback";
 
 export const THREADS_OAUTH_SCOPES = [
   "threads_basic",
@@ -222,13 +223,15 @@ export async function getThreadsConfigSummary(ownerUserId?: number | null): Prom
 }
 
 async function getThreadsConfig(ownerUserId?: number | null): Promise<ThreadsConfig | null> {
-  const envToken = process.env.THREADS_ACCESS_TOKEN?.trim() || null;
-  const envUser = process.env.THREADS_USER_ID?.trim() || "me";
+  const allowEnvFallback = isEnvCredentialFallbackAllowed(ownerUserId);
+  const envToken = allowEnvFallback ? process.env.THREADS_ACCESS_TOKEN?.trim() || null : null;
+  const envUser = allowEnvFallback ? process.env.THREADS_USER_ID?.trim() || "me" : "me";
   if (ownerUserId != null) {
     const owned = await storage.getConnectedAccountForOwner("threads", ownerUserId);
-    const token = owned?.accessToken?.trim() || envToken;
-    const userId = owned?.username?.trim() || envUser;
+    const ownedToken = owned?.accessToken?.trim() || null;
+    const token = ownedToken || envToken;
     if (!token) return null;
+    const userId = owned?.username?.trim() || (ownedToken ? "me" : envUser);
     return { graphBase: getThreadsGraphBaseUrl(), token, userId };
   }
   const account = await storage.getConnectedAccount("threads");

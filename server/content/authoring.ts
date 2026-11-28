@@ -80,9 +80,12 @@ export async function reviseVoice(
   voiceId: number,
   patch: VoicePatch,
   deps: AuthoringDeps,
+  ownerId?: number,
 ): Promise<Voice> {
   const prior = await deps.content.getVoice(voiceId);
-  if (!prior) throw new VoiceNotFoundError(voiceId);
+  if (!prior || (ownerId !== undefined && prior.userId !== ownerId)) {
+    throw new VoiceNotFoundError(voiceId);
+  }
   const parsed = voiceInputSchema.partial().safeParse(patch ?? {});
   if (!parsed.success) {
     throw new AuthoringInputError(parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`));
@@ -98,9 +101,11 @@ export async function reviseVoice(
 }
 
 /** Archive (lifecycle only — never a content mutation). */
-export async function archiveVoice(voiceId: number, deps: AuthoringDeps): Promise<Voice> {
+export async function archiveVoice(voiceId: number, deps: AuthoringDeps, ownerId?: number): Promise<Voice> {
   const prior = await deps.content.getVoice(voiceId);
-  if (!prior) throw new VoiceNotFoundError(voiceId);
+  if (!prior || (ownerId !== undefined && prior.userId !== ownerId)) {
+    throw new VoiceNotFoundError(voiceId);
+  }
   const updated = await deps.content.setVoiceStatus(voiceId, "archived");
   if (!updated) throw new VoiceNotFoundError(voiceId);
   return updated;
@@ -109,8 +114,10 @@ export async function archiveVoice(voiceId: number, deps: AuthoringDeps): Promis
 export async function listVoiceRevisions(
   voiceKey: string,
   deps: AuthoringDeps,
+  ownerId?: number,
 ): Promise<Voice[]> {
-  return deps.content.listVoicesByKey(voiceKey);
+  const rows = await deps.content.listVoicesByKey(voiceKey);
+  return ownerId === undefined ? rows : rows.filter((v) => v.userId === ownerId);
 }
 
 // ── Content templates ─────────────────────────────────────────────────────────
@@ -163,9 +170,12 @@ export async function reviseTemplate(
   templateId: number,
   patch: TemplatePatch,
   deps: AuthoringDeps,
+  ownerId?: number,
 ): Promise<ContentTemplate> {
   const prior = await deps.content.getContentTemplate(templateId);
-  if (!prior) throw new TemplateNotFoundError(templateId);
+  if (!prior || (ownerId !== undefined && prior.userId !== ownerId)) {
+    throw new TemplateNotFoundError(templateId);
+  }
   const parsed = templateInputSchema.partial().safeParse(patch ?? {});
   if (!parsed.success) {
     throw new AuthoringInputError(parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`));
@@ -183,9 +193,12 @@ export async function reviseTemplate(
 export async function archiveTemplate(
   templateId: number,
   deps: AuthoringDeps,
+  ownerId?: number,
 ): Promise<ContentTemplate> {
   const prior = await deps.content.getContentTemplate(templateId);
-  if (!prior) throw new TemplateNotFoundError(templateId);
+  if (!prior || (ownerId !== undefined && prior.userId !== ownerId)) {
+    throw new TemplateNotFoundError(templateId);
+  }
   const updated = await deps.content.setContentTemplateStatus(templateId, "archived");
   if (!updated) throw new TemplateNotFoundError(templateId);
   return updated;
@@ -194,8 +207,10 @@ export async function archiveTemplate(
 export async function listTemplateRevisions(
   templateKey: string,
   deps: AuthoringDeps,
+  ownerId?: number,
 ): Promise<ContentTemplate[]> {
-  return deps.content.listContentTemplatesByKey(templateKey);
+  const rows = await deps.content.listContentTemplatesByKey(templateKey);
+  return ownerId === undefined ? rows : rows.filter((t) => t.userId === ownerId);
 }
 
 // ── Deterministic template rendering (re-exported) ───────────────────────────

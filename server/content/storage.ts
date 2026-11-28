@@ -9,7 +9,7 @@
  * Behind an interface so services are testable without a database.
  */
 
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, notLike, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -121,6 +121,7 @@ export interface InsertScheduleRow {
   timezone: string;
   count: number;
   startAt: Date;
+  status?: string;
 }
 
 // ── Publication ───────────────────────────────────────────────────────────────
@@ -1343,7 +1344,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
     options: { readiness?: ArtifactReadiness; limit?: number } = {},
   ): Promise<Artifact[]> {
     const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
-    const conditions = [or(isNull(artifacts.userId), eq(artifacts.userId, ownerId))!];
+    const conditions = [eq(artifacts.userId, ownerId)];
     if (options.readiness) conditions.push(eq(artifacts.readiness, options.readiness));
     return this.database
       .select()
@@ -1379,6 +1380,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         timezone: row.timezone,
         count: row.count,
         startAt: row.startAt,
+        ...(row.status ? { status: row.status } : {}),
       })
       .returning();
     return inserted;
@@ -1399,6 +1401,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
         timezone: row.timezone,
         count: row.count,
         startAt: row.startAt,
+        ...(row.status ? { status: row.status } : {}),
       })
       .onConflictDoNothing({ target: schedules.intentKey })
       .returning();
@@ -1437,7 +1440,13 @@ export class DatabaseContentStorage implements ContentStoragePort {
     return this.database
       .select()
       .from(schedules)
-      .where(and(eq(schedules.status, "active"), lte(schedules.startAt, now)))
+      .where(
+        and(
+          eq(schedules.status, "active"),
+          lte(schedules.startAt, now),
+          or(isNull(schedules.intentKey), notLike(schedules.intentKey, "manual:%")),
+        ),
+      )
       .orderBy(asc(schedules.startAt))
       .limit(limit);
   }
@@ -1455,7 +1464,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .innerJoin(artifacts, eq(artifacts.id, schedules.artifactId))
       .where(
         and(
-          or(isNull(schedules.userId), eq(schedules.userId, ownerId))!,
+          eq(schedules.userId, ownerId),
           gte(scheduleOccurrences.occurrenceTime, from),
           lte(scheduleOccurrences.occurrenceTime, to),
         ),
@@ -1619,7 +1628,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
     options: { state?: PublicationState; limit?: number } = {},
   ): Promise<Array<{ publication: Publication; result: Result | null }>> {
     const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
-    const conditions = [or(isNull(publications.userId), eq(publications.userId, ownerId))!];
+    const conditions = [eq(publications.userId, ownerId)];
     if (options.state) conditions.push(eq(publications.state, options.state));
     const rows = await this.database
       .select({ publication: publications, result: results })

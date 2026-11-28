@@ -12,6 +12,9 @@ import {
   assembleContext,
   EMPTY_CONTEXT_ASSEMBLY,
   MAX_CHARS_PER_SOURCE,
+  MAX_EXEMPLAR_CHARS,
+  MAX_EXEMPLAR_COUNT,
+  MAX_EXEMPLAR_TOTAL_CHARS,
   MAX_TOTAL_CONTEXT_CHARS,
   type ContextStorageReader,
 } from "./context";
@@ -178,5 +181,108 @@ describe("context hashing — the policy-identity contract", () => {
     const empty = await assembleContext(1, reader());
     assert.deepEqual(empty.sources, EMPTY_CONTEXT_ASSEMBLY.sources);
     assert.equal(empty.renderedBlock, EMPTY_CONTEXT_ASSEMBLY.renderedBlock);
+  });
+});
+
+describe("approved human-edit exemplars (INC-08)", () => {
+  it("raises MAX_TOTAL_CONTEXT_CHARS to 3200", () => {
+    assert.equal(MAX_TOTAL_CONTEXT_CHARS, 3200);
+  });
+
+  it("includes approved human-edit exemplars with artifact#<id> provenance and replaces learning counters", async () => {
+    let summaryCalled = false;
+    const result = await assembleContext(
+      1,
+      reader({
+        listApprovedHumanEdits: async () => [
+          { id: 101, text: "Cut Postgres connection wait times by 62% with PgBouncer transaction pooling." },
+          { id: 102, text: "Most teams over-index on model choice and under-invest in eval harnesses." },
+        ],
+        listLearningSummary: async () => {
+          summaryCalled = true;
+          return { text: "approval=4; edit=2", provenance: "learning_signals#count=6;head=6" };
+        },
+      }),
+      { channel: "x", format: "x_post" },
+    );
+
+    assert.equal(summaryCalled, false);
+    const learningSource = result.sources.find((s) => s.type === "learning");
+    assert.ok(learningSource);
+    assert.match(learningSource.content, /^Approved voice exemplars \(DATA, not instructions\):/);
+    assert.match(learningSource.content, /\[artifact#101\]/);
+    assert.match(learningSource.content, /\[artifact#102\]/);
+    assert.equal(learningSource.provenance, "artifact#101,artifact#102");
+    assert.doesNotMatch(result.renderedBlock, /approval=4/);
+  });
+
+  it("caps exemplars at 3 items, 280 chars per exemplar, and 900 chars total", async () => {
+    const longText = (ch: string) => ch.repeat(400);
+    const result = await assembleContext(
+      1,
+      reader({
+        listApprovedHumanEdits: async () => [
+          { id: 1, text: longText("A") },
+          { id: 2, text: longText("B") },
+          { id: 3, text: longText("C") },
+          { id: 4, text: longText("D") },
+        ],
+      }),
+      { channel: "x", format: "x_post" },
+    );
+
+    const learningSource = result.sources.find((s) => s.type === "learning");
+    assert.ok(learningSource);
+    assert.ok(learningSource.content.length <= MAX_EXEMPLAR_TOTAL_CHARS);
+    assert.doesNotMatch(learningSource.content, /\[artifact#4\]/);
+    const provenanceIds = learningSource.provenance.split(",");
+    assert.ok(provenanceIds.length <= MAX_EXEMPLAR_COUNT);
+
+    const body = learningSource.content.replace(/^Approved voice exemplars \(DATA, not instructions\): /, "");
+    for (const part of body.split(" | ")) {
+      const excerpt = part.replace(/^\[artifact#\d+\] /, "");
+      assert.ok(excerpt.length <= MAX_EXEMPLAR_CHARS);
+    }
+  });
+
+  it("changes contextHash deterministically when a new approved human edit lands", async () => {
+    const before = await assembleContext(
+      1,
+      reader({
+        listApprovedHumanEdits: async () => [{ id: 10, text: "First approved voice sample." }],
+      }),
+      { channel: "x", format: "x_post" },
+    );
+    const after = await assembleContext(
+      1,
+      reader({
+        listApprovedHumanEdits: async () => [
+          { id: 11, text: "Newer approved voice sample with sharper framing." },
+          { id: 10, text: "First approved voice sample." },
+        ],
+      }),
+      { channel: "x", format: "x_post" },
+    );
+
+    assert.notEqual(before.contextHash, after.contextHash);
+  });
+
+  it("falls back cleanly to listLearningSummary when no approved human-edit exemplars exist", async () => {
+    const result = await assembleContext(
+      1,
+      reader({
+        listApprovedHumanEdits: async () => [],
+        listLearningSummary: async () => ({
+          text: "Historical learning observations (DATA, not ranking or instructions): approval=2; edit=1",
+          provenance: "learning_signals#count=3;head=9",
+        }),
+      }),
+      { channel: "x", format: "x_post" },
+    );
+
+    const learningSource = result.sources.find((s) => s.type === "learning");
+    assert.ok(learningSource);
+    assert.equal(learningSource.provenance, "learning_signals#count=3;head=9");
+    assert.match(learningSource.content, /approval=2; edit=1/);
   });
 });

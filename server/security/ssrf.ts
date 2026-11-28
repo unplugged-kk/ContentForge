@@ -145,6 +145,27 @@ function matchesCidr(bytes: number[], network: string, prefix: number): boolean 
   return true;
 }
 
+/** True when an IP literal is a loopback address (`127.0.0.0/8`, `::1`, or mapped `::ffff:127.0.0.0/104`). */
+export function isLoopbackAddress(ip: string): boolean {
+  const family = isIP(ip);
+  if (family === 4) {
+    const bytes = ipv4ToBytes(ip);
+    if (!bytes) return false;
+    return matchesCidr(bytes, "127.0.0.0", 8);
+  }
+  if (family === 6) {
+    const bytes = ipv6ToBytes(ip);
+    if (!bytes) return false;
+    const isMapped =
+      bytes.slice(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+    if (isMapped) {
+      return isLoopbackAddress(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+    }
+    return matchesCidr(bytes, "::1", 128);
+  }
+  return false;
+}
+
 /** True when an IP literal must never be contacted by a research provider. */
 export function isBlockedAddress(ip: string): boolean {
   const family = isIP(ip);
@@ -180,6 +201,21 @@ export interface UrlValidationOptions {
    * address (loopback, RFC1918, link-local, metadata, IPv6 private) stays blocked.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Permit loopback addresses (`127.0.0.0/8`, `::1`, `localhost`) and local
+   * service ports when an operator explicitly opts in (e.g. `ALLOW_LOCAL_AI_PROVIDER_URLS=1`
+   * for local Ollama). RFC1918, link-local, metadata, and non-http(s) remain blocked.
+   */
+  allowLoopback?: boolean;
+}
+
+/**
+ * Loopback AI provider URLs (local Ollama, hermetic test doubles) are allowed
+ * only when the operator opts in, or when the process is the hermetic test
+ * runner. Production stays closed unless `ALLOW_LOCAL_AI_PROVIDER_URLS=1`.
+ */
+export function allowLocalAiProviderUrls(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ALLOW_LOCAL_AI_PROVIDER_URLS === "1" || env.NODE_ENV === "test";
 }
 
 /** Parse `RESEARCH_ALLOWED_HOSTS` (comma separated). Empty by default. */
@@ -242,14 +278,26 @@ export function validateUrlSyntax(
     throw new UnsafeUrlError("credentials_in_url", "URLs with embedded credentials are rejected");
   }
 
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const isLoopbackTarget =
+    Boolean(options.allowLoopback) &&
+    ((isIP(host) !== 0 && isLoopbackAddress(host)) || host.toLowerCase() === "localhost");
+
   const allowedPorts = options.allowedPorts ?? resolveAllowedPorts();
   const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-  if (!allowedPorts.includes(port)) {
+  if (!isLoopbackTarget && !allowedPorts.includes(port)) {
+    throw new UnsafeUrlError("disallowed_port", `Port ${port} is not allowed`);
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new UnsafeUrlError("disallowed_port", `Port ${port} is not allowed`);
   }
 
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (isIP(host) && !isAllowlistedHost(host, options.allowedHosts) && isBlockedAddress(host)) {
+  if (
+    isIP(host) &&
+    !isAllowlistedHost(host, options.allowedHosts) &&
+    isBlockedAddress(host) &&
+    !(options.allowLoopback && isLoopbackAddress(host))
+  ) {
     throw new UnsafeUrlError("blocked_address", `Address ${host} is not routable for research`);
   }
 
@@ -266,7 +314,10 @@ export type LookupFn = (
  * DNS lookup that rejects any hostname resolving to a blocked address.
  * Passed to the HTTP agent so validation happens at connect time.
  */
-export function createGuardedLookup(allowedHosts: readonly string[] = []): LookupFn {
+export function createGuardedLookup(
+  allowedHosts: readonly string[] = [],
+  lookupOptions: { allowLoopback?: boolean } = {},
+): LookupFn {
   return (hostname, options, callback) => {
     dnsLookup(
       hostname,
@@ -282,7 +333,9 @@ export function createGuardedLookup(allowedHosts: readonly string[] = []): Looku
           if (options?.all) return callback(null, resolved);
           return callback(null, resolved[0].address, resolved[0].family);
         }
-        const blocked = resolved.filter((a) => isBlockedAddress(a.address));
+        const blocked = resolved.filter(
+          (a) => isBlockedAddress(a.address) && !(lookupOptions.allowLoopback && isLoopbackAddress(a.address)),
+        );
         if (blocked.length > 0) {
           return callback(
             new UnsafeUrlError(
@@ -302,6 +355,40 @@ export function createGuardedLookup(allowedHosts: readonly string[] = []): Looku
   };
 }
 
+export interface AssertSafeUrlOptions extends UrlValidationOptions {
+  /** Injection point for tests; defaults to the SSRF-guarded resolver. */
+  lookup?: LookupFn;
+}
+
+/**
+ * Syntax + DNS validation for outbound URLs (e.g. AI providers, webhooks, feeds).
+ * Rejects non-http(s), credentials, disallowed ports, and any IP or DNS target
+ * resolving to loopback/RFC1918/link-local/metadata space unless explicitly opted in.
+ */
+export async function assertSafeUrl(
+  rawUrl: string,
+  options: AssertSafeUrlOptions = {},
+): Promise<URL> {
+  const url = validateUrlSyntax(rawUrl, options);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(host) !== 0 || isAllowlistedHost(host, options.allowedHosts)) {
+    return url;
+  }
+  const lookup =
+    options.lookup ??
+    createGuardedLookup(options.allowedHosts ?? resolveAllowedHosts(), {
+      allowLoopback: options.allowLoopback,
+    });
+  await new Promise<void>((resolve, reject) => {
+    lookup(host, { all: true }, (err) => {
+      if (!err) return resolve();
+      if (err instanceof UnsafeUrlError) return reject(err);
+      return reject(new UnsafeUrlError("dns_lookup_failed", `Could not resolve host ${host}`));
+    });
+  });
+  return url;
+}
+
 export interface SafeFetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
@@ -309,6 +396,9 @@ export interface SafeFetchOptions {
   allowedPorts?: readonly number[];
   /** Operator-sanctioned extra hosts (see `UrlValidationOptions`). */
   allowedHosts?: readonly string[];
+  allowLoopback?: boolean;
+  method?: string;
+  body?: string;
   headers?: Record<string, string>;
   /** Injection point for tests; defaults to the SSRF-guarded resolver. */
   lookup?: LookupFn;
@@ -340,19 +430,25 @@ function requestOnce(
       fn();
     };
 
+    const bodyBuf = options.body !== undefined ? Buffer.from(options.body, "utf8") : null;
+    const reqHeaders: Record<string, string> = {
+      "user-agent": "ContentForge-Research/1.0",
+      accept: "text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.5",
+      "accept-encoding": "identity",
+      ...(options.headers ?? {}),
+    };
+    if (bodyBuf && !Object.keys(reqHeaders).some((k) => k.toLowerCase() === "content-length")) {
+      reqHeaders["content-length"] = String(bodyBuf.byteLength);
+    }
+
     const req = transport.request(
       {
         protocol: url.protocol,
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
         path: `${url.pathname}${url.search}`,
-        method: "GET",
-        headers: {
-          "user-agent": "ContentForge-Research/1.0",
-          accept: "text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.5",
-          "accept-encoding": "identity",
-          ...(options.headers ?? {}),
-        },
+        method: options.method ?? "GET",
+        headers: reqHeaders,
         lookup: lookup as never,
         timeout: timeoutMs,
       },
@@ -400,6 +496,7 @@ function requestOnce(
       req.destroy(new UnsafeUrlError("timeout", `Request timed out after ${timeoutMs}ms`));
     });
     req.on("error", (error) => finish(() => reject(error)));
+    if (bodyBuf) req.write(bodyBuf);
     req.end();
   });
 }
@@ -412,7 +509,11 @@ export async function safeFetch(
   rawUrl: string,
   options: SafeFetchOptions = {},
 ): Promise<SafeFetchResult> {
-  const lookup = options.lookup ?? createGuardedLookup(options.allowedHosts ?? resolveAllowedHosts());
+  const lookup =
+    options.lookup ??
+    createGuardedLookup(options.allowedHosts ?? resolveAllowedHosts(), {
+      allowLoopback: options.allowLoopback,
+    });
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const deadline = Date.now() + timeoutMs;

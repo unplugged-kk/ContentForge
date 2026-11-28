@@ -22,6 +22,10 @@ import type { GenerationJob, GenerationPolicy, Opportunity, Story } from "@share
 import { JobFailure, describeError } from "../jobs/failures";
 import { payloadSchemaRegistry } from "../artifacts/payloadSchemas";
 import { createArtifact, attributionSchema } from "./artifact";
+import { auditArtifactClaims } from "../intelligence/quality/claimCheck";
+import { extractCreatorNotesFromStory } from "../story/inputSchema";
+import { xUnitBudgetAt } from "../social/xTextLimits";
+import { fitUnitToBudget } from "./unitFit";
 import {
   assembleEffectiveRequest,
   composeGenerationPolicyInput,
@@ -57,9 +61,18 @@ export interface GenerationContext {
   evidence: Array<{ id: number; excerpt: string; kind: string }>;
 }
 
+export interface ModelClaim {
+  unitIndex: number;
+  claimText: string;
+  evidenceIds: number[];
+  status?: string;
+}
+
 export interface GenerationOutput {
   /** Raw payload; validated against the format's registered schema downstream. */
   payload: JsonRecord;
+  /** Optional model-supplied claim-to-evidence links audited before persistence. */
+  claims?: ModelClaim[];
   model: string;
   provider: string;
   cost: string | null;
@@ -233,7 +246,10 @@ export async function createGenerationJob(
     const contextAssembly = input.frozenContext
       ? input.frozenContext
       : deps.contextReader
-        ? await assembleContext(opportunity.userId ?? null, deps.contextReader, { channel: opportunity.channel })
+        ? await assembleContext(opportunity.userId ?? null, deps.contextReader, {
+            channel: opportunity.channel,
+            format: opportunity.format,
+          })
         : EMPTY_CONTEXT_ASSEMBLY;
 
   // Phase 29.3: an explicit caller-supplied value always wins. Only when the
@@ -364,17 +380,46 @@ export async function runGenerationJob(
 
     const output = await deps.model.generate(request);
 
+    // Word-safe budget fitting for X posts and threads before persistence
+    // (Wayfinder Wave-1 Medium Finding #1) so stored artifacts never fail X length limits.
+    let fittedPayload: JsonRecord = output.payload;
+    if (job.channel === "x") {
+      if (job.format === "x_post" && typeof output.payload.text === "string") {
+        const fitted = fitUnitToBudget(output.payload.text, xUnitBudgetAt(0, 1));
+        fittedPayload = { ...output.payload, text: fitted.text };
+      } else if (job.format === "x_thread" && Array.isArray(output.payload.units)) {
+        const rawUnits = output.payload.units;
+        const stringCount = rawUnits.filter((u): u is string => typeof u === "string").length;
+        let idx = 0;
+        const fittedUnits = rawUnits.map((unit) => {
+          if (typeof unit !== "string") return unit;
+          const result = fitUnitToBudget(unit, xUnitBudgetAt(idx, stringCount));
+          idx += 1;
+          return result.text;
+        });
+        fittedPayload = { ...output.payload, units: fittedUnits };
+      }
+    }
+
     const evidenceIds = context.evidence.map((e) => e.id);
-    const attribution =
-      evidenceIds.length > 0
-        ? [
-            attributionSchema.parse({
-              kind: "research_evidence",
-              researchJobId: story.researchJobId,
-              evidenceIds,
-            }),
-          ]
-        : [];
+    const creatorNotes = extractCreatorNotesFromStory(story);
+    const claimAudit = auditArtifactClaims({
+      format: job.format,
+      channel: job.channel,
+      payload: fittedPayload,
+      researchJobId: story.researchJobId,
+      evidence: context.evidence.map((e) => ({ id: e.id, text: e.excerpt })),
+      creatorNotes,
+      modelClaims: output.claims,
+    });
+
+    const hasAuditSignals =
+      evidenceIds.length > 0 ||
+      claimAudit.claims.length > 0 ||
+      claimAudit.qualityFlags.length > 0;
+    const attribution = hasAuditSignals
+      ? [attributionSchema.parse(claimAudit)]
+      : [];
 
     const artifact = await createArtifact(
       {
@@ -383,7 +428,7 @@ export async function runGenerationJob(
         opportunityId: job.opportunityId,
         format: job.format,
         channel: job.channel,
-        payload: output.payload,
+        payload: fittedPayload,
         supersedesId: job.priorArtifactId ?? null,
         provenance: "generated",
         attribution,

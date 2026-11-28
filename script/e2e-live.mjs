@@ -198,6 +198,13 @@ async function bootstrapSession() {
   }
   assert(cookie, "authentication did not yield a session cookie");
 
+  // establishSession() regenerates the session and drops the pre-login CSRF
+  // secret. The token fetched above belongs to the discarded session.
+  const refreshed = await http("GET", "/api/csrf-token");
+  assert(refreshed.status === 200, `csrf refresh returned ${refreshed.status}`);
+  csrfToken = refreshed.body?.csrfToken;
+  assert(typeof csrfToken === "string" && csrfToken.length > 0, "empty CSRF token after login");
+
   const me = await http("GET", "/api/auth/me");
   assert(
     me.status === 200 && Number.isInteger(me.body?.id),

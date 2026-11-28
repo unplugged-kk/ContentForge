@@ -26,6 +26,7 @@ import {
   InstagramPublishAmbiguousError,
 } from "../social/instagram";
 import { fixtureMp4Bytes } from "./visualFixture";
+import { stubConnectedAccountLookup, type CredentialStubHandle } from "../testing/unitCredentialStub";
 import {
   classifyInstagramFailure,
   createInstagramChannelAdapter,
@@ -370,9 +371,11 @@ describe("instagram contract helpers", () => {
 describe("instagram HTTP double", () => {
   const fixture = startInstagramDouble();
   let saved: Record<string, string | undefined> = {};
+  let credentials: CredentialStubHandle;
 
   before(async () => {
     const port = await fixture.start();
+    credentials = stubConnectedAccountLookup();
     saved = {
       INSTAGRAM_API_BASE_URL: process.env.INSTAGRAM_API_BASE_URL,
       INSTAGRAM_API_VERSION: process.env.INSTAGRAM_API_VERSION,
@@ -394,6 +397,7 @@ describe("instagram HTTP double", () => {
   });
 
   after(async () => {
+    credentials.restore();
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
