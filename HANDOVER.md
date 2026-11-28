@@ -1,6 +1,8 @@
 # Handover: public marketing site and product audit
 
-Date: 2026-11-11. Branch: `feat/auth0-migration`. See also `docs/HANDOVER.md` (earlier, separate handover).
+Current project status is [`docs/STATUS.md`](docs/STATUS.md). Current work is [`docs/ACTIVE_WORK.md`](docs/ACTIVE_WORK.md). The living handover is [`docs/HANDOVER.md`](docs/HANDOVER.md). This file is the 2026-11-11 marketing-site note.
+
+Date: 2026-11-11. Branch: `feat/auth0-migration`.
 
 ## Goal
 

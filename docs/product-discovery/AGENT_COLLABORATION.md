@@ -53,4 +53,14 @@ For every engineering increment in `EXECUTION_ROADMAP.md`:
 2. **Design & Implement (Poteto mode):** Name data shapes first, write focused unit/integration tests, make minimal clean edits.
 3. **Verify locally:** Run `npx tsc --noEmit`, `npm run test:unit`, targeted tests, and `npm run build` (plus `npm run test:db` where disposable Postgres is available). Record exact observed results — never infer pass status.
 4. **Independent Review (Wayfinder):** Run a fresh Wayfinder review against the actual `git diff` and test output to verify acceptance criteria, security boundaries, and absence of scope creep.
-5. **Resolve & Commit:** Fix any critical/high findings, update `STATUS.md`, `DECISIONS.md`, and `BACKLOG.md`, and create a small conventional commit on `work/productization-mvp`.
+5. **Resolve & Commit:** Fix any critical/high findings, update [`../STATUS.md`](../STATUS.md), [`../ACTIVE_WORK.md`](../ACTIVE_WORK.md), and [`../HANDOVER.md`](../HANDOVER.md), and commit on a branch from current `origin/main`. `work/productization-mvp` merged in pull request 7. Do not keep committing on it as if it were the open line.
+
+## 5. Session rule (2026-11-28)
+
+Before new work, run `script/agent-context.sh sync` and read [`../STATUS.md`](../STATUS.md) and [`../ACTIVE_WORK.md`](../ACTIVE_WORK.md). Before stopping, update those files and [`../HANDOVER.md`](../HANDOVER.md).
+
+Wayfinder reviews claims against git, the diff, and Actions logs. Poteto mode makes the code and test changes. A review that only restates `STATUS.md` does not count. If the two disagree, write the evidence and the resolution into `DECISIONS.md`. Do not say they communicated unless a subagent call or a committed review record exists.
+
+The register for other repositories is [`../PROJECTS_INDEX.md`](../PROJECTS_INDEX.md). Adopt it with [`../governance/ADOPT.md`](../governance/ADOPT.md). Do not edit a dirty tree in another repo from a ContentForge session.
+
+On 2026-11-28 a fresh reviewer subagent checked the new status pages against `git` and Actions run 46132320299. The author then corrected the SHA wording, the sync warning sentence, the topic-escape note, and the Playwright and live-e2e counts. That is a recorded review, not a claim that the two roles talked in chat.

@@ -5,6 +5,8 @@
 #   make up          local (your machine)     → http://localhost:3000
 #   make vps         VPS (real deployment)    → behind Cloudflare Tunnel
 #   make deploy-vps  on the VPS: pull main, then deploy
+#   make test-db     integration tests        → disposable Postgres on :5434
+#   make e2e         Playwright               → disposable Postgres on :5433
 #
 # Both layer an overlay on the single docker-compose.yml base:
 #   docker-compose.local.yml   local values — plain HTTP, proxy trust off
@@ -29,10 +31,19 @@ export CONTENTFORGE_ENV_FILE := $(ENV_FILE)
 
 COMPOSE_LOCAL := docker compose -f docker-compose.yml -f docker-compose.local.yml $(COMPOSE_EXTRA)
 COMPOSE_VPS   := docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile tunnel
+COMPOSE_TEST  := docker compose -f docker-compose.test.yml
+
+# Disposable integration-test database. Not the app database on :5432.
+TEST_DATABASE_URL := postgresql://test:test@127.0.0.1:5434/contentforge_test
+# 32 zero bytes. Same value server/testing/testIsolation.ts pins for a run.
+# Production boot refuses to derive a key from SESSION_SECRET, so Playwright
+# and the database suite both have to be handed this explicitly.
+TEST_ENCRYPTION_KEY := AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 .PHONY: help up vps deploy-vps down ps logs backup restore check-env \
         db db-stop db-logs dev install start graph orient \
-        e2e e2e-live e2e-vps
+        e2e e2e-live e2e-vps test-db test-db-up test-db-down \
+        status sync handover
 
 # Explain the failure and the fix, instead of a compose stack trace.
 check-env:
@@ -48,8 +59,8 @@ check-env:
 	}
 
 help: ## list the targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 # ---------- deployment ----------
 
@@ -121,7 +132,28 @@ e2e: ## Playwright suite (ephemeral DB, production bundle)
 	DOTENV_CONFIG_PATH=/dev/null CI=true \
 	  DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/contentforge_e2e \
 	  SESSION_SECRET=ci-e2e-session-secret-not-for-production \
+	  ENCRYPTION_KEY=$(TEST_ENCRYPTION_KEY) \
 	  npx playwright test --reporter=line
+
+# Database integration suite. Own Postgres on :5434, so it can run beside
+# `make e2e` (:5433) and the app database (:5432). Does not read .env.
+test-db-up: ## start the disposable test database on 127.0.0.1:5434
+	@$(COMPOSE_TEST) up -d --wait
+	@echo "Test database ready at $(TEST_DATABASE_URL)"
+
+test-db-down: ## stop the test database and delete its data
+	@$(COMPOSE_TEST) down -v
+
+test-db: test-db-up ## migrate, then run npm run test:db
+	DOTENV_CONFIG_PATH=/dev/null \
+	  DATABASE_URL=$(TEST_DATABASE_URL) \
+	  npm run db:migrate
+	DOTENV_CONFIG_PATH=/dev/null \
+	  DATABASE_URL=$(TEST_DATABASE_URL) \
+	  TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
+	  ENCRYPTION_KEY=$(TEST_ENCRYPTION_KEY) \
+	  SESSION_SECRET=local-test-session-secret \
+	  npm run test:db
 
 # Durable-state harness. Creates cf_e2e_live beside the Playwright database.
 e2e-live: ## live harness (fixture on 8088, isolated cf_e2e_live)
@@ -132,7 +164,9 @@ e2e-live: ## live harness (fixture on 8088, isolated cf_e2e_live)
 	    docker compose -f docker-compose.e2e.yml exec -T postgres createdb -U e2e cf_e2e_live; \
 	  fi
 	npm run build
-	E2E_LIVE_DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/cf_e2e_live \
+	DOTENV_CONFIG_PATH=/dev/null \
+	  ENCRYPTION_KEY=$(TEST_ENCRYPTION_KEY) \
+	  E2E_LIVE_DATABASE_URL=postgresql://e2e:e2e@127.0.0.1:5433/cf_e2e_live \
 	  E2E_LIVE_FIXTURE_PORT=8088 \
 	  node script/e2e-live.mjs
 
@@ -162,3 +196,17 @@ orient:
 	@echo ""
 	@echo "===== docs/README.md — where the docs are ====="
 	@sed -n '1,45p' docs/README.md 2>/dev/null || echo "(docs/README.md missing)"
+	@echo ""
+	@echo "Before editing, run: script/agent-context.sh sync"
+
+# ---------- agent context ----------
+# Read-only. status, sync, and handover print facts. They do not edit files.
+
+status: ## branch, commit, and the active-work register
+	@script/agent-context.sh status
+
+sync: ## git state plus the required reading list
+	@script/agent-context.sh sync
+
+handover: ## facts to write into the handover before stopping
+	@script/agent-context.sh handover

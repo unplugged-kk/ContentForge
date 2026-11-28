@@ -1,7 +1,7 @@
 # ContentForge — Product & Architecture Decisions Log
 
 **Maintained by:** Wayfinder + Poteto mode  
-**Branch:** `work/productization-mvp`
+**Branch:** `work/productization-mvp` (merged to `origin/main` at `ae8ced2` on 2026-11-28). The rows below are the decision log, not the live branch.
 
 | ID | Date | Decision | Status | Rationale & Evidence | Alternatives Rejected |
 |---|---|---|---|---|---|
@@ -32,3 +32,12 @@
 | Narrow first offer to source-backed technical post + manual export | **IMPLEMENTED (`0bfa154`, `5269b5c`, `9ad2e8c`, `5aa5bf8`, `1e0c5c2`)** | Fixed 5 UI vertical-slice seams, added Copy/Markdown Export with `/sources` URLs, hybrid synthesis, `claim_evidence_v1` audit + golden eval, manual publish log, weekly cohort digest, and approved voice exemplars. |
 | Secret-history hygiene audit on public repo | **AUDITED LOCALLY** | Verified 0 tracked live secrets, 0 reachable `.env` objects, residual `.env.orig-backup` pack objects absent locally; owner must confirm GitHub Secret Scanning on remote. |
 | Defer MCP, Agent Reach, multi-tenant SaaS, Jev flag flip | **KEPT DEFERRED** | Recorded in `DEC-08`; zero speculative scope added. |
+
+The "remote CI run pending owner push" cell above was true on 2026-11-27. On 2026-11-28 the jobs ran on `ae8ced2` and failed. See `DEC-15` and [`../BUGS.md`](../BUGS.md). The cell is left as the record of that day.
+
+## Later decisions
+
+| ID | Date | Decision | Status | Rationale & Evidence | Alternatives Rejected |
+|---|---|---|---|---|---|
+| **DEC-14** | 2026-11-28 | Agent operational truth is [`../STATUS.md`](../STATUS.md) plus [`../ACTIVE_WORK.md`](../ACTIVE_WORK.md). Architecture stays [`../../CURRENT_ARCHITECTURE.md`](../../CURRENT_ARCHITECTURE.md). Product strategy stays `PRODUCT_STRATEGY.md`. This decisions file stays the decision log. An agent runs `script/agent-context.sh sync` before editing and updates status, the register, and [`../HANDOVER.md`](../HANDOVER.md) before stopping. | **ACCEPTED** | The 2026-11-11 handover and the 2026-11-27 productization status both described branches that are no longer the tip. `origin/main` is `ae8ced2`. A second full doc set under new filenames would split the truth again. | New `ARCHITECTURE.md`, `CAPABILITIES.md`, and `AGENT_PROTOCOL.md` files that copy the existing ones. |
+| **DEC-15** | 2026-11-28 | Pull request 7 is merged and is not a green release. Actions run 46132320299 failed unit, database, e2e, and live e2e. Migration Guard run 46132320278 passed. | **ACCEPTED** | `gh pr view 7` shows `MERGED` at `ae8ced2`. The Actions job conclusions were read the same day. | Treating the merge commit message, or the local 1305-pass note in `341ef67`, as CI success. |

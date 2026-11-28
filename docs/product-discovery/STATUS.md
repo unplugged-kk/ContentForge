@@ -1,5 +1,7 @@
 # ContentForge — Productization Status
 
+> 2026-11-28. This page is the milestone log for `work/productization-mvp`. That branch merged to `origin/main` at `ae8ced2` in pull request 7. CI on that commit failed. Current truth is [`../STATUS.md`](../STATUS.md) and [`../ACTIVE_WORK.md`](../ACTIVE_WORK.md). The "not yet pushed" owner actions below are stale. Branch protection, a restore drill, xQuick terms, and the founder sessions are still owner actions.
+
 **Last Updated:** 2026-11-27  
 **Active Branch:** `work/productization-mvp` (11 commits ahead of `origin/main` @ `0dca9550d161d08a7ec82b34488ce4a022db81e0`; `main` untouched)  
 **Collaboration Branch Read:** `origin/collab/ai-pair-review` @ `c569ca3e073797ed61d4cb94cf2966154d8128c9` (read via `git show`, not merged)  
