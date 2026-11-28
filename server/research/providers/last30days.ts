@@ -85,6 +85,42 @@ function defaultScriptPath(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
+const LAST30DAYS_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "PYTHONUTF8",
+  "BRAVE_API_KEY",
+  "SERPER_API_KEY",
+  "TAVILY_API_KEY",
+  "EXA_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "REDDIT_CLIENT_ID",
+  "REDDIT_CLIENT_SECRET",
+  "REDDIT_USER_AGENT",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "SSL_CERT_FILE",
+] as const;
+
+export function buildLast30DaysEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { LAST30DAYS_NO_BROWSER_COOKIES: "1" };
+  for (const key of LAST30DAYS_ENV_ALLOWLIST) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("LAST30DAYS_") && value !== undefined) {
+      out[key] = value;
+    }
+  }
+  out.LAST30DAYS_NO_BROWSER_COOKIES = "1";
+  return out;
+}
+
 export function spawnLast30Days(
   scriptPath: string,
   args: string[],
@@ -92,7 +128,7 @@ export function spawnLast30Days(
 ): Promise<Last30DaysCommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", [scriptPath, ...args], {
-      env: { ...process.env, LAST30DAYS_NO_BROWSER_COOKIES: "1" },
+      env: buildLast30DaysEnv(process.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -306,7 +342,6 @@ export function createLast30DaysProvider(
       }
       const remainingMs = Math.max(1, ctx.deadline.getTime() - Date.now());
       const args = [
-        research.text,
         "--emit=json",
         "--json-profile=agent",
         "--no-browser-cookies",
@@ -315,6 +350,7 @@ export function createLast30DaysProvider(
         `--search=${allowed.join(",")}`,
       ];
       if (research.window?.asOf) args.push(`--as-of=${research.window.asOf}`);
+      args.push("--", research.text);
       const result = await deps.runCommand(args, remainingMs);
       if (result.code !== 0) {
         throw JobFailure.transient(`last30days exited ${result.code}`);

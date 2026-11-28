@@ -87,7 +87,19 @@ export function createRssDeps(): RssProviderDeps {
     headers: { "user-agent": "ContentForge-Research/1.0" },
   });
   return {
-    parseFeed: (url) => parser.parseURL(url) as Promise<ParsedFeed>,
+    parseFeed: async (url) => {
+      const response = await safeFetch(url, {
+        timeoutMs: 10_000,
+        maxBytes: 2 * 1024 * 1024,
+        headers: {
+          accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+        },
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`RSS feed returned HTTP ${response.status}`);
+      }
+      return (await parser.parseString(response.body)) as ParsedFeed;
+    },
     fetchArticle: (url, options) => safeFetch(url, { timeoutMs: options.timeoutMs }),
   };
 }

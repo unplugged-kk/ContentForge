@@ -5,8 +5,14 @@
 # Secrets and local config
 .env
 .env.*
+local.txt
+*.cookie*
 *.pem
 *.key
+agent-session.jsonl
+/checks
+/capture
+/src
 
 # Dependencies and build output
 node_modules

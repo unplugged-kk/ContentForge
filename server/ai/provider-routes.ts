@@ -4,6 +4,7 @@ import { getUserId } from "../middleware/userContext";
 import { probeProvider } from "./probe";
 import { providerStorage } from "./provider-storage";
 import { decryptSecret } from "../middleware/crypto";
+import { allowLocalAiProviderUrls, assertSafeUrl, UnsafeUrlError } from "../security/ssrf";
 
 const headerSchema = z.record(z.string().max(200)).refine(
   (headers) => Object.keys(headers).every((key) => !/^authorization$|^cookie$|^set-cookie$/i.test(key)),
@@ -52,17 +53,28 @@ function missingTable(error: unknown): boolean {
   return /ai_providers|ai_model_routes|does not exist|42P01/i.test(message);
 }
 
-export function createProviderRouter(): Router {
+export interface ProviderRouterDeps {
+  storage?: typeof providerStorage;
+  probe?: typeof probeProvider;
+  validateUrl?: (url: string) => Promise<URL>;
+}
+
+export function createProviderRouter(deps: ProviderRouterDeps = {}): Router {
   const router = Router();
+  const store = deps.storage ?? providerStorage;
+  const runProbe = deps.probe ?? probeProvider;
+  const validateUrl =
+    deps.validateUrl ??
+    ((url: string) => assertSafeUrl(url, { allowLoopback: allowLocalAiProviderUrls() }));
 
   router.get("/providers", async (req, res, next) => {
     try {
       const userId = ownerId(req);
-      const rows = await providerStorage.list(userId);
-      const routes = await providerStorage.listRoutes(userId);
+      const rows = await store.list(userId);
+      const routes = await store.listRoutes(userId);
       return res.json({
-        providers: rows.map((row) => providerStorage.toPublic(row)),
-        routes: routes.map((row) => providerStorage.toPublicRoute(row)),
+        providers: rows.map((row) => store.toPublic(row)),
+        routes: routes.map((row) => store.toPublicRoute(row)),
       });
     } catch (error) {
       if (missingTable(error)) return res.status(503).json({ message: "ai_providers table is missing. Run db:push." });
@@ -74,10 +86,18 @@ export function createProviderRouter(): Router {
     const parsed = createBody.safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map((issue) => issue.message).join(", ") });
     try {
+      await validateUrl(parsed.data.baseUrl);
+    } catch (error) {
+      if (error instanceof UnsafeUrlError) {
+        return res.status(400).json({ message: error.message });
+      }
+      return next(error);
+    }
+    try {
       const userId = ownerId(req);
       const body = parsed.data;
-      const existing = await providerStorage.list(userId);
-      const row = await providerStorage.insert({
+      const existing = await store.list(userId);
+      const row = await store.insert({
         userId,
         name: body.name,
         type: body.type,
@@ -90,7 +110,7 @@ export function createProviderRouter(): Router {
         defaultModel: body.model,
         isDefault: body.isDefault ?? existing.length === 0,
       });
-      return res.status(201).json({ provider: providerStorage.toPublic(row) });
+      return res.status(201).json({ provider: store.toPublic(row) });
     } catch (error) {
       if (missingTable(error)) return res.status(503).json({ message: "ai_providers table is missing. Run db:push." });
       return next(error);
@@ -102,8 +122,18 @@ export function createProviderRouter(): Router {
     if (!Number.isInteger(id)) return res.status(400).json({ message: "invalid provider id" });
     const parsed = patchBody.safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map((issue) => issue.message).join(", ") });
+    if (parsed.data.baseUrl !== undefined) {
+      try {
+        await validateUrl(parsed.data.baseUrl);
+      } catch (error) {
+        if (error instanceof UnsafeUrlError) {
+          return res.status(400).json({ message: error.message });
+        }
+        return next(error);
+      }
+    }
     try {
-      const row = await providerStorage.update(ownerId(req), id, {
+      const row = await store.update(ownerId(req), id, {
         name: parsed.data.name,
         type: parsed.data.type,
         baseUrl: parsed.data.baseUrl,
@@ -116,7 +146,7 @@ export function createProviderRouter(): Router {
         enabled: parsed.data.enabled,
       });
       if (!row) return res.status(404).json({ message: "provider not found" });
-      return res.json({ provider: providerStorage.toPublic(row) });
+      return res.json({ provider: store.toPublic(row) });
     } catch (error) {
       if (missingTable(error)) return res.status(503).json({ message: "ai_providers table is missing. Run db:push." });
       return next(error);
@@ -127,9 +157,9 @@ export function createProviderRouter(): Router {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ message: "invalid provider id" });
     try {
-      const row = await providerStorage.setDefault(ownerId(req), id);
+      const row = await store.setDefault(ownerId(req), id);
       if (!row) return res.status(404).json({ message: "provider not found" });
-      return res.json({ provider: providerStorage.toPublic(row) });
+      return res.json({ provider: store.toPublic(row) });
     } catch (error) {
       return next(error);
     }
@@ -140,10 +170,10 @@ export function createProviderRouter(): Router {
     if (!Number.isInteger(id)) return res.status(400).json({ message: "invalid provider id" });
     try {
       const userId = ownerId(req);
-      const row = await providerStorage.get(userId, id);
+      const row = await store.get(userId, id);
       if (!row) return res.status(404).json({ message: "provider not found" });
       const preference = row.transport === "responses" || row.transport === "chat_completions" ? row.transport : "auto";
-      const result = await probeProvider({
+      const result = await runProbe({
         baseUrl: row.baseUrl,
         apiKey: row.secretCiphertext ? decryptSecret(row.secretCiphertext) : null,
         model: row.defaultModel,
@@ -152,7 +182,7 @@ export function createProviderRouter(): Router {
         extraHeaders: row.extraHeaders ?? {},
         transport: preference,
       });
-      const updated = await providerStorage.update(userId, id, {
+      const updated = await store.update(userId, id, {
         models: result.models,
         detectedTransport: result.transport === "unknown" ? null : result.transport,
         capabilities: result.capabilities,
@@ -168,7 +198,7 @@ export function createProviderRouter(): Router {
         error: result.error,
         errorCategory: result.errorCategory,
         latencyMs: result.latencyMs,
-        provider: updated ? providerStorage.toPublic(updated) : null,
+        provider: updated ? store.toPublic(updated) : null,
       });
     } catch (error) {
       if (missingTable(error)) return res.status(503).json({ message: "ai_providers table is missing. Run db:push." });
@@ -183,10 +213,10 @@ export function createProviderRouter(): Router {
     if (!parsed.success) return res.status(400).json({ message: "confirmName is required" });
     try {
       const userId = ownerId(req);
-      const row = await providerStorage.get(userId, id);
+      const row = await store.get(userId, id);
       if (!row) return res.status(404).json({ message: "provider not found" });
       if (row.name !== parsed.data.confirmName) return res.status(400).json({ message: "confirmation name does not match" });
-      await providerStorage.remove(userId, id);
+      await store.remove(userId, id);
       return res.json({ deleted: true });
     } catch (error) {
       return next(error);
@@ -198,13 +228,13 @@ export function createProviderRouter(): Router {
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map((issue) => issue.message).join(", ") });
     try {
       const userId = ownerId(req);
-      const provider = await providerStorage.get(userId, parsed.data.providerId);
+      const provider = await store.get(userId, parsed.data.providerId);
       if (!provider) return res.status(404).json({ message: "provider not found" });
       if (parsed.data.fallbackProviderId) {
-        const fallback = await providerStorage.get(userId, parsed.data.fallbackProviderId);
+        const fallback = await store.get(userId, parsed.data.fallbackProviderId);
         if (!fallback) return res.status(404).json({ message: "fallback provider not found" });
       }
-      const row = await providerStorage.insertRoute({
+      const row = await store.insertRoute({
         userId,
         purpose: parsed.data.purpose,
         providerId: parsed.data.providerId,
@@ -214,7 +244,7 @@ export function createProviderRouter(): Router {
         fallbackProviderId: parsed.data.fallbackProviderId ?? null,
         fallbackModel: parsed.data.fallbackModel ?? null,
       });
-      return res.status(201).json({ route: providerStorage.toPublicRoute(row) });
+      return res.status(201).json({ route: store.toPublicRoute(row) });
     } catch (error) {
       if (missingTable(error)) return res.status(503).json({ message: "ai_model_routes table is missing. Run db:push." });
       return next(error);

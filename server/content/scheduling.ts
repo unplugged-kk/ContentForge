@@ -245,8 +245,10 @@ export async function dispatchDueOccurrences(
   now: Date,
   deps: DispatchDeps,
   limit = 50,
+  options?: { ownerId?: number },
 ): Promise<DispatchResult> {
   const result: DispatchResult = { materialized: 0, enqueued: 0, publications: [] };
+  const ownerId = options?.ownerId;
 
   // Materialize: for each active schedule, the next unmaterialized slot (the
   // count of existing occurrences is the durable index — see module docs). At
@@ -256,6 +258,7 @@ export async function dispatchDueOccurrences(
   const active = await deps.content.listActiveSchedules(now, limit);
   for (const schedule of active) {
     if (schedule.status !== "active" || isManualSchedule(schedule)) continue;
+    if (ownerId !== undefined && schedule.userId !== ownerId) continue;
 
     const existingCount = await deps.content.countOccurrences(schedule.id);
     if (existingCount >= schedule.count) continue; // series fully materialized
@@ -278,6 +281,7 @@ export async function dispatchDueOccurrences(
 
     const schedule = await deps.content.getSchedule(occurrence.scheduleId);
     if (!schedule || isManualSchedule(schedule)) continue;
+    if (ownerId !== undefined && schedule.userId !== ownerId) continue;
     if (schedule.status === "cancelled" || schedule.status === "paused") continue;
 
     // Claim the occurrence first (compare-and-set), so of two overlapping

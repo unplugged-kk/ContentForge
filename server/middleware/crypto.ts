@@ -17,12 +17,15 @@ const IV_LEN = 12; // GCM standard
 const KEY_LEN = 32;
 const SCRYPT_SALT = "contentforge.crypto.v1";
 
-let cachedKey: Buffer | null = null;
+let cachedKey: { tag: string; key: Buffer } | null = null;
 
 function getKey(): Buffer {
-  if (cachedKey) return cachedKey;
-
   const raw = process.env.ENCRYPTION_KEY?.trim();
+  const fallback = process.env.SESSION_SECRET;
+  const nodeEnv = process.env.NODE_ENV ?? "";
+  const tag = `${nodeEnv}|${raw ?? ""}|${fallback ?? ""}`;
+  if (cachedKey && cachedKey.tag === tag) return cachedKey.key;
+
   if (raw) {
     const buf = Buffer.from(raw, "base64");
     if (buf.length !== KEY_LEN) {
@@ -30,16 +33,22 @@ function getKey(): Buffer {
         `ENCRYPTION_KEY must decode to ${KEY_LEN} bytes (got ${buf.length}). Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`,
       );
     }
-    cachedKey = buf;
+    cachedKey = { tag, key: buf };
     return buf;
   }
 
-  const fallback = process.env.SESSION_SECRET;
+  if (nodeEnv === "production") {
+    throw new Error(
+      "ENCRYPTION_KEY must be set in production (refusing to fall back to SESSION_SECRET)",
+    );
+  }
+
   if (!fallback) {
     throw new Error("ENCRYPTION_KEY or SESSION_SECRET must be set to encrypt secrets at rest");
   }
-  cachedKey = scryptSync(fallback, SCRYPT_SALT, KEY_LEN);
-  return cachedKey;
+  const derived = scryptSync(fallback, SCRYPT_SALT, KEY_LEN);
+  cachedKey = { tag, key: derived };
+  return derived;
 }
 
 export function isEncrypted(value: string | null | undefined): boolean {

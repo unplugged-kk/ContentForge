@@ -1323,6 +1323,7 @@ export async function dispatchScheduledAutomationPolicies(
   now: Date,
   deps: AutomationDeps,
   limit = 25,
+  options?: { ownerId?: number },
 ): Promise<ScheduledAutomationDispatchResult> {
   const result: ScheduledAutomationDispatchResult = {
     considered: 0,
@@ -1330,8 +1331,10 @@ export async function dispatchScheduledAutomationPolicies(
     deduplicated: 0,
     limited: 0,
   };
+  const ownerId = options?.ownerId;
   const policies = await deps.automation.listActiveScheduledPolicies(limit);
   for (const policy of policies) {
+    if (ownerId !== undefined && policy.userId !== ownerId) continue;
     const slot = dueAutomationSlot(policy, now);
     if (!slot) continue;
     result.considered += 1;
@@ -1381,11 +1384,14 @@ export async function dispatchAutomationDueRuns(
   now: Date,
   deps: AutomationDeps,
   limit = 25,
+  options?: { ownerId?: number },
 ): Promise<AutomationDispatchResult> {
-  const scheduled = await dispatchScheduledAutomationPolicies(now, deps, limit);
+  const ownerId = options?.ownerId;
+  const scheduled = await dispatchScheduledAutomationPolicies(now, deps, limit, options);
   const runs = await deps.automation.listAdvanceableAutomationRuns(limit);
   const result: AutomationDispatchResult = { scheduled, enqueued: 0, runIds: [] };
   for (const run of runs) {
+    if (ownerId !== undefined && run.userId !== ownerId) continue;
     const enqueued = await deps.enqueueAutomationRun(run);
     if (enqueued) result.enqueued += 1;
     result.runIds.push(run.id);

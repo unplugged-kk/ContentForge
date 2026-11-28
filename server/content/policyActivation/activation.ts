@@ -165,7 +165,7 @@ export async function activatePolicyCandidate(
   const format = parseScopeFormat(candidate.targetScope)!;
   const channel = parseScopeChannel(candidate.targetScope)!;
   const specHash = createHash("sha256")
-    .update(canonicalJson({ policyKey, config: candidate.proposedConfiguration }))
+    .update(canonicalJson({ userId, policyKey, config: candidate.proposedConfiguration }))
     .digest("hex");
 
   try {
@@ -173,7 +173,13 @@ export async function activatePolicyCandidate(
       const [priorActive] = await tx
         .select()
         .from(generationPolicies)
-        .where(and(eq(generationPolicies.policyKey, policyKey), eq(generationPolicies.status, "active")));
+        .where(
+          and(
+            eq(generationPolicies.policyKey, policyKey),
+            eq(generationPolicies.userId, userId),
+            eq(generationPolicies.status, "active"),
+          ),
+        );
 
       const [maxVersionRow] = await tx
         .select({ maxVersion: rawSql<number>`coalesce(max(${generationPolicies.version}), 0)` })
@@ -189,7 +195,7 @@ export async function activatePolicyCandidate(
         await tx
           .update(generationPolicies)
           .set({ status: "archived" })
-          .where(eq(generationPolicies.id, priorActive.id));
+          .where(and(eq(generationPolicies.id, priorActive.id), eq(generationPolicies.userId, userId)));
       }
 
       const inserted = await tx
@@ -228,21 +234,22 @@ export async function activatePolicyCandidate(
         const [existingRevision] = await tx
           .select()
           .from(generationPolicies)
-          .where(eq(generationPolicies.specHash, specHash));
+          .where(and(eq(generationPolicies.specHash, specHash), eq(generationPolicies.userId, userId)));
         if (!existingRevision) {
           throw new Error(`Failed to create or load GenerationPolicy revision for spec ${specHash}`);
         }
         newPolicy = existingRevision;
       }
 
-      // Archive every other active revision for this key, then guarantee the
-      // target revision is active -- correct regardless of which branch above ran.
+      // Archive every other active revision owned by this user for this key,
+      // then guarantee the target revision is active.
       await tx
         .update(generationPolicies)
         .set({ status: "archived" })
         .where(
           and(
             eq(generationPolicies.policyKey, policyKey),
+            eq(generationPolicies.userId, userId),
             eq(generationPolicies.status, "active"),
             rawSql`${generationPolicies.id} != ${newPolicy.id}`,
           ),
@@ -250,7 +257,7 @@ export async function activatePolicyCandidate(
       const [activated] = await tx
         .update(generationPolicies)
         .set({ status: "active" })
-        .where(eq(generationPolicies.id, newPolicy.id))
+        .where(and(eq(generationPolicies.id, newPolicy.id), eq(generationPolicies.userId, userId)))
         .returning();
 
       const [activation] = await tx
@@ -345,7 +352,13 @@ export async function rollbackPolicyForCandidate(
       const [currentActive] = await tx
         .select()
         .from(generationPolicies)
-        .where(and(eq(generationPolicies.policyKey, policyKey), eq(generationPolicies.status, "active")));
+        .where(
+          and(
+            eq(generationPolicies.policyKey, policyKey),
+            eq(generationPolicies.userId, userId),
+            eq(generationPolicies.status, "active"),
+          ),
+        );
 
       if (currentActive && currentActive.id === targetPolicyId) {
         // Already at the rollback target -- idempotent no-op, return current state.
@@ -356,12 +369,12 @@ export async function rollbackPolicyForCandidate(
         await tx
           .update(generationPolicies)
           .set({ status: "archived" })
-          .where(eq(generationPolicies.id, currentActive.id));
+          .where(and(eq(generationPolicies.id, currentActive.id), eq(generationPolicies.userId, userId)));
       }
       const [reactivated] = await tx
         .update(generationPolicies)
         .set({ status: "active" })
-        .where(eq(generationPolicies.id, targetPolicyId))
+        .where(and(eq(generationPolicies.id, targetPolicyId), eq(generationPolicies.userId, userId)))
         .returning();
       if (!reactivated) {
         throw new Error(`Rollback target GenerationPolicy ${targetPolicyId} no longer exists`);
@@ -408,11 +421,22 @@ function isUniqueViolation(error: unknown, constraintName: string): boolean {
   return !!pgError && pgError.code === "23505" && pgError.constraint === constraintName;
 }
 
-export async function getActivePolicyForKey(db: ContentDatabase, policyKey: string): Promise<GenerationPolicy | undefined> {
+export async function getActivePolicyForKey(
+  db: ContentDatabase,
+  policyKey: string,
+  ownerId?: number,
+): Promise<GenerationPolicy | undefined> {
+  const conditions = [
+    eq(generationPolicies.policyKey, policyKey),
+    eq(generationPolicies.status, "active"),
+  ];
+  if (ownerId !== undefined) {
+    conditions.push(eq(generationPolicies.userId, ownerId));
+  }
   const [row] = await db
     .select()
     .from(generationPolicies)
-    .where(and(eq(generationPolicies.policyKey, policyKey), eq(generationPolicies.status, "active")));
+    .where(and(...conditions));
   return row;
 }
 
@@ -421,8 +445,9 @@ export async function resolvePolicyForGeneration(
   db: ContentDatabase,
   format: string,
   channel: string,
+  ownerId?: number,
 ): Promise<GenerationPolicy | undefined> {
-  return getActivePolicyForKey(db, `pol:${format}:${channel}`);
+  return getActivePolicyForKey(db, `pol:${format}:${channel}`, ownerId);
 }
 
 export interface PolicyHistoryEntry {

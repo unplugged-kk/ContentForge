@@ -62,7 +62,7 @@ export function createDecisionRouter(): Router {
   });
 
   /** The decision ledger. Read-only: the layer decides, it never executes. */
-  router.get("/decisions", async (req, res) => {
+  router.get("/decisions", async (req, res, next) => {
     const requested = Number(req.query.limit ?? 50);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
     const decisionType = typeof req.query.type === "string" ? req.query.type : undefined;
@@ -74,20 +74,20 @@ export function createDecisionRouter(): Router {
         userId: requireOwnerId(req),
       });
       res.json({ decisions });
-    } catch (error: any) {
-      res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
+    } catch (error) {
+      return next(error);
     }
   });
 
-  router.get("/decisions/:id", async (req, res) => {
+  router.get("/decisions/:id", async (req, res, next) => {
     try {
       const decision = await decisionLedger.get(String(req.params.id));
       if (!decision || (decision.userId !== null && decision.userId !== requireOwnerId(req))) {
         return res.status(404).json({ message: "Decision not found" });
       }
       res.json({ decision });
-    } catch (error: any) {
-      res.status(500).json({ message: error?.message || "Could not read the decision ledger" });
+    } catch (error) {
+      return next(error);
     }
   });
 
@@ -112,8 +112,9 @@ export function createDecisionRouter(): Router {
         (parsed.data.context ?? {}) as TriageContext,
       );
       res.json({ candidates, summary: intakeSummary(candidates) });
-    } catch (error: any) {
-      res.status(502).json({ message: error?.message || "Jev request failed" });
+    } catch (error) {
+      console.error("[decision] triage failed:", error);
+      res.status(502).json({ message: "Jev request failed" });
     }
   });
 
@@ -139,8 +140,9 @@ export function createDecisionRouter(): Router {
       }
       const triaged = await triageCandidates(candidates, (parsed.data.context ?? {}) as TriageContext);
       res.json({ candidates: triaged, summary: intakeSummary(triaged) });
-    } catch (error: any) {
-      res.status(502).json({ message: error?.message || "Jev request failed" });
+    } catch (error) {
+      console.error("[decision] intake failed:", error);
+      res.status(502).json({ message: "Jev request failed" });
     }
   });
 

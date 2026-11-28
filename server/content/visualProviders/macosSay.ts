@@ -40,14 +40,49 @@ function boundedRate(value: unknown): number {
     : 175;
 }
 
-async function probeWav(path: string): Promise<{ durationMs: number; sampleRate: number; channels: number; codec: string }> {
+const MINIMAL_SAY_ENV_KEYS = ["PATH", "HOME", "TMPDIR"] as const;
+
+export function minimalSayEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of MINIMAL_SAY_ENV_KEYS) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  return out;
+}
+
+export function buildMacosSayArgs(input: {
+  providerVoiceId: string;
+  speakingRate?: unknown;
+  outputPath: string;
+  text: string;
+}): string[] {
+  const trimmed = input.text.trim();
+  if (!trimmed || trimmed.length > 5_000) {
+    throw JobFailure.permanent("macOS Say text must contain 1 to 5000 characters");
+  }
+  if (trimmed.startsWith("-")) {
+    throw JobFailure.permanent("macOS Say text must not start with '-'");
+  }
+  return [
+    "-v", input.providerVoiceId,
+    "-r", String(boundedRate(input.speakingRate)),
+    "-o", input.outputPath,
+    "--",
+    trimmed,
+  ];
+}
+
+async function probeWav(
+  path: string,
+  childEnv: NodeJS.ProcessEnv,
+): Promise<{ durationMs: number; sampleRate: number; channels: number; codec: string }> {
   const { stdout } = await execFileAsync("ffprobe", [
     "-v", "error",
     "-select_streams", "a:0",
     "-show_entries", "stream=codec_name,sample_rate,channels:format=duration",
     "-of", "json",
     path,
-  ], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+  ], { timeout: 15_000, maxBuffer: 1024 * 1024, env: childEnv });
   const parsed = JSON.parse(stdout) as {
     streams?: Array<{ codec_name?: string; sample_rate?: string; channels?: number }>;
     format?: { duration?: string };
@@ -103,11 +138,12 @@ export function createMacosSayProvider(
     async health() {
       const configured = macosSayConfigured(env);
       let reachable = false;
+      const childEnv = minimalSayEnv(env);
       try {
         const [, , voiceList] = await Promise.all([
           access(SAY_PATH),
-          execFileAsync("ffmpeg", ["-version"], { timeout: 5_000 }),
-          execFileAsync(SAY_PATH, ["-v", "?"], { timeout: 5_000, maxBuffer: 2 * 1024 * 1024 }),
+          execFileAsync("ffmpeg", ["-version"], { timeout: 5_000, env: childEnv }),
+          execFileAsync(SAY_PATH, ["-v", "?"], { timeout: 5_000, maxBuffer: 2 * 1024 * 1024, env: childEnv }),
         ]);
         reachable = process.platform === "darwin"
           && voices.some((voice) => voiceList.stdout.includes(voice.providerVoiceId));
@@ -141,6 +177,9 @@ export function createMacosSayProvider(
       if (!text || text.length > 5_000) {
         throw JobFailure.permanent("macOS Say text must contain 1 to 5000 characters");
       }
+      if (text.startsWith("-")) {
+        throw JobFailure.permanent("macOS Say text must not start with '-'");
+      }
       const voiceRecord = asRecord(intent.voice);
       const providerVoiceId = String(
         voiceRecord.providerVoiceId ?? intent.providerVoiceId ?? voices[0]?.providerVoiceId ?? "",
@@ -152,18 +191,20 @@ export function createMacosSayProvider(
       const directory = await mkdtemp(join(tmpdir(), "contentforge-say-"));
       const aiffPath = join(directory, "speech.aiff");
       const wavPath = join(directory, "speech.wav");
+      const childEnv = minimalSayEnv(env);
       try {
-        await execFileAsync(SAY_PATH, [
-          "-v", providerVoiceId,
-          "-r", String(boundedRate(intent.speakingRate)),
-          "-o", aiffPath,
+        const sayArgs = buildMacosSayArgs({
+          providerVoiceId,
+          speakingRate: intent.speakingRate,
+          outputPath: aiffPath,
           text,
-        ], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
+        });
+        await execFileAsync(SAY_PATH, sayArgs, { timeout: 5 * 60_000, maxBuffer: 1024 * 1024, env: childEnv });
         await execFileAsync("ffmpeg", [
           "-v", "error", "-y", "-i", aiffPath,
           "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", wavPath,
-        ], { timeout: 5 * 60_000, maxBuffer: 2 * 1024 * 1024 });
-        const [bytes, media] = await Promise.all([readFile(wavPath), probeWav(wavPath)]);
+        ], { timeout: 5 * 60_000, maxBuffer: 2 * 1024 * 1024, env: childEnv });
+        const [bytes, media] = await Promise.all([readFile(wavPath), probeWav(wavPath, childEnv)]);
         return {
           bytes,
           mime: "audio/wav",

@@ -115,11 +115,12 @@ export function createPolicyHistoryRouter(deps: PolicyActivationApiDeps): Router
   // GET /api/policies/active?policyKey=pol:x_post:x  OR  ?format=x_post&channel=x
   router.get("/active", async (req, res, next) => {
     try {
+      const ownerId = requireOwnerId(req);
       const policyKey = resolveQueryPolicyKey(req.query);
       if (!policyKey) {
         return res.status(400).json({ message: "policyKey (or format + channel) is required" });
       }
-      const policy = await getActivePolicyForKey(deps.database, policyKey);
+      const policy = await getActivePolicyForKey(deps.database, policyKey, ownerId);
       if (!policy) return res.status(404).json({ message: `No active policy for scope "${policyKey}"` });
       return res.json(policy);
     } catch (error) {

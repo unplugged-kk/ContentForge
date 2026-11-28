@@ -52,13 +52,21 @@ function sanitizeHtml(input: unknown): string {
       "table", "thead", "tbody", "tr", "th", "td",
       "span", "div",
     ],
-    ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "id", "target", "rel"],
+    ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "target", "rel"],
     ALLOW_DATA_ATTR: false,
   });
 }
 
 const uploadsDir = process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+function publicConnectedAccount(account: object, accessToken: string) {
+  return {
+    ...account,
+    accessToken: accessToken ? "••••••" + accessToken.slice(-4) : null,
+    refreshToken: undefined,
+  };
+}
 
 function sessionUserId(req: { userId?: number }): number {
   // Phase 30.1: fail closed. The /api authGate guarantees an authenticated
@@ -118,7 +126,17 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  app.use("/uploads", (await import("express")).default.static(uploadsDir));
+  const { requireAuth } = await import("./auth");
+  const expressStatic = (await import("express")).default.static;
+  app.use(
+    "/uploads",
+    requireAuth,
+    (_req, res, next) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      next();
+    },
+    expressStatic(uploadsDir, { dotfiles: "deny", index: false, fallthrough: false }),
+  );
 
   // ==================== PILLARS ====================
   app.get("/api/pillars", async (req, res) => {
@@ -809,7 +827,7 @@ export async function registerRoutes(
       ]);
 
       await logAiUsage(usage, latency, "expand_section");
-      res.json({ content: content.trim() });
+      res.json({ content: sanitizeHtml(content.trim()) });
     } catch (err: any) {
       console.error("Expand section error:", err);
       res.status(500).json({ message: "Failed to expand section." });
@@ -831,7 +849,7 @@ export async function registerRoutes(
 
       await logAiUsage(usage, latency, "generate_full_article");
       const wordCount = content.replace(/<[^>]*>/g, "").split(/\s+/).filter(Boolean).length;
-      res.json({ content: content.trim(), wordCount, estimatedReadMinutes: Math.ceil(wordCount / 200) });
+      res.json({ content: sanitizeHtml(content.trim()), wordCount, estimatedReadMinutes: Math.ceil(wordCount / 200) });
     } catch (err: any) {
       console.error("Generate full article error:", err);
       res.status(500).json({ message: "Failed to generate article." });
@@ -850,7 +868,7 @@ export async function registerRoutes(
       ]);
 
       await logAiUsage(usage, latency, "improve_section");
-      res.json({ content: content.trim() });
+      res.json({ content: sanitizeHtml(content.trim()) });
     } catch (err: any) {
       console.error("Improve error:", err);
       res.status(500).json({ message: "Failed to improve text." });
@@ -1098,7 +1116,7 @@ export async function registerRoutes(
     const idMatch = url.match(/arxiv\.org\/(?:abs|pdf)\/(\d+\.\d+)/);
     if (!idMatch) throw new Error("Invalid ArXiv URL");
     const arxivId = idMatch[1];
-    const apiUrl = `http://export.arxiv.org/api/query?id_list=${arxivId}`;
+    const apiUrl = `https://export.arxiv.org/api/query?id_list=${arxivId}`;
     const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
     const xml = await response.text();
     const $ = cheerio.load(xml, { xml: true });
@@ -1708,7 +1726,7 @@ ${isArticle
       if (isArticle) {
         variations = parsed.variations.map((v: any) => ({
           title: String(v.title || ref.title || "").trim(),
-          contentHtml: String(v.contentHtml || v.content || "").trim(),
+          contentHtml: sanitizeHtml(String(v.contentHtml || v.content || "").trim()),
           isArticle: true,
         }));
       } else {
@@ -1877,7 +1895,15 @@ Each tweet under ${charLimit} characters.` },
   });
 
   app.get("/api/bookmarklet", (req, res) => {
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const configured = process.env.APP_ORIGIN?.trim();
+    const host = req.get("host") ?? "";
+    const hostOk = /^[a-zA-Z0-9.-]+(:\d{1,5})?$/.test(host);
+    const baseUrl = configured && /^https?:\/\//.test(configured)
+      ? configured.replace(/\/+$/, "")
+      : hostOk
+        ? `${req.protocol}://${host}`
+        : null;
+    if (!baseUrl) return res.status(400).json({ message: "Invalid host" });
     const bookmarklet = `javascript:void(fetch('${baseUrl}/api/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:window.location.href})}).then(r=>r.json()).then(d=>alert('ContentForge: Saved! '+d.title)).catch(e=>alert('ContentForge: Error - '+e.message)))`;
     res.json({ bookmarklet, instructions: "Drag this to your bookmarks bar to capture any page into ContentForge." });
   });
@@ -2044,7 +2070,7 @@ Each tweet under ${charLimit} characters.` },
               isActive: true,
               profileData: accountData || {},
             });
-            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+            return res.json(publicConnectedAccount(account, accessToken));
           } else {
             const account = await storage.upsertConnectedAccount({
               platform: "x",
@@ -2053,7 +2079,7 @@ Each tweet under ${charLimit} characters.` },
               accessToken,
               isActive: true,
             });
-            return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but could not verify with xQuick. Posting may not work until token is verified." });
+            return res.json({ ...publicConnectedAccount(account, accessToken), warning: "Token saved but could not verify with xQuick. Posting may not work until token is verified." });
           }
         } catch (e) {
           const account = await storage.upsertConnectedAccount({
@@ -2063,7 +2089,7 @@ Each tweet under ${charLimit} characters.` },
             accessToken,
             isActive: true,
           });
-          return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4), warning: "Token saved but xQuick verification request failed. Check your network." });
+          return res.json({ ...publicConnectedAccount(account, accessToken), warning: "Token saved but xQuick verification request failed. Check your network." });
         }
       }
 
@@ -2092,7 +2118,7 @@ Each tweet under ${charLimit} characters.` },
           isActive: true,
           profileData,
         });
-        return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+        return res.json(publicConnectedAccount(account, accessToken));
       }
 
       if (platform === "instagram") {
@@ -2122,7 +2148,7 @@ Each tweet under ${charLimit} characters.` },
           isActive: true,
           profileData,
         });
-        return res.json({ ...account, accessToken: "••••••" + accessToken.slice(-4) });
+        return res.json(publicConnectedAccount(account, accessToken));
       }
 
       return res.status(400).json({ message: `Unknown platform: ${platform}` });
@@ -2545,10 +2571,12 @@ Return ONLY the improved content text. Keep the same format and length constrain
     app.use(passport.initialize());
 
     app.get("/api/auth/google",
+      authLimiter,
       passport.authenticate("google", { scope: ["profile", "email"], session: false })
     );
 
     app.get("/api/auth/google/callback",
+      authLimiter,
       passport.authenticate("google", { failureRedirect: "/?error=google_auth_failed", session: false }),
       (req: any, res) => {
         if (!req.user) {
@@ -2951,7 +2979,9 @@ Return JSON: { "suggestions": [{ "dayOfWeek": "Monday", "time": "09:00", "reason
   app.post("/api/vault/extract-image", async (req, res) => {
     try {
       const { imageBase64, mimeType = "image/jpeg" } = req.body;
+      const allowedMime = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
       if (!imageBase64) return res.status(400).json({ message: "Image data required" });
+      if (!allowedMime.has(mimeType)) return res.status(400).json({ message: "Unsupported image type" });
       const response = await ai.chat.completions.create({
         model: MODELS.VISION,
         messages: [{
@@ -3552,6 +3582,9 @@ Return only the refined post content, no explanation.` },
 
   // POST /api/autopilot/smoke-test — trigger immediate pipeline run for testing
   app.post("/api/autopilot/smoke-test", async (req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(404).json({ message: "Not found" });
+    }
     try {
       const { runDailyAutoPost } = await import("./autopilot");
       console.log("[smoke-test] Triggering immediate auto-post pipeline...");

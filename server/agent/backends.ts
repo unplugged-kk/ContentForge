@@ -7,6 +7,7 @@ import type {
 import { collectRefs, resolvePlanArguments } from "./intent";
 import { emitAgentLog } from "./events";
 import { redactSecrets } from "../ai/redact";
+import { allowLocalAiProviderUrls, assertSafeUrl, UnsafeUrlError } from "../security/ssrf";
 
 export type AgentProviderResolution = {
   providerId: number;
@@ -117,6 +118,14 @@ export function createOpenAiCompatibleBackend(config: {
       if (!baseUrl) {
         return { status: "failed", message: "No provider is configured. Add one under Agent providers or set AGENT_BACKEND_BASE_URL.", failureClass: "permanent" };
       }
+      try {
+        await assertSafeUrl(baseUrl, { allowLoopback: allowLocalAiProviderUrls() });
+      } catch (error) {
+        if (error instanceof UnsafeUrlError) {
+          return { status: "failed", message: error.message, failureClass: "permanent" };
+        }
+        throw error;
+      }
       if (resolved) {
         emitAgentLog("provider_selected", {
           providerId: resolved.providerId,
@@ -175,6 +184,7 @@ export function createOpenAiCompatibleBackend(config: {
       delete extraHeaders.Authorization;
       const response = await fetch(url, {
         method: "POST",
+        redirect: "error",
         headers: {
           "content-type": "application/json",
           ...extraHeaders,
@@ -244,8 +254,17 @@ export function createAguiRemoteBackend(config: { aguiUrl: string | null }): Age
       if (!config.aguiUrl) {
         return { status: "failed", message: "AGENT_AGUI_URL is not configured", failureClass: "permanent" };
       }
+      try {
+        await assertSafeUrl(config.aguiUrl, { allowLoopback: allowLocalAiProviderUrls() });
+      } catch (error) {
+        if (error instanceof UnsafeUrlError) {
+          return { status: "failed", message: error.message, failureClass: "permanent" };
+        }
+        throw error;
+      }
       const response = await fetch(config.aguiUrl, {
         method: "POST",
+        redirect: "error",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           threadId: String(input.agentRunId),

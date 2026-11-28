@@ -1,4 +1,5 @@
 import { redactSecrets } from "./redact";
+import { allowLocalAiProviderUrls, assertSafeUrl, safeFetch, UnsafeUrlError } from "../security/ssrf";
 
 export type TransportPreference = "auto" | "chat_completions" | "responses";
 export type DetectedTransport = "chat_completions" | "responses" | "unknown";
@@ -56,9 +57,29 @@ function headersFor(input: {
   return headers;
 }
 
-async function readError(response: Response, secrets: string[]): Promise<string> {
-  const body = await response.text().catch(() => "");
-  return redactSecrets(`HTTP ${response.status}: ${body.slice(0, 300)}`, secrets);
+async function readError(response: Response): Promise<string> {
+  await response.body?.cancel().catch(() => undefined);
+  const status = response.status;
+  if (status === 401 || status === 403) {
+    return `HTTP ${status} (authentication failed) [redacted]`;
+  }
+  if (status === 404) return "HTTP 404 (not found)";
+  if (status === 429) return "HTTP 429 (rate limited)";
+  if (status >= 500) return `HTTP ${status} (upstream server error)`;
+  if (status >= 400) return `HTTP ${status} (request rejected)`;
+  return `HTTP ${status}`;
+}
+
+function toResponseHeaders(raw: Record<string, string | string[] | undefined>): Headers {
+  const out = new Headers();
+  for (const [key, value] of Object.entries(raw)) {
+    if (Array.isArray(value)) {
+      for (const item of value) out.append(key, item);
+    } else if (typeof value === "string") {
+      out.set(key, value);
+    }
+  }
+  return out;
 }
 
 export async function probeProvider(input: {
@@ -73,26 +94,58 @@ export async function probeProvider(input: {
   timeoutMs?: number;
 }): Promise<ProbeResult> {
   const started = Date.now();
-  const fetchImpl = input.fetchImpl ?? fetch;
   const timeoutMs = input.timeoutMs ?? 8000;
   const secrets = [input.apiKey].filter((value): value is string => Boolean(value));
   const headers = headersFor(input);
   const capabilities: ProbeCapabilities = { ...EMPTY };
   const models: string[] = [];
+  const allowLoopback = allowLocalAiProviderUrls();
 
   const finish = (partial: Omit<ProbeResult, "latencyMs">): ProbeResult => ({
     ...partial,
     latencyMs: Date.now() - started,
   });
 
+  try {
+    await assertSafeUrl(input.baseUrl, { allowLoopback });
+  } catch (error) {
+    return finish({
+      ok: false,
+      transport: "unknown",
+      models,
+      capabilities,
+      error: error instanceof Error ? error.message : "blocked outbound URL",
+      errorCategory: "ssrf",
+    });
+  }
+
   const call = async (path: string, init: RequestInit): Promise<Response> => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetchImpl(joinUrl(input.baseUrl, path), { ...init, signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
+    const targetUrl = joinUrl(input.baseUrl, path);
+    if (input.fetchImpl) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await input.fetchImpl(targetUrl, {
+          ...init,
+          redirect: "error",
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    const res = await safeFetch(targetUrl, {
+      method: init.method ?? "GET",
+      headers: init.headers as Record<string, string> | undefined,
+      body: typeof init.body === "string" ? init.body : undefined,
+      maxRedirects: 0,
+      timeoutMs,
+      allowLoopback,
+    });
+    return new Response(res.body, {
+      status: res.status,
+      headers: toResponseHeaders(res.headers),
+    });
   };
 
   try {
@@ -103,7 +156,7 @@ export async function probeProvider(input: {
         transport: "unknown",
         models,
         capabilities,
-        error: await readError(listed, secrets),
+        error: await readError(listed),
         errorCategory: "auth",
       });
     }
@@ -120,13 +173,23 @@ export async function probeProvider(input: {
         transport: "unknown",
         models,
         capabilities,
-        error: await readError(listed, secrets),
+        error: await readError(listed),
         errorCategory: "http",
       });
     } else {
       // Some compatible servers do not implement /models. Chat or responses still has to succeed.
     }
   } catch (error) {
+    if (error instanceof UnsafeUrlError) {
+      return finish({
+        ok: false,
+        transport: "unknown",
+        models,
+        capabilities,
+        error: error.message,
+        errorCategory: error.reason === "timeout" ? "timeout" : "ssrf",
+      });
+    }
     const aborted = error instanceof Error && error.name === "AbortError";
     return finish({
       ok: false,
@@ -141,47 +204,69 @@ export async function probeProvider(input: {
   const tryChat = input.transport !== "responses";
   const tryResponses = input.transport !== "chat_completions";
 
-  if (tryChat) {
-    const chat = await probeChat(call, headers, input.model, secrets);
-    capabilities.chatCompletions = chat.ok;
-    capabilities.tools = chat.tools;
-    capabilities.streaming = chat.streaming;
-    capabilities.structuredOutput = chat.structured;
-    if (chat.authFailed) {
-      return finish({
-        ok: false,
-        transport: "unknown",
-        models,
-        capabilities: { ...capabilities, auth: false },
-        error: chat.error,
-        errorCategory: "auth",
-      });
+  try {
+    if (tryChat) {
+      const chat = await probeChat(call, headers, input.model);
+      capabilities.chatCompletions = chat.ok;
+      capabilities.tools = chat.tools;
+      capabilities.streaming = chat.streaming;
+      capabilities.structuredOutput = chat.structured;
+      if (chat.authFailed) {
+        return finish({
+          ok: false,
+          transport: "unknown",
+          models,
+          capabilities: { ...capabilities, auth: false },
+          error: chat.error,
+          errorCategory: "auth",
+        });
+      }
+      if (!chat.ok && input.transport === "chat_completions") {
+        return finish({
+          ok: false,
+          transport: "unknown",
+          models,
+          capabilities,
+          error: chat.error,
+          errorCategory: chat.category,
+        });
+      }
     }
-    if (!chat.ok && input.transport === "chat_completions") {
+
+    if (tryResponses) {
+      const responses = await probeResponses(call, headers, input.model);
+      capabilities.responses = responses.ok;
+      if (responses.authFailed) {
+        return finish({
+          ok: false,
+          transport: "unknown",
+          models,
+          capabilities: { ...capabilities, auth: false },
+          error: responses.error,
+          errorCategory: "auth",
+        });
+      }
+    }
+  } catch (error) {
+    if (error instanceof UnsafeUrlError) {
       return finish({
         ok: false,
         transport: "unknown",
         models,
         capabilities,
-        error: chat.error,
-        errorCategory: chat.category,
+        error: error.message,
+        errorCategory: error.reason === "timeout" ? "timeout" : "ssrf",
       });
     }
-  }
-
-  if (tryResponses) {
-    const responses = await probeResponses(call, headers, input.model, secrets);
-    capabilities.responses = responses.ok;
-    if (responses.authFailed) {
-      return finish({
-        ok: false,
-        transport: "unknown",
-        models,
-        capabilities: { ...capabilities, auth: false },
-        error: responses.error,
-        errorCategory: "auth",
-      });
-    }
+    const aborted = error instanceof Error && error.name === "AbortError";
+    return finish({
+      ok: false,
+      transport: "unknown",
+      models,
+      capabilities,
+      error: redactSecrets(error instanceof Error ? error.message : "probe failed", secrets),
+      errorCategory: aborted ? "timeout" : "network",
+    });
   }
 
   if (capabilities.chatCompletions || capabilities.responses) capabilities.auth = true;
@@ -205,7 +290,6 @@ async function probeChat(
   call: (path: string, init: RequestInit) => Promise<Response>,
   headers: Record<string, string>,
   model: string,
-  secrets: string[],
 ): Promise<{
   ok: boolean;
   tools: boolean;
@@ -231,11 +315,11 @@ async function probeChat(
     }),
   });
   if (withTools.status === 401 || withTools.status === 403) {
-    return { ok: false, tools: false, streaming: false, structured: false, authFailed: true, error: await readError(withTools, secrets), category: "auth" };
+    return { ok: false, tools: false, streaming: false, structured: false, authFailed: true, error: await readError(withTools), category: "auth" };
   }
   let ok = withTools.ok;
   let tools = withTools.ok;
-  let error: string | null = withTools.ok ? null : await readError(withTools, secrets);
+  let error: string | null = withTools.ok ? null : await readError(withTools);
   if (!withTools.ok && withTools.status === 400) {
     const plain = await call("/chat/completions", {
       method: "POST",
@@ -248,7 +332,7 @@ async function probeChat(
     });
     ok = plain.ok;
     tools = false;
-    error = plain.ok ? null : await readError(plain, secrets);
+    error = plain.ok ? null : await readError(plain);
     if (!plain.ok && plain.status !== 400) {
       return { ok: false, tools: false, streaming: false, structured: false, authFailed: false, error, category: "http" };
     }
@@ -298,7 +382,6 @@ async function probeResponses(
   call: (path: string, init: RequestInit) => Promise<Response>,
   headers: Record<string, string>,
   model: string,
-  secrets: string[],
 ): Promise<{ ok: boolean; authFailed: boolean; error: string | null }> {
   const response = await call("/responses", {
     method: "POST",
@@ -310,9 +393,9 @@ async function probeResponses(
     }),
   });
   if (response.status === 401 || response.status === 403) {
-    return { ok: false, authFailed: true, error: await readError(response, secrets) };
+    return { ok: false, authFailed: true, error: await readError(response) };
   }
   if (response.status === 404) return { ok: false, authFailed: false, error: null };
-  if (!response.ok) return { ok: false, authFailed: false, error: await readError(response, secrets) };
+  if (!response.ok) return { ok: false, authFailed: false, error: await readError(response) };
   return { ok: true, authFailed: false, error: null };
 }

@@ -1,6 +1,6 @@
 import { chunkTranscript, dedupeChunks } from "./transcript";
 import { fetchYouTubeTranscript, ytDlpAvailable, youTubeIdFromUrl } from "./transcript/fetch";
-import { getVideoSourceByHash, listVideoChunks, saveTranscriptAsSource } from "./videoStorage";
+import { getVideoSourceByHashForOwner, listVideoChunks, saveTranscriptAsSource } from "./videoStorage";
 
 /**
  * Video intake (transcript-first, Tier 0).
@@ -31,7 +31,7 @@ export type VideoIntakeResult =
 
 export async function intakeVideo(
   url: string,
-  options: { targetChars?: number } = {},
+  options: { targetChars?: number; userId: number },
 ): Promise<VideoIntakeResult> {
   if (!(await ytDlpAvailable())) {
     return {
@@ -45,7 +45,7 @@ export async function intakeVideo(
     return { status: "no_transcript", videoId: youTubeIdFromUrl(url) };
   }
 
-  const existing = await getVideoSourceByHash(transcript.hash);
+  const existing = await getVideoSourceByHashForOwner(options.userId, transcript.hash);
   if (existing) {
     const chunks = await listVideoChunks(existing.id);
     return {
@@ -65,7 +65,12 @@ export async function intakeVideo(
   }
 
   const chunks = dedupeChunks(chunkTranscript(transcript.cues, options.targetChars ?? 1200));
-  const { row, reused } = await saveTranscriptAsSource({ url, transcript, chunks });
+  const { row, reused } = await saveTranscriptAsSource({
+    url,
+    transcript,
+    chunks,
+    userId: options.userId,
+  });
   return {
     status: "ingested",
     sourceId: row.id,
