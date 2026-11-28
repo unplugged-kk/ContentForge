@@ -62,3 +62,5 @@ Before new work, run `script/agent-context.sh sync` and read [`../STATUS.md`](..
 Wayfinder reviews claims against git, the diff, and Actions logs. Poteto mode makes the code and test changes. A review that only restates `STATUS.md` does not count. If the two disagree, write the evidence and the resolution into `DECISIONS.md`. Do not say they communicated unless a subagent call or a committed review record exists.
 
 The register for other repositories is [`../PROJECTS_INDEX.md`](../PROJECTS_INDEX.md). Adopt it with [`../governance/ADOPT.md`](../governance/ADOPT.md). Do not edit a dirty tree in another repo from a ContentForge session.
+
+On 2026-11-28 a fresh reviewer subagent checked the new status pages against `git` and Actions run 46132320299. The author then corrected the SHA wording, the sync warning sentence, the topic-escape note, and the Playwright and live-e2e counts. That is a recorded review, not a claim that the two roles talked in chat.

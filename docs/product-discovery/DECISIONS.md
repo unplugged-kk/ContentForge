@@ -1,7 +1,7 @@
 # ContentForge — Product & Architecture Decisions Log
 
 **Maintained by:** Wayfinder + Poteto mode  
-**Branch:** `work/productization-mvp`
+**Branch:** `work/productization-mvp` (merged to `origin/main` at `ae8ced2` on 2026-11-28). The rows below are the decision log, not the live branch.
 
 | ID | Date | Decision | Status | Rationale & Evidence | Alternatives Rejected |
 |---|---|---|---|---|---|

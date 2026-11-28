@@ -12,7 +12,14 @@ The Nov 27 status files still say the work lives only on `work/productization-mv
 
 Inspected git, the doc index, product-discovery records, pull request 7, and the Actions logs. Did not change application code. Did not run the test suites. Did not push.
 
-Added the agent context pages and `script/agent-context.sh` in commit `ba2af6e` on `docs/agent-governance`. Moved the 2026-11-11 handover to `docs/archive/` and left a pointer. Marked pre-merge audits so a new agent does not rebuild finished work. Application code is unchanged from `ae8ced2`.
+Added the agent context pages and `script/agent-context.sh` on `docs/agent-governance`, starting at `ba2af6e`. Moved the 2026-11-11 handover to `docs/archive/` and left a pointer. Application code is unchanged from `ae8ced2`. `git log origin/main..HEAD` is the full docs range. Do not treat one SHA as the only commit.
+
+An independent review the same day checked the claims against git and Actions. It was a real subagent pass, not a self-check. It found four problems, and this handover's follow-up fixes them:
+
+- Status named `ba2af6e` as if it were the branch tip. Later commits exist. The tip is `git log -1`.
+- Status said sync warns whenever HEAD is missing from the file. The script warns only when product paths changed.
+- The backlog's numbered follow-ups omitted topic escaping, which `341ef67` does claim.
+- Playwright on the main push is 4 failed and 273 passed. Live e2e's 20 failures are not all missing xQuick keys.
 
 Left untouched:
 

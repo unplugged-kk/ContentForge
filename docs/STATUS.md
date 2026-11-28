@@ -2,14 +2,14 @@
 
 Verified 2026-11-28 from `git` and GitHub Actions. This file is the current snapshot. If it disagrees with an older doc, trust this file for "where we are" and the older doc for history.
 
-`script/agent-context.sh sync` prints the branch and warns when this file does not mention `HEAD`.
+`script/agent-context.sh sync` prints the branch. It warns only when commits since `origin/main` change a product path and this file does not mention that commit.
 
 ## Product tip
 
 - `origin/main` is `ae8ced249b48b64551d8a1776bdc4cba19eb289d` (2026-11-28 15:20 +0530).
 - That commit is the merge of [pull request 7](https://github.com/unplugged-kk/ContentForge/pull/7), "Productize the research-to-export workflow and close the security gaps".
 - The local `main` ref on this machine was still `0dca955` at discovery, 16 commits behind `origin/main`. Fast-forward it after `git fetch`. Do not reset.
-- The governance register is commit `ba2af6e` on branch `docs/agent-governance`, starting from `ae8ced2`. It does not change application code.
+- The register was introduced in `ba2af6e` on `docs/agent-governance`, from `ae8ced2`. Later commits on that branch only correct this page and the sync script. `git log origin/main..HEAD` is the docs range. No application source changed.
 
 ## Tests
 
@@ -20,8 +20,8 @@ Not re-run in the session that wrote this page.
 | `npm run test:unit` recorded by commit `341ef67` | that commit message | 1305 passed, 0 failed, plus a clean `tsc` and `npm run build`. Author's measurement, not repeated here. |
 | Unit Tests on `ae8ced2` | [Actions run 46132320299](https://github.com/unplugged-kk/ContentForge/actions/runs/46132320299) | Failed. Reporter: 1296 pass, 0 fail, 9 cancelled, exit 1. Hung promises in `server/content/videoRepurpose.test.ts`. |
 | DB Integration Tests, same run | same run | Failed. 384 pass, 5 fail. Failures include missing `ENCRYPTION_KEY` or `SESSION_SECRET`, and "legacy NULL-attributed rows remain visible". |
-| E2E Tests, same run | same run | Failed. Log shows missing `AI_API_KEY`, production `ENCRYPTION_KEY` refusal, and `no_sourced_evidence`. A pass count was not taken from the log. |
-| Live E2E, same run | same run | Failed. Summary line: 173 passed, 20 failed. Publication checks report missing xQuick credentials. |
+| E2E Tests, same run | same run | Failed. Playwright line: 4 failed, 273 passed. Log also shows missing `AI_API_KEY`, production `ENCRYPTION_KEY` refusal, and `no_sourced_evidence`. |
+| Live E2E, same run | same run | Failed. Summary line: 173 passed, 20 failed. Two of the 20 lines are missing xQuick credentials. Others are timeouts, a trusted-automation 403, a missing likes fixture, and `reading 'id'` errors. Not one cause. |
 | Migration Guard on the main push | [Actions run 46132320278](https://github.com/unplugged-kk/ContentForge/actions/runs/46132320278) | Success, about 40 seconds. |
 
 ## Working tree at discovery

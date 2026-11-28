@@ -11,7 +11,7 @@ Last verified: 2026-11-28.
 | CF-CI CI on origin/main | Blocked | Unassigned | Fix the unit hang in `server/content/videoRepurpose.test.ts` and the five DB failures. Run 46132320299. |
 | CF-PROD Productization | Merged, CI red | No active owner | Do not reopen INC-01 to INC-10. CI is CF-CI. |
 | CF-M3 Founder pilot | Blocked on owner | Owner | Decide whether red CI blocks the first PILOT_RUNBOOK session. |
-| CF-GOV Agent context | In progress | This session | Finish the docs, then an independent review of the claims. |
+| CF-GOV Agent context | Done for this repo | This session, reviewed | Use `script/agent-context.sh sync` before the next task. Next task is CF-CI. |
 | CF-DEFER Jev, MCP, Agent Reach, billing | Deferred | Nobody | Leave them. Decision DEC-08. |
 | CF-SITE Marketing site visual match | Inactive | Unassigned | Last measured 46% on 2026-11-11. Recheck only if the owner asks. |
 | Video Factory | Not reconciled | Unassigned | Read `~/git/video-factory/AGENTS.md` before any edit. |
@@ -61,9 +61,9 @@ Last verified: 2026-11-28.
 ## CF-GOV
 
 - Objective. Any agent can see what is being built, what is done, what is current, and what not to change, without asking the owner.
-- Status. In progress on `docs/agent-governance` at `ba2af6e`.
-- Done. Discovery of the existing docs, git, pull request 7, and Actions. Register and status written from those records. Commit `ba2af6e`.
-- Remaining. Independent review of that commit's claims. Other repositories are indexed, not edited.
+- Status. Done for ContentForge. Other repositories are indexed only.
+- Done. Discovery, the register, and commit `ba2af6e`. An independent review on 2026-11-28 checked the claims against git and Actions. It caught a stale SHA, a stale sync-warning sentence, a missing topic-escape note, and the Playwright count. Those corrections are in the follow-up commits. `git log origin/main..HEAD` lists them.
+- Remaining. Nothing on this row. Do not edit the other repositories from here.
 - Files. `docs/STATUS.md`, `docs/ACTIVE_WORK.md`, `docs/HANDOVER.md`, `AGENTS.md`, `script/agent-context.sh`.
 - Next action. Reviewer checks every status claim against `git` and the Actions run. Then mark this row done or list the misses.
 - Verified. 2026-11-28.

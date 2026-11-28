@@ -1,8 +1,10 @@
 # ContentForge — Execution Backlog
 
-**Updated:** 2026-11-27  
-**Branch:** `work/productization-mvp`  
+**Updated:** 2026-11-27, with a 2026-11-28 note on CI.  
+**Branch:** `work/productization-mvp`, merged to `origin/main` at `ae8ced2`.  
 **Source:** `docs/product-discovery/EXECUTION_ROADMAP.md`
+
+The INC-01 cell that says "remote CI run pending push" is the 2026-11-27 record. The jobs ran on 2026-11-28 and failed. See the follow-up section.
 
 | ID | Wave | Title | Priority | Status | Commit(s) | Verification |
 |---|---|---|---|---|---|---|
@@ -29,6 +31,8 @@ Items 2 through 6 below were claimed done in `341ef67`. That commit message is t
 4. **Gateway `{ payload, claims }` hint:** `341ef67` says the prompt asks for that shape when research evidence is supplied, and `unwrapModelOutput` stays compatible.
 5. **Per-user offboarding:** `341ef67` adds `server/user/offboard.ts` and `script/offboard-user.ts`, dry-run by default. A production restore drill is still an owner action.
 6. **`style_profiles_user_active_idx`:** `341ef67` says it is declared in `shared/schema.ts` and `0035_snapshot.json` with no change to applied SQL.
+
+`341ef67` also says it escapes `input.topic` in `server/story/synthesis.ts`. That was not one of the six numbered follow-ups from 2026-11-27. It is part of the same commit, not a new open task.
 
 ---
 
