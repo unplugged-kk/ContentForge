@@ -32,7 +32,7 @@ Leave these unset or off unless the owner asked.
 
 `npm run test:unit` sets its own unused `DATABASE_URL` and loads `server/testing/hermeticEnv.ts`. It does not need your `.env`.
 
-`npm run test:db` needs `TEST_DATABASE_URL` on a local disposable Postgres, plus `ENCRYPTION_KEY` or `SESSION_SECRET` for tests that encrypt tokens. Pointing it at a database you care about is forbidden. The guard tries to refuse non-local names. The uncommitted `make test-db` target uses port 5434 and does not read `.env`.
+`npm run test:db` needs `TEST_DATABASE_URL` on a local disposable Postgres, plus `ENCRYPTION_KEY` or `SESSION_SECRET` for tests that encrypt tokens. Pointing it at a database you care about is forbidden. The guard tries to refuse non-local names. `make test-db` uses port 5434 and does not read `.env`.
 
 Playwright's `make e2e` uses `docker-compose.e2e.yml` on port 5433 and `DOTENV_CONFIG_PATH=/dev/null`.
 

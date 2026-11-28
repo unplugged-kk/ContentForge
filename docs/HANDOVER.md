@@ -23,8 +23,8 @@ An independent review the same day checked the claims against git and Actions. I
 
 Left untouched:
 
-- `site/postiz-*.ts` (untracked, unmounted).
-- Unstaged `Makefile` test-database targets and untracked `docker-compose.test.yml`.
+- `site/postiz-*.ts` is committed and still unmounted. The owner asked to land the files that were only on disk.
+- `Makefile` test-database targets and `docker-compose.test.yml` were committed after the owner asked to land the local files. They use port 5434 and a zero test key.
 - `stash@{0}` on `phase-33.7-discovery-ownership`.
 - Other repositories. They are listed in [`PROJECTS_INDEX.md`](PROJECTS_INDEX.md).
 
@@ -39,7 +39,7 @@ Left untouched:
 ## Next session
 
 1. Run `script/agent-context.sh sync`.
-2. Continue `CF-CI` in [`ACTIVE_WORK.md`](ACTIVE_WORK.md). Branch from `origin/main`. Do not commit the local Makefile or `docker-compose.test.yml` unless that task is to land them on purpose.
+2. Continue `CF-CI` in [`ACTIVE_WORK.md`](ACTIVE_WORK.md). Branch from `origin/main`. `make test-db` is available for the disposable database on port 5434.
 3. Reproduce the unit hang, then the database encryption failures.
 4. Update this file, `STATUS.md`, and the CF-CI row with the commands you actually ran.
 
@@ -51,4 +51,4 @@ script/agent-context.sh status
 script/agent-context.sh handover
 ```
 
-`make sync`, `make status`, and `make handover` call the same script. The Makefile on disk also has uncommitted `test-db` targets. Those targets are local only until someone commits them.
+`make sync`, `make status`, and `make handover` call the same script. `make test-db` runs the database suite against the disposable Postgres on port 5434.

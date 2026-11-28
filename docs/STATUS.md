@@ -26,14 +26,9 @@ Not re-run in the session that wrote this page.
 
 ## Working tree at discovery
 
-On `work/productization-mvp` the only untracked product files were `site/postiz-*.ts` (five files). They are still untracked and still not mounted. Leave them.
+`site/postiz-*.ts` is committed and still not mounted. It is an older marketing-site variant. The live pages are `site/home.ts` and `site/agent.ts`.
 
-After switching to `origin/main`, two more local items were visible and were not part of this docs change:
-
-- Unstaged `Makefile` additions for `make test-db` and an encryption key passed into Playwright and live e2e.
-- Untracked `docker-compose.test.yml` for Postgres on `127.0.0.1:5434`.
-
-Do not revert those. Do not commit them inside the governance commit.
+`make test-db` and `docker-compose.test.yml` are committed on this branch. They start a disposable Postgres on `127.0.0.1:5434` and pass a test encryption key into Playwright and live e2e. That key is 32 zero bytes, the same value the test isolation code already pins. It is not a production secret.
 
 `stash@{0}` is still `On phase-33.7-discovery-ownership: phase-33.7 wip`. It was not opened.
 

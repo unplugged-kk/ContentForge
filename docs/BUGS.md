@@ -35,6 +35,6 @@ Open items have evidence from 2026-11-28. Older defects that pull request 7 clai
 
 ## Not a bug, do not "fix" by deleting
 
-- `site/postiz-*.ts` untracked. Dead variant, owner decision to delete.
+- `site/postiz-*.ts` is committed and unmounted. Deleting it is an owner decision.
 - Local `main` behind `origin/main`. Fast-forward after fetch.
 - Node 20 deprecation warning on GitHub Actions runners. Warning only.

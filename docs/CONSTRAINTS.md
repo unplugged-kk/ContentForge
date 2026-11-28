@@ -15,20 +15,20 @@ Change these only with the owner's explicit approval, and say why in the commit.
 | `ALLOW_ENV_CHANNEL_FALLBACK` default off | A second user must not publish as the founder (`DEC-06`). | Owner, and only with `SINGLE_OPERATOR_OWNER_ID` when one operator is intended. |
 | Jev flags default off | No labelled golden set (`DEC-08`). | Owner, after a comparison set exists. |
 | Live posts, paid media, paid model calls | Real side effects and spend. | Owner, in the chat, for that run. |
-| `site/postiz-*.ts` | Untracked and unmounted. Deleting them is a cleanup, not a drive-by. | Owner. |
+| `site/postiz-*.ts` | Committed, unmounted. Deleting them is a cleanup, not a drive-by. | Owner. |
 | `stash@{0}` and the `cf-design/*` worktrees | Old phase work. Several worktrees are marked prunable. | Owner before drop or delete. |
 
 ## Safe without a new approval
 
 - Read any doc or source file.
 - Run `npm run test:unit`. It is hermetic.
-- Run `npm run test:db` only against a local or obviously disposable database. The guard refuses other targets. The uncommitted `make test-db` target uses `127.0.0.1:5434`.
+- Run `npm run test:db` only against a local or obviously disposable database. The guard refuses other targets. `make test-db` uses `127.0.0.1:5434`.
 - Add a migration as a new file after `drizzle-kit generate`, and review the SQL.
 - Update `docs/STATUS.md`, `docs/ACTIVE_WORK.md`, and `docs/HANDOVER.md` when you finish a task.
 
 ## Git
 
-Do not commit on `main`. Do not merge or deploy from an agent session unless the owner asked for that merge or deploy. Do not `git push` to `main`. Do not reset, force-push, or clean untracked files. The local Makefile `test-db` edits and `docker-compose.test.yml` are uncommitted work. Leave them out of unrelated commits.
+Do not commit on `main`. Do not merge or deploy from an agent session unless the owner asked for that merge or deploy. Do not `git push` to `main`. Do not reset, force-push, or clean untracked files.
 
 ## Secrets
 
