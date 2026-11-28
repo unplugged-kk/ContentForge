@@ -220,7 +220,7 @@ export async function createArtifact(
         `visual asset ${ref.visualAssetId} not found`,
       );
     }
-    if (asset.userId !== null && asset.userId !== ownerId) {
+    if (asset.userId !== ownerId) {
       throw new ArtifactMediaReferenceError(
         input.format,
         ref.visualAssetId,

@@ -95,7 +95,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
-      if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
+      if (!publication || (publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
       }
       const rows = await deps.learning.listPerformanceForPublicationOwner(id, ownerId);
@@ -111,7 +111,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
-      if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
+      if (!publication || (publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
       }
       const sync = String(req.query.sync ?? "") === "1";
@@ -140,7 +140,7 @@ export function createLearningRouter(deps: LearningApiDeps): Router {
     try {
       const ownerId = requireOwnerId(req);
       const publication = await deps.content.getPublication(id);
-      if (!publication || (publication.userId !== null && publication.userId !== ownerId)) {
+      if (!publication || (publication.userId !== ownerId)) {
         return res.status(404).json({ message: "Publication not found" });
       }
       const body = observationBody.parse(req.body ?? {});

@@ -82,7 +82,7 @@ export function createDecisionRouter(): Router {
   router.get("/decisions/:id", async (req, res, next) => {
     try {
       const decision = await decisionLedger.get(String(req.params.id));
-      if (!decision || (decision.userId !== null && decision.userId !== requireOwnerId(req))) {
+      if (!decision || (decision.userId !== requireOwnerId(req))) {
         return res.status(404).json({ message: "Decision not found" });
       }
       res.json({ decision });

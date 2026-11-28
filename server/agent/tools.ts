@@ -864,7 +864,7 @@ async function findOpportunities(
   const story = owned(await deps.stories.stories.getStory(Number(input.storyId)), ctx.ownerId);
   if (!story) return notFound("find_opportunities", "story");
   const rows = await deps.content.listOpportunitiesByStory(story.id);
-  const ownedRows = rows.filter((row) => row.userId == null || row.userId === ctx.ownerId);
+  const ownedRows = rows.filter((row) => row.userId === ctx.ownerId);
   return envelope({
     tool: "find_opportunities",
     status: "success",
@@ -1173,7 +1173,7 @@ async function getGenerationStatus(
   const generation = owned(await deps.content.getVisualGeneration(Number(input.generationId)), ctx.ownerId);
   if (!generation) return notFound("get_generation_status", "generation");
   const assets = (await deps.content.listVisualAssetsForGeneration(generation.id))
-    .filter((asset) => asset.userId === null || asset.userId === ctx.ownerId);
+    .filter((asset) => asset.userId === ctx.ownerId);
   return envelope({
     tool: "get_generation_status",
     status: "success",
@@ -1547,7 +1547,7 @@ async function getStyleProfileTool(
   try {
     if (typeof input.styleProfileId === "number") {
       const profile = await deps.style.storage.getStyleProfile(input.styleProfileId);
-      if (!profile || (profile.userId !== null && profile.userId !== ctx.ownerId)) {
+      if (!profile || (profile.userId !== ctx.ownerId)) {
         return notFound("get_style_profile", "style_profile");
       }
       return envelope({

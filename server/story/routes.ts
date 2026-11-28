@@ -147,7 +147,7 @@ export function createStoryRouter(deps: StoryRouterDeps): Router {
       const rows = deps.stories.listStories ? await deps.stories.listStories() : [];
       return res.json(
         rows
-          .filter((s) => s.userId === null || s.userId === ownerId)
+          .filter((s) => s.userId === ownerId)
           .map(serializeStory),
       );
     } catch (error) {
@@ -168,7 +168,7 @@ export function createStoryRouter(deps: StoryRouterDeps): Router {
     try {
       const ownerId = getUserId(req);
       const job = await deps.research.getJob(researchJobId);
-      if (!job || (job.userId !== null && job.userId !== ownerId)) {
+      if (!job || (job.userId !== ownerId)) {
         throw new ResearchJobNotFoundError(researchJobId);
       }
       if (job.status !== "complete") {
@@ -271,7 +271,7 @@ export function createStoryRouter(deps: StoryRouterDeps): Router {
       // Phase 30.2: a caller may only derive stories from their own (or
       // legacy unattributed) research — never from another owner's job.
       const job = await deps.research.getJob(researchJobId);
-      if (!job || (job.userId !== null && job.userId !== getUserId(req))) {
+      if (!job || (job.userId !== getUserId(req))) {
         throw new ResearchJobNotFoundError(researchJobId);
       }
       const story = await createStoryFromResearch(researchJobId, synthesis, deps);
@@ -292,7 +292,7 @@ export function createStoryRouter(deps: StoryRouterDeps): Router {
       const story = await deps.stories.getStory(id);
       // Phase 30.2: attributed foreign rows are indistinguishable from
       // missing (non-leaking 404); legacy NULL rows remain visible.
-      if (!story || (story.userId !== null && story.userId !== getUserId(req))) {
+      if (!story || (story.userId !== getUserId(req))) {
         return res.status(404).json({ message: "Story not found" });
       }
       return res.json(serializeStory(story));

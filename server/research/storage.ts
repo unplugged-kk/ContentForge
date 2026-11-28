@@ -5,7 +5,7 @@
  * the storage layer can migrate independently of orchestration.
  */
 
-import { and, desc, eq, isNull, ne, or } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import {
@@ -289,7 +289,7 @@ export class DatabaseResearchStorage implements ResearchStoragePort {
       .where(
         userId === null
           ? isNull(researchJobs.userId)
-          : or(eq(researchJobs.userId, userId), isNull(researchJobs.userId)),
+          : eq(researchJobs.userId, userId),
       )
       .orderBy(desc(researchJobs.id))
       .limit(Math.min(Math.max(limit, 1), 200));

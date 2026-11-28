@@ -128,7 +128,7 @@ export async function logManualPublication(
   const body = parsed.data;
 
   const artifact = await deps.content.getArtifact(artifactId);
-  if (!artifact || (artifact.userId !== null && artifact.userId !== ownerId)) {
+  if (!artifact || (artifact.userId !== ownerId)) {
     throw new ArtifactNotFoundError(artifactId);
   }
   if (artifact.readiness !== "approved") {

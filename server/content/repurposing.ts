@@ -437,7 +437,7 @@ export async function repurposeStory(
 
   const story = await deps.opportunities.stories.getStory(storyId);
   if (!story) throw new StoryNotFoundError(storyId);
-  if (callerUserId != null && story.userId !== null && story.userId !== callerUserId) {
+  if (callerUserId != null && story.userId !== callerUserId) {
     // A foreign Story looks exactly like a missing one — no ownership leak.
     throw new StoryNotFoundError(storyId);
   }

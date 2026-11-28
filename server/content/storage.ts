@@ -1344,7 +1344,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
     options: { readiness?: ArtifactReadiness; limit?: number } = {},
   ): Promise<Artifact[]> {
     const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
-    const conditions = [or(isNull(artifacts.userId), eq(artifacts.userId, ownerId))!];
+    const conditions = [eq(artifacts.userId, ownerId)];
     if (options.readiness) conditions.push(eq(artifacts.readiness, options.readiness));
     return this.database
       .select()
@@ -1464,7 +1464,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
       .innerJoin(artifacts, eq(artifacts.id, schedules.artifactId))
       .where(
         and(
-          or(isNull(schedules.userId), eq(schedules.userId, ownerId))!,
+          eq(schedules.userId, ownerId),
           gte(scheduleOccurrences.occurrenceTime, from),
           lte(scheduleOccurrences.occurrenceTime, to),
         ),
@@ -1628,7 +1628,7 @@ export class DatabaseContentStorage implements ContentStoragePort {
     options: { state?: PublicationState; limit?: number } = {},
   ): Promise<Array<{ publication: Publication; result: Result | null }>> {
     const take = Math.min(Math.max(options.limit ?? 20, 1), 100);
-    const conditions = [or(isNull(publications.userId), eq(publications.userId, ownerId))!];
+    const conditions = [eq(publications.userId, ownerId)];
     if (options.state) conditions.push(eq(publications.state, options.state));
     const rows = await this.database
       .select({ publication: publications, result: results })

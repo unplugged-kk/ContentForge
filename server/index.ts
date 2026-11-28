@@ -11,7 +11,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
 import { existsSync } from "fs";
 import { securityHeaders } from "./middleware/security";
-import { globalLimiter } from "./middleware/rateLimit";
+import { aiLimiter, globalLimiter } from "./middleware/rateLimit";
 import { auditLog } from "./middleware/audit";
 import { issueCsrfToken, verifyCsrf } from "./middleware/csrf";
 import { errorHandler } from "./middleware/errorHandler";
@@ -209,6 +209,25 @@ app.use((req, res, next) => {
   // Mounted globally (not on "/api"): Express strips the mount point from
   // req.path, which would break allowlist matching (see authGate.ts).
   app.use(authGate);
+  for (const prefix of [
+    "/api/generate",
+    "/api/ingest",
+    "/api/research",
+    "/api/agent",
+    "/api/ai",
+    "/api/images",
+    "/api/visual-generations",
+    "/api/video-generations",
+    "/api/audio",
+    "/api/video",
+    "/api/decision",
+    "/api/autopilot",
+    "/api/discover",
+    "/api/chat",
+    "/api/content-actions",
+  ]) {
+    app.use(prefix, aiLimiter);
+  }
   app.get("/api/csrf-token", (req, res) => issueCsrfToken(req, res));
   // Phase 30: real liveness/readiness (no secrets, no internals). Readiness
   // reports up/down only; the driver error is logged server-side.

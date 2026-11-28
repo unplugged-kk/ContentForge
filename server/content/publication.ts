@@ -78,7 +78,7 @@ export async function resolvePublicationMedia(
         `visual asset ${ref.visualAssetId} referenced by artifact ${artifact.id} was not found`,
       );
     }
-    if (asset.userId !== null && asset.userId !== artifact.userId) {
+    if (asset.userId !== artifact.userId) {
       throw new MediaResolutionError(
         "permanent",
         `visual asset ${asset.id} does not belong to the artifact owner`,

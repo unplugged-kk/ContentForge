@@ -144,7 +144,7 @@ export async function createVisualGeneration(
 
   if (body.sourceVisualAssetId) {
     const source = await deps.content.getVisualAsset(body.sourceVisualAssetId);
-    if (!source || (source.userId !== null && source.userId !== userId)) {
+    if (!source || (source.userId !== userId)) {
       throw new VisualServiceInputError(["source visual asset not found"]);
     }
     if (source.status !== "ready") {

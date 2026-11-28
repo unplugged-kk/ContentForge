@@ -706,7 +706,7 @@ export async function createVideoRepurposingJob(
   }
   const body = parsed.data;
   const source = await deps.content.getVisualAsset(body.sourceVisualAssetId);
-  if (!source || (source.userId !== null && source.userId !== userId)) {
+  if (!source || (source.userId !== userId)) {
     throw new VideoRepurposeInputError(["source video asset not found"]);
   }
   if (source.kind !== "video" || !source.mime.startsWith("video/")) {
