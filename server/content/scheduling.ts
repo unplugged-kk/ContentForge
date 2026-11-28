@@ -84,6 +84,11 @@ export const createScheduleSchema = z.object({
    * concurrency arbiter. Legacy POST /schedules omits this and always inserts.
    */
   intentKey: z.string().trim().min(1).max(300).optional(),
+  /**
+   * Optional authenticated owner id supplied by the caller. Used as fallback
+   * when scheduling a legacy artifact whose own `userId` is null.
+   */
+  ownerUserId: z.number().int().positive().nullable().optional(),
 });
 
 export type CreateScheduleInput = z.input<typeof createScheduleSchema>;
@@ -182,7 +187,7 @@ export async function createSchedule(
 
   const startAt = body.startAt ? new Date(body.startAt) : new Date();
   const row = {
-    userId: artifact.userId ?? null,
+    userId: artifact.userId ?? body.ownerUserId ?? null,
     artifactId: artifact.id,
     channel,
     intentKey: body.intentKey ?? null,

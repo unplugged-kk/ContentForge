@@ -26,7 +26,12 @@ function normalizeModelClaims(raw: unknown): ModelClaim[] | undefined {
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
-    const claimText = typeof obj.claimText === "string" ? obj.claimText.trim() : "";
+    const claimText =
+      typeof obj.claimText === "string" && obj.claimText.trim().length > 0
+        ? obj.claimText.trim()
+        : typeof obj.text === "string"
+          ? obj.text.trim()
+          : "";
     if (!claimText) continue;
     const unitIndex =
       typeof obj.unitIndex === "number" && Number.isInteger(obj.unitIndex) && obj.unitIndex >= 0
@@ -65,12 +70,47 @@ export function unwrapModelOutput(parsed: Record<string, unknown>): {
   return { payload: parsed };
 }
 
+const PROMPT_EVIDENCE_MARKER =
+  /(?:Evidence:\r?\n\s*-\s*\[[^\]]+#\d+\]|\[(?:evidence|excerpt|author_statement)#\d+\]|\bevidenceIds\b|\bEvidence items\b)/i;
+
+/** Detect whether the generation request includes supplied research evidence. */
+export function hasSuppliedResearchEvidence(
+  request: Pick<GenerationRequest, "policy"> & {
+    context?: Pick<GenerationRequest["context"], "evidence">;
+  },
+): boolean {
+  if (Array.isArray(request.context?.evidence) && request.context.evidence.length > 0) {
+    return true;
+  }
+  return (
+    PROMPT_EVIDENCE_MARKER.test(request.policy.userPrompt ?? "") ||
+    PROMPT_EVIDENCE_MARKER.test(request.policy.systemPrompt ?? "")
+  );
+}
+
 /** Advisory payload shapes, so the model returns something the registry accepts. */
-function payloadShapeHint(format: string): string {
-  if (format === "x_post") return '{ "text": "<single post body, <=280 chars>" }';
-  if (format === "x_thread") return '{ "units": ["<first tweet>", "<second tweet>"] }';
-  if (format === "linkedin_post") return '{ "text": "<single LinkedIn post body, <=3000 chars>" }';
-  return "a JSON object matching the registered payload schema";
+export function payloadShapeHint(format: string, includeClaims = false): string {
+  const base =
+    format === "x_post"
+      ? '{ "text": "<single post body, <=280 chars>" }'
+      : format === "x_thread"
+        ? '{ "units": ["<first tweet>", "<second tweet>"] }'
+        : format === "linkedin_post"
+          ? '{ "text": "<single LinkedIn post body, <=3000 chars>" }'
+          : "a JSON object matching the registered payload schema";
+
+  if (!includeClaims) return base;
+
+  return (
+    `{ "payload": ${base}, "claims": [{ "text": "<factual sentence or opinion>", "evidenceIds": [1], "status": "supported" | "opinion" }] }. ` +
+    'For "claims", only cite numeric IDs present in supplied evidence; use "status": "opinion" with "evidenceIds": [] for commentary.'
+  );
+}
+
+/** Build the user message sent to the gateway model for a generation request. */
+export function buildGenerationUserMessage(request: GenerationRequest): string {
+  const includeClaims = hasSuppliedResearchEvidence(request);
+  return `${request.policy.userPrompt}\n\nRespond with exactly one JSON object of this shape: ${payloadShapeHint(request.format, includeClaims)}`;
 }
 
 export interface GatewayGenerationModelOptions {
@@ -98,7 +138,7 @@ export function createGatewayGenerationModel(
         { role: "system", content: request.policy.systemPrompt },
         {
           role: "user",
-          content: `${request.policy.userPrompt}\n\nRespond with exactly one JSON object of this shape: ${payloadShapeHint(request.format)}`,
+          content: buildGenerationUserMessage(request),
         },
       ];
 

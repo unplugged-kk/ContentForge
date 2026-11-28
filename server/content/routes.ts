@@ -27,6 +27,8 @@ import type {
   Voice,
 } from "@shared/schema";
 import { getUserId, requireOwnerId } from "../middleware/userContext";
+import type { ClaimCheckEvidenceItem } from "../intelligence/quality/claimCheck";
+import { extractCreatorNotesFromStory } from "../story/inputSchema";
 import type { ContentStoragePort } from "./storage";
 import {
   createOpportunityFromStory,
@@ -1058,11 +1060,36 @@ export function createContentRouter(deps: ContentApiDeps): Router {
       if (!head || isForeignRow(head, getUserId(req))) {
         return res.status(404).json({ message: "Artifact not found" });
       }
+      let evidence: ClaimCheckEvidenceItem[] | undefined;
+      let creatorNotes: string | null | undefined;
+      let researchJobId: number | null | undefined;
+      if (typeof deps.content.getOpportunity === "function") {
+        const opportunity = await deps.content.getOpportunity(head.opportunityId);
+        if (opportunity && typeof deps.generation?.stories?.getStory === "function") {
+          const story = await deps.generation.stories.getStory(opportunity.storyId);
+          if (story) {
+            creatorNotes = extractCreatorNotesFromStory(story);
+            researchJobId = story.researchJobId;
+            if (
+              story.researchJobId !== null &&
+              typeof deps.generation?.evidence?.listEvidence === "function"
+            ) {
+              const rows = await deps.generation.evidence.listEvidence(story.researchJobId);
+              evidence = rows.map((e) => ({ id: e.id, text: e.excerpt }));
+            }
+          }
+        }
+      }
       const artifact = await createHumanEditRevision(
         id,
         body.payload,
         { artifacts: deps.content, learning: deps.learning },
-        { attributionReason: body.attributionReason ?? null },
+        {
+          attributionReason: body.attributionReason ?? null,
+          ...(evidence !== undefined ? { evidence } : {}),
+          ...(creatorNotes !== undefined ? { creatorNotes } : {}),
+          ...(researchJobId !== undefined ? { researchJobId } : {}),
+        },
       );
       return res.status(201).json(serializeArtifact(artifact));
     } catch (error) {
@@ -1174,11 +1201,16 @@ export function createContentRouter(deps: ContentApiDeps): Router {
     try {
       const body = createScheduleBody.parse(req.body ?? {});
       const { artifactId, ...options } = body;
+      const ownerId = requireOwnerId(req);
       const artifact = await deps.content.getArtifact(artifactId);
-      if (!artifact || isForeignRow(artifact, getUserId(req))) {
+      if (!artifact || isForeignRow(artifact, ownerId)) {
         return res.status(404).json({ message: "Artifact not found" });
       }
-      const schedule = await createSchedule(artifactId, options, { content: deps.content });
+      const schedule = await createSchedule(
+        artifactId,
+        { ...options, ownerUserId: ownerId },
+        { content: deps.content },
+      );
       return res.status(201).json(serializeSchedule(schedule));
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") });

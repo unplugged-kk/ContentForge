@@ -24,6 +24,11 @@ import type { ContentStoragePort, JsonRecord } from "./storage";
 import type { ApprovalActor } from "./learning/approval";
 import type { LearningRecorder } from "./learning/record";
 import { ALLOWED_AUDIO_MIMES, ALLOWED_VIDEO_MIMES, ALLOWED_VISUAL_MIMES, MAX_VISUAL_DIMENSION } from "./visual";
+import {
+  auditArtifactClaims,
+  reconstructEvidenceFromClaimAttribution,
+  type ClaimCheckEvidenceItem,
+} from "../intelligence/quality/claimCheck";
 
 export interface ArtifactDeps {
   artifacts: ContentStoragePort;
@@ -442,6 +447,14 @@ export function schedulableReadiness(): ArtifactReadiness {
   return "approved";
 }
 
+export interface CreateHumanEditOptions {
+  actorNote?: string | null;
+  attributionReason?: string | null;
+  evidence?: ClaimCheckEvidenceItem[];
+  creatorNotes?: string | null;
+  researchJobId?: number | null;
+}
+
 /**
  * Human editing produces a NEW revision (Ticket 05 §8/§18): the AI-generated
  * row is never overwritten, provenance records the human edit, and the new
@@ -452,10 +465,52 @@ export async function createHumanEditRevision(
   priorArtifactId: number,
   payload: JsonRecord,
   deps: ArtifactDeps,
-  options: { actorNote?: string | null; attributionReason?: string | null } = {},
+  options: CreateHumanEditOptions = {},
 ): Promise<Artifact> {
   const prior = await deps.artifacts.getArtifact(priorArtifactId);
   if (!prior) throw new ArtifactNotFoundError(priorArtifactId);
+
+  const priorAttribution = Array.isArray(prior.attribution) ? prior.attribution : [];
+  let priorClaimAudit: z.infer<typeof claimEvidenceAttributionSchema> | undefined;
+  let priorResearchEvidence: z.infer<typeof researchEvidenceAttributionSchema> | undefined;
+  const preservedAttribution: unknown[] = [];
+
+  for (const entry of priorAttribution) {
+    if (entry && typeof entry === "object" && (entry as { kind?: unknown }).kind === "claim_evidence_v1") {
+      const parsed = claimEvidenceAttributionSchema.safeParse(entry);
+      if (parsed.success && !priorClaimAudit) {
+        priorClaimAudit = parsed.data;
+      }
+      continue;
+    }
+    if (entry && typeof entry === "object" && (entry as { kind?: unknown }).kind === "research_evidence") {
+      const parsed = researchEvidenceAttributionSchema.safeParse(entry);
+      if (parsed.success && !priorResearchEvidence) {
+        priorResearchEvidence = parsed.data;
+      }
+    }
+    preservedAttribution.push(entry);
+  }
+
+  let nextAttribution: unknown[] = priorAttribution;
+  if (options.evidence !== undefined || priorClaimAudit !== undefined) {
+    const evidence =
+      options.evidence ?? reconstructEvidenceFromClaimAttribution(priorClaimAudit!);
+    const researchJobId =
+      options.researchJobId !== undefined
+        ? options.researchJobId
+        : (priorClaimAudit?.researchJobId ?? priorResearchEvidence?.researchJobId ?? null);
+    const reAudited = auditArtifactClaims({
+      format: prior.format,
+      channel: prior.channel,
+      payload,
+      researchJobId,
+      evidence,
+      creatorNotes: options.creatorNotes,
+      modelClaims: undefined,
+    });
+    nextAttribution = [...preservedAttribution, attributionSchema.parse(reAudited)];
+  }
 
   const created = await createArtifact(
     {
@@ -467,7 +522,7 @@ export async function createHumanEditRevision(
       payload,
       supersedesId: prior.id,
       provenance: "human_edit",
-      attribution: prior.attribution,
+      attribution: nextAttribution,
       attributionReason:
         options.attributionReason ?? prior.attributionReason ?? options.actorNote ?? "human edit",
     },

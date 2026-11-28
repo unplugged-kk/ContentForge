@@ -39,12 +39,17 @@ export interface ClaimEvidenceAttribution {
   qualityFlags: string[];
 }
 
+export interface ClaimCheckEvidenceItem {
+  id: number;
+  text: string;
+}
+
 export interface AuditArtifactClaimsInput {
   format: string;
   channel: string;
   payload: JsonRecord;
   researchJobId?: number | null;
-  evidence: Array<{ id: number; text: string }>;
+  evidence: ClaimCheckEvidenceItem[];
   creatorNotes?: string | null;
   modelClaims?: ModelClaimInput[];
 }
@@ -137,7 +142,7 @@ function hasFirstPersonWarStory(sentence: string): boolean {
  */
 export function computeParaphraseOverlap(
   generatedText: string,
-  evidence: ReadonlyArray<{ id: number; text: string }>,
+  evidence: ReadonlyArray<ClaimCheckEvidenceItem>,
 ): number {
   const genGrams = fourGrams(generatedText);
   if (genGrams.size === 0 || evidence.length === 0) return 0;
@@ -147,6 +152,38 @@ export function computeParaphraseOverlap(
     if (score > max) max = score;
   }
   return Number(max.toFixed(4));
+}
+
+/**
+ * Reconstruct minimal evidence items from a prior `claim_evidence_v1` entry
+ * when a caller edits an artifact without re-loading source excerpts.
+ * Retains numeric tokens from previously supported claims per evidence ID
+ * without copying full prose sentences that would skew paraphrase overlap.
+ */
+export function reconstructEvidenceFromClaimAttribution(
+  prior: Pick<ClaimEvidenceAttribution, "evidenceIds" | "claims">,
+): ClaimCheckEvidenceItem[] {
+  const tokensById = new Map<number, Set<string>>();
+  for (const id of prior.evidenceIds) {
+    tokensById.set(id, new Set());
+  }
+  for (const claim of prior.claims) {
+    if (claim.status !== "supported") continue;
+    const nums = extractNumericTokens(claim.claimText);
+    if (nums.length === 0) continue;
+    for (const id of claim.evidenceIds) {
+      let bucket = tokensById.get(id);
+      if (!bucket) {
+        bucket = new Set();
+        tokensById.set(id, bucket);
+      }
+      for (const token of nums) bucket.add(token);
+    }
+  }
+  return prior.evidenceIds.map((id) => ({
+    id,
+    text: Array.from(tokensById.get(id) ?? []).join(" "),
+  }));
 }
 
 /**

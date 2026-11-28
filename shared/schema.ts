@@ -194,7 +194,11 @@ export const styleProfiles = pgTable("style_profiles", {
   analysisVersion: varchar("analysis_version", { length: 40 }),
   /** Bounded per-channel overlay snippets; empty when the sample cannot support overlays. */
   channelOverlays: jsonb("channel_overlays").$type<Record<string, unknown>>().notNull().default({}),
-});
+},
+  (table) => [
+    index("style_profiles_user_active_idx").on(table.userId, table.isActive),
+  ],
+);
 
 /**
  * StyleAnalysis (Phase 11) — one reproducible analysis *attempt* against a

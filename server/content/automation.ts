@@ -928,10 +928,9 @@ async function runResearchStep(run: AutomationRun, deps: AutomationDeps): Promis
  * `createStoryFromResearch`. While research is still in flight this is not a
  * failure — the run simply stays in its durable intermediate state.
  *
- * The synthesis is DETERMINISTIC (policy name + research query + bounded
- * evidence excerpts). No AI client is reachable from this module, so automation
- * introduces no second model seam; model-written synthesis is an explicit
- * deferral, not a hidden call.
+ * `synthesizeStructuredBrief` is deterministic by default (offline, zero model
+ * calls) and only invokes `aiCall` when `STORY_LLM_SYNTHESIS=1` is explicitly
+ * enabled, with schema validation and automatic deterministic fallback.
  */
 async function runStoryStep(run: AutomationRun, deps: AutomationDeps): Promise<StepOutcome> {
   const researchJobId = run.researchJobId;
