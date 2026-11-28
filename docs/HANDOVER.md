@@ -12,7 +12,7 @@ The Nov 27 status files still say the work lives only on `work/productization-mv
 
 Inspected git, the doc index, product-discovery records, pull request 7, and the Actions logs. Did not change application code. Did not run the test suites. Did not push.
 
-Added the agent context pages and `script/agent-context.sh`. Moved the 2026-11-11 handover to `docs/archive/` and left a pointer. Marked pre-merge audits so a new agent does not rebuild finished work.
+Added the agent context pages and `script/agent-context.sh` in commit `ba2af6e` on `docs/agent-governance`. Moved the 2026-11-11 handover to `docs/archive/` and left a pointer. Marked pre-merge audits so a new agent does not rebuild finished work. Application code is unchanged from `ae8ced2`.
 
 Left untouched:
 

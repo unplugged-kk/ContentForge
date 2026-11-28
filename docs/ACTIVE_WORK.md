@@ -61,9 +61,9 @@ Last verified: 2026-11-28.
 ## CF-GOV
 
 - Objective. Any agent can see what is being built, what is done, what is current, and what not to change, without asking the owner.
-- Status. In progress on `docs/agent-governance`.
-- Done. Discovery of the existing docs, git, pull request 7, and Actions. Register and status written from those records.
-- Remaining. Independent review of this commit's claims. Other repositories are indexed, not edited.
+- Status. In progress on `docs/agent-governance` at `ba2af6e`.
+- Done. Discovery of the existing docs, git, pull request 7, and Actions. Register and status written from those records. Commit `ba2af6e`.
+- Remaining. Independent review of that commit's claims. Other repositories are indexed, not edited.
 - Files. `docs/STATUS.md`, `docs/ACTIVE_WORK.md`, `docs/HANDOVER.md`, `AGENTS.md`, `script/agent-context.sh`.
 - Next action. Reviewer checks every status claim against `git` and the Actions run. Then mark this row done or list the misses.
 - Verified. 2026-11-28.

@@ -9,7 +9,7 @@ Verified 2026-11-28 from `git` and GitHub Actions. This file is the current snap
 - `origin/main` is `ae8ced249b48b64551d8a1776bdc4cba19eb289d` (2026-11-28 15:20 +0530).
 - That commit is the merge of [pull request 7](https://github.com/unplugged-kk/ContentForge/pull/7), "Productize the research-to-export workflow and close the security gaps".
 - The local `main` ref on this machine was still `0dca955` at discovery, 16 commits behind `origin/main`. Fast-forward it after `git fetch`. Do not reset.
-- The governance docs in this commit sit on branch `docs/agent-governance`, starting from `ae8ced2`. They do not change application code.
+- The governance register is commit `ba2af6e` on branch `docs/agent-governance`, starting from `ae8ced2`. It does not change application code.
 
 ## Tests
 
